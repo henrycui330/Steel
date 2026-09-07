@@ -72,7 +72,7 @@ Offline accounts and Online accounts are **separate**.
 
 ## CORS / other origins
 
-`wrangler.toml` `[vars] ALLOWED_ORIGINS` defaults to Vite local hosts. For a hosted game, add your origin (comma-separated), then redeploy.
+`wrangler.toml` `[vars] ALLOWED_ORIGINS` includes Vite local hosts and `https://henrycui330.github.io`. After changing origins, redeploy the Worker.
 
 ## Routes
 
