@@ -1,0 +1,9 @@
+{
+  "msg": "操作成功",
+  "code": 200,
+  "data": {
+    "qrCodeUrl": "https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket=gQHe8DwAAAAAAAAAAS5odHRwOi8vd2VpeGluLnFxLmNvbS9xLzAyUTIzSEZONUdkbTMxS1A2c3hHMVUAAgQ7xpxqAwR4AAAA",
+    "sceneId": 744164469,
+    "expireSeconds": 120
+  }
+}

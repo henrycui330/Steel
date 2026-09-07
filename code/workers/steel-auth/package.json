@@ -1,0 +1,19 @@
+{
+  "name": "steel-auth",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute steel-auth --local --file=./schema.sql",
+    "db:remote": "wrangler d1 execute steel-auth --remote --file=./schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250320.0",
+    "typescript": "^5.8.2",
+    "wrangler": "^4.14.0"
+  },
+  "overrides": {
+    "@cloudflare/workers-types": "^4.20250320.0"
+  }
+}
