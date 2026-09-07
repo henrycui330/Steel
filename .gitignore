@@ -1,29 +1,35 @@
 # Dependencies / build
+node_modules/
 **/node_modules/
+dist/
 **/dist/
+.wrangler/
 **/.wrangler/
-**/dist-ssr/
 
 # Secrets / env
 .env
 .env.*
 !.env.example
+.dev.vars
 **/.dev.vars
 
 # OS / editor
 .DS_Store
 **/.DS_Store
 .idea/
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .cursor/
 
 # Oversized for GitHub without Git LFS (>100MB hard limit)
-# Keep these locally; install git-lfs later to track them.
+# Keep these on disk locally; add via git-lfs later if needed.
+pz3.glb
+panzer_3l_low-poly.glb
 **/pz3.glb
 **/panzer_3l_low-poly.glb
 
 # Misc local clutter
 *.log
-videoplayback*.mp4
+*.mp4
 Maps/Props/*.zip
+a-couple-of-desert-style-houses/
+results/wechat-login-qr.png
