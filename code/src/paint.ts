@@ -12,7 +12,7 @@ export const PALETTE = {
   ambient: 0xb8c0c6,
   armor: 0x4c5248,
   armorDark: 0x353a34,
-  track: 0x2a2c28,
+  track: 0x121212,
   iron: 0x5a5e58,
 } as const
 

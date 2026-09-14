@@ -23,20 +23,41 @@ type UserRow = {
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30
 
+/** Vite (and friends) may use :5173, :4173, :5174, etc. */
+function isLocalDevOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin)
+    return (
+      (u.protocol === 'http:' || u.protocol === 'https:') &&
+      (u.hostname === 'localhost' || u.hostname === '127.0.0.1')
+    )
+  } catch {
+    return false
+  }
+}
+
 function corsHeaders(req: Request, env: Env): HeadersInit {
   const origin = req.headers.get('Origin') ?? ''
   const allowed = (env.ALLOWED_ORIGINS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)
-  const ok = allowed.includes(origin) || allowed.includes('*')
-  return {
-    'Access-Control-Allow-Origin': ok ? origin || allowed[0] || '*' : allowed[0] || '',
+  const ok =
+    !origin ||
+    allowed.includes(origin) ||
+    allowed.includes('*') ||
+    isLocalDevOrigin(origin)
+
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   }
+  // Never echo a *wrong* allow-origin (old bug: denied → allowed[0] → browser TypeError).
+  if (origin && ok) headers['Access-Control-Allow-Origin'] = origin
+  else if (allowed.includes('*')) headers['Access-Control-Allow-Origin'] = '*'
+  return headers
 }
 
 function json(req: Request, env: Env, body: unknown, status = 200): Response {
@@ -134,17 +155,28 @@ export default {
           return json(req, env, { ok: false, error: 'That username is taken.' }, 409)
         }
 
+        const t0 = Date.now()
         const salt = randomSaltB64()
         const hash = await hashPassword(password, salt)
+        const hashMs = Date.now() - t0
         const id = newUserId()
         const createdAt = Date.now()
         const display = username.trim()
-        await env.DB.prepare(
-          `INSERT INTO users (id, username, username_key, pass_salt, pass_hash, wrap_id, created_at)
-           VALUES (?, ?, ?, ?, ?, 'stock', ?)`,
-        )
-          .bind(id, display, key, salt, hash, createdAt)
-          .run()
+        try {
+          await env.DB.prepare(
+            `INSERT INTO users (id, username, username_key, pass_salt, pass_hash, wrap_id, created_at)
+             VALUES (?, ?, ?, ?, ?, 'stock', ?)`,
+          )
+            .bind(id, display, key, salt, hash, createdAt)
+            .run()
+        } catch (dbErr) {
+          console.error('[steel-auth] register insert', dbErr)
+          const msg = String(dbErr)
+          if (/UNIQUE|constraint/i.test(msg)) {
+            return json(req, env, { ok: false, error: 'That username is taken.' }, 409)
+          }
+          return json(req, env, { ok: false, error: 'Could not create account (database).' }, 500)
+        }
 
         const row: UserRow = {
           id,
@@ -156,6 +188,7 @@ export default {
           created_at: createdAt,
         }
         const session = await createSession(env, row)
+        console.info(`[steel-auth] register ok user=${display} hashMs=${hashMs}`)
         return json(req, env, { ok: true, user: userPayload(row), session })
       }
 

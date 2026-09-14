@@ -1,3 +1,6 @@
+import type { ArmorPartDef, ArmorPartId } from './armor'
+import { armorKit, frontArmorMm } from './armorKits'
+
 export type TankId =
   | 'tiger'
   | 'pz3'
@@ -29,15 +32,19 @@ export type DriveProfile = {
   tiltFromAccel: number
 }
 
+/** Absolute gun power — not multipliers on a shared weak shell. */
 export type GunProfile = {
-  /** Multipliers on base ammo defs. */
-  aphePenMult: number
-  apheDmgMult: number
-  hePenMult: number
-  heBlastMult: number
-  /** Turret traverse / gun elevate (rad/s). */
+  /** AP / APHE / APFSDS pen (game mm). */
+  aphePen: number
+  apheDmg: number
+  hePen: number
+  heDmg: number
+  heBlast: number
   traverseRadPerSec: number
   elevateRadPerSec: number
+  /** HUD label for AP-class round. */
+  apLabel?: string
+  heLabel?: string
 }
 
 export type TankOption = {
@@ -51,6 +58,8 @@ export type TankOption = {
   maxHp: number
   drive: DriveProfile
   gun: GunProfile
+  /** Plate thicknesses — used for hit resolution. */
+  armor: Record<ArmorPartId, ArmorPartDef>
   /**
    * Target overall width in game units after load (track gauge / hull width).
    * Relative to real tanks: Pz III ~2.9 m, Panther ~3.4 m, Leo 2 ~3.75 m.
@@ -66,9 +75,26 @@ export type TankOption = {
    */
   rigidRig?: boolean
   /**
-   * Self-propelled gun — deploy/map/lock artillery loop (PzH 2000).
+   * Self-propelled gun — deploy/map location-aim loop (PzH 2000).
    */
   artillery?: boolean
+  /** Tech-tree nation — used for country-by-country track/wheel passes. */
+  nation?: 'germany' | 'usa' | 'soviet'
+}
+
+/** Menu / HUD helper. */
+export function tankCombatSummary(t: TankOption): {
+  pen: number
+  frontArmor: number
+  hp: number
+  apLabel: string
+} {
+  return {
+    pen: t.gun.aphePen,
+    frontArmor: frontArmorMm(t.armor),
+    hp: t.maxHp,
+    apLabel: t.gun.apLabel ?? 'AP',
+  }
 }
 
 /** Pz-III L — flanking / blitz medium. */
@@ -290,17 +316,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Fast for its weight · long 75mm · frontal slope · open-ground hunter',
     url: '/models/tiger.glb?v=4',
     reloadSec: 6.5,
-    maxHp: 1200,
+    maxHp: 1100,
     targetWidth: 3.05,
     vintageCrew: true,
+    nation: 'germany',
     drive: TIGER_DRIVE,
+    armor: armorKit({ front: 120, side: 50, rear: 40, turret: 110 }),
     gun: {
-      aphePenMult: 1.22,
-      apheDmgMult: 1.25,
-      hePenMult: 1,
-      heBlastMult: 1.1,
+      aphePen: 165,
+      apheDmg: 420,
+      hePen: 18,
+      heDmg: 90,
+      heBlast: 160,
       traverseRadPerSec: 4.6,
       elevateRadPerSec: 3.4,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
     },
   },
   {
@@ -310,17 +341,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Fast · agile · quick reload · made for flank and encircle',
     url: '/models/pz3.glb?v=4',
     reloadSec: 4,
-    maxHp: 780,
+    maxHp: 680,
     targetWidth: 2.7,
     vintageCrew: true,
+    nation: 'germany',
     drive: PZ3_DRIVE,
+    armor: armorKit({ front: 72, side: 28, rear: 12, turret: 38 }),
     gun: {
-      aphePenMult: 0.72,
-      apheDmgMult: 0.7,
-      hePenMult: 1,
-      heBlastMult: 0.95,
+      aphePen: 78,
+      apheDmg: 260,
+      hePen: 12,
+      heDmg: 70,
+      heBlast: 130,
       traverseRadPerSec: 8.5,
       elevateRadPerSec: 5.5,
+      apLabel: 'APHE',
+      heLabel: 'HE',
     },
   },
   {
@@ -330,17 +366,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Balanced · long 75mm · the German jack-of-all-trades',
     url: '/models/pz4.glb?v=30',
     reloadSec: 5.5,
-    maxHp: 1050,
+    maxHp: 920,
     targetWidth: 2.7,
     vintageCrew: true,
+    nation: 'germany',
     drive: PZ4_DRIVE,
+    armor: armorKit({ front: 85, side: 35, rear: 22, turret: 55 }),
     gun: {
-      aphePenMult: 1.0,
-      apheDmgMult: 1.05,
-      hePenMult: 1,
-      heBlastMult: 1.05,
+      aphePen: 135,
+      apheDmg: 360,
+      hePen: 16,
+      heDmg: 85,
+      heBlast: 150,
       traverseRadPerSec: 6.2,
       elevateRadPerSec: 4.2,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
     },
   },
   {
@@ -353,14 +394,19 @@ export const TANK_OPTIONS: TankOption[] = [
     maxHp: 980,
     targetWidth: 2.95,
     vintageCrew: false,
+    nation: 'germany',
     drive: LEOPARD_DRIVE,
+    armor: armorKit({ front: 180, side: 70, rear: 40, turret: 160 }),
     gun: {
-      aphePenMult: 1.35,
-      apheDmgMult: 1.3,
-      hePenMult: 1.05,
-      heBlastMult: 1.15,
+      aphePen: 320,
+      apheDmg: 620,
+      hePen: 28,
+      heDmg: 120,
+      heBlast: 200,
       traverseRadPerSec: 7.2,
       elevateRadPerSec: 4.8,
+      apLabel: 'APDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -370,17 +416,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'L55 120mm · composite armor · NATO spearhead',
     url: '/models/leopard2.glb?v=13',
     reloadSec: 5.5,
-    maxHp: 1450,
+    maxHp: 1520,
     targetWidth: 3.35,
     vintageCrew: false,
+    nation: 'germany',
     drive: LEOPARD2_DRIVE,
+    armor: armorKit({ front: 720, side: 220, rear: 90, turret: 780, modern: true }),
     gun: {
-      aphePenMult: 1.55,
-      apheDmgMult: 1.45,
-      hePenMult: 1.1,
-      heBlastMult: 1.25,
+      aphePen: 780,
+      apheDmg: 1180,
+      hePen: 40,
+      heDmg: 180,
+      heBlast: 280,
       traverseRadPerSec: 6.5,
       elevateRadPerSec: 4.5,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -390,18 +441,23 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Stop · map-aim · lock · fire for effect',
     url: '/models/pzh2000.glb?v=8',
     reloadSec: 8.0,
-    maxHp: 1150,
+    maxHp: 1050,
     targetWidth: 3.5,
     vintageCrew: false,
+    nation: 'germany',
     artillery: true,
     drive: PZH_DRIVE,
+    armor: armorKit({ front: 90, side: 45, rear: 30, turret: 70 }),
     gun: {
-      aphePenMult: 0.85,
-      apheDmgMult: 1.1,
-      hePenMult: 1.4,
-      heBlastMult: 1.9,
+      aphePen: 95,
+      apheDmg: 400,
+      hePen: 55,
+      heDmg: 220,
+      heBlast: 520,
       traverseRadPerSec: 4.5,
       elevateRadPerSec: 3.8,
+      apLabel: 'AP',
+      heLabel: 'HE 155',
     },
   },
   {
@@ -411,18 +467,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Quick · light · 75mm · built to aid infantry in fast fights',
     url: '/models/m24_chaffee.glb?v=1',
     reloadSec: 4.2,
-    maxHp: 720,
+    maxHp: 620,
     targetWidth: 2.85,
     vintageCrew: true,
     rigidRig: false,
     drive: CHAFFEE_DRIVE,
+    armor: armorKit({ front: 45, side: 22, rear: 18, turret: 38 }),
     gun: {
-      aphePenMult: 0.88,
-      apheDmgMult: 0.9,
-      hePenMult: 1.08,
-      heBlastMult: 1.12,
+      aphePen: 95,
+      apheDmg: 280,
+      hePen: 14,
+      heDmg: 80,
+      heBlast: 145,
       traverseRadPerSec: 7.8,
       elevateRadPerSec: 5.2,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
     },
   },
   {
@@ -432,18 +492,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Allied medium · long 17-pounder · hard AP punch',
     url: '/models/m4_sherman_firefly.glb?v=1',
     reloadSec: 6.2,
-    maxHp: 980,
+    maxHp: 900,
     targetWidth: 2.95,
     vintageCrew: true,
     rigidRig: false,
     drive: SHERMAN_DRIVE,
+    armor: armorKit({ front: 76, side: 38, rear: 38, turret: 76 }),
     gun: {
-      aphePenMult: 1.28,
-      apheDmgMult: 1.2,
-      hePenMult: 1.02,
-      heBlastMult: 1.05,
+      aphePen: 175,
+      apheDmg: 440,
+      hePen: 18,
+      heDmg: 95,
+      heBlast: 155,
       traverseRadPerSec: 5.8,
       elevateRadPerSec: 4.0,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
     },
   },
   {
@@ -453,18 +517,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Late-war US · thick face · 90mm M3',
     url: '/models/m26_pershing.glb?v=2',
     reloadSec: 6.0,
-    maxHp: 1280,
+    maxHp: 1180,
     targetWidth: 3.15,
     vintageCrew: true,
     rigidRig: false,
     drive: PERSHING_DRIVE,
+    armor: armorKit({ front: 140, side: 76, rear: 50, turret: 130 }),
     gun: {
-      aphePenMult: 1.32,
-      apheDmgMult: 1.28,
-      hePenMult: 1.05,
-      heBlastMult: 1.1,
+      aphePen: 210,
+      apheDmg: 520,
+      hePen: 22,
+      heDmg: 110,
+      heBlast: 175,
       traverseRadPerSec: 5.2,
       elevateRadPerSec: 3.8,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
     },
   },
   {
@@ -474,18 +542,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'US heavyweight · composite armor · L44 120mm',
     url: '/models/m1a1_abrams.glb?v=2',
     reloadSec: 5.0,
-    maxHp: 1500,
+    maxHp: 1580,
     targetWidth: 3.65,
     vintageCrew: false,
     rigidRig: false,
     drive: ABRAMS_DRIVE,
+    armor: armorKit({ front: 760, side: 240, rear: 95, turret: 820, modern: true }),
     gun: {
-      aphePenMult: 1.58,
-      apheDmgMult: 1.48,
-      hePenMult: 1.12,
-      heBlastMult: 1.28,
+      aphePen: 800,
+      apheDmg: 1220,
+      hePen: 42,
+      heDmg: 190,
+      heBlast: 290,
       traverseRadPerSec: 6.8,
       elevateRadPerSec: 4.6,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -495,18 +567,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Sloped armor · wide tracks · the Red Army workhorse',
     url: '/models/t34.glb?v=2',
     reloadSec: 5.2,
-    maxHp: 980,
+    maxHp: 860,
     targetWidth: 3.0,
     vintageCrew: true,
     rigidRig: false,
     drive: T34_DRIVE,
+    armor: armorKit({ front: 90, side: 45, rear: 40, turret: 70 }),
     gun: {
-      aphePenMult: 0.95,
-      apheDmgMult: 1.0,
-      hePenMult: 1.05,
-      heBlastMult: 1.1,
+      aphePen: 95,
+      apheDmg: 300,
+      hePen: 14,
+      heDmg: 85,
+      heBlast: 150,
       traverseRadPerSec: 5.5,
       elevateRadPerSec: 4.0,
+      apLabel: 'APHE',
+      heLabel: 'HE',
     },
   },
   {
@@ -516,18 +592,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Low silhouette · hard 100mm · bridge from T-34 to T-54',
     url: '/models/t44_100.glb?v=2',
     reloadSec: 5.8,
-    maxHp: 1120,
+    maxHp: 1020,
     targetWidth: 3.1,
     vintageCrew: true,
     rigidRig: false,
     drive: T44_DRIVE,
+    armor: armorKit({ front: 130, side: 75, rear: 45, turret: 120 }),
     gun: {
-      aphePenMult: 1.25,
-      apheDmgMult: 1.22,
-      hePenMult: 1.05,
-      heBlastMult: 1.12,
+      aphePen: 220,
+      apheDmg: 540,
+      hePen: 24,
+      heDmg: 115,
+      heBlast: 185,
       traverseRadPerSec: 5.4,
       elevateRadPerSec: 3.9,
+      apLabel: 'APHE',
+      heLabel: 'HE',
     },
   },
   {
@@ -537,18 +617,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Ubiquitous · thick face · D-10T 100mm',
     url: '/models/t55.glb?v=2',
     reloadSec: 5.5,
-    maxHp: 1250,
+    maxHp: 1180,
     targetWidth: 3.3,
     vintageCrew: false,
     rigidRig: false,
     drive: T55_DRIVE,
+    armor: armorKit({ front: 240, side: 90, rear: 50, turret: 220 }),
     gun: {
-      aphePenMult: 1.35,
-      apheDmgMult: 1.28,
-      hePenMult: 1.08,
-      heBlastMult: 1.15,
+      aphePen: 280,
+      apheDmg: 600,
+      hePen: 26,
+      heDmg: 125,
+      heBlast: 200,
       traverseRadPerSec: 5.8,
       elevateRadPerSec: 4.2,
+      apLabel: 'APDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -563,13 +647,17 @@ export const TANK_OPTIONS: TankOption[] = [
     vintageCrew: false,
     rigidRig: false,
     drive: T72_DRIVE,
+    armor: armorKit({ front: 420, side: 140, rear: 60, turret: 450 }),
     gun: {
-      aphePenMult: 1.5,
-      apheDmgMult: 1.4,
-      hePenMult: 1.1,
-      heBlastMult: 1.22,
+      aphePen: 520,
+      apheDmg: 880,
+      hePen: 36,
+      heDmg: 160,
+      heBlast: 250,
       traverseRadPerSec: 6.2,
       elevateRadPerSec: 4.4,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -579,18 +667,22 @@ export const TANK_OPTIONS: TankOption[] = [
     blurb: 'Shtora · Kontakt · 2A46M 125mm — final boss',
     url: '/models/t90.glb?v=9',
     reloadSec: 6.2,
-    maxHp: 1550,
+    maxHp: 1600,
     targetWidth: 3.7,
     vintageCrew: false,
     rigidRig: false,
     drive: T90_DRIVE,
+    armor: armorKit({ front: 780, side: 250, rear: 100, turret: 850, modern: true }),
     gun: {
-      aphePenMult: 1.6,
-      apheDmgMult: 1.48,
-      hePenMult: 1.12,
-      heBlastMult: 1.28,
+      aphePen: 820,
+      apheDmg: 1250,
+      hePen: 44,
+      heDmg: 200,
+      heBlast: 300,
       traverseRadPerSec: 6.6,
       elevateRadPerSec: 4.6,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
     },
   },
 ]

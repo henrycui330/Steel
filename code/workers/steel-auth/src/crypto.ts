@@ -1,6 +1,11 @@
 /** PBKDF2 helpers for the Worker (mirrors code/src/auth/crypto.ts). */
 
-const ITERATIONS = 120_000
+/**
+ * Keep this modest — Cloudflare Workers have tight CPU budgets.
+ * 120k was killing /auth/register with opaque 500s on free/low CPU.
+ * Offline client can stay higher; DBs are separate.
+ */
+const ITERATIONS = 40_000
 const HASH_BITS = 256
 
 function bufToB64(buf: ArrayBuffer): string {

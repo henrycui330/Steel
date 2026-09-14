@@ -38,6 +38,11 @@ const TANK_R = 1.8
 const SHELL_LIFE = 5
 const PITCH_MIN = (-12 * Math.PI) / 180
 const PITCH_MAX = (22 * Math.PI) / 180
+/** How far ahead / to the sides AI looks for trees & buildings. */
+const FEELER_AHEAD = 11
+const FEELER_NEAR = 4.5
+const FEELER_SIDE = 7.5
+const FEELER_ANG = 0.62
 
 type EnemyShell = {
   mesh: THREE.Mesh
@@ -67,14 +72,17 @@ export type AiUpdateContext = {
   hostiles: readonly AiHostile[]
   /** Other tanks to push apart (player + all AI). */
   neighbors: readonly THREE.Object3D[]
-  playableHalf: number
+  playable: { x: number; z: number }
   colliders: readonly PropCollider[]
   camera?: THREE.Camera
+  /** King of the Hill: drive here when not in a close fight. */
+  objective?: { x: number; z: number; radius: number }
 }
 
 export type AiEnemy = DummyTarget & {
   team: AiTeam
   update: (dt: number, ctx: AiUpdateContext) => void
+  reviveAt: (pos: THREE.Vector3, yaw: number) => void
 }
 
 export type AiSpawnOptions = {
@@ -85,6 +93,8 @@ export type AiSpawnOptions = {
   yaw?: number
   smoke?: AiSmoke
   heightAt?: (x: number, z: number) => number
+  /** If false, hide the tank on death (KOTH respawn) instead of wrecking it. */
+  persistMesh?: boolean
 }
 
 const _muzzlePos = new THREE.Vector3()
@@ -95,6 +105,7 @@ const _spark = new THREE.Vector3()
 const _gunFwd = new THREE.Vector3()
 const _aimPoint = new THREE.Vector3()
 const _prevPos = new Map<THREE.Object3D, { x: number; z: number }>()
+const _feeler = new THREE.Vector3()
 
 function darkenEnemy(root: THREE.Object3D): void {
   root.traverse((obj) => {
@@ -119,6 +130,22 @@ function tintFriendly(root: THREE.Object3D): void {
       }
     }
   })
+}
+
+function feelerBlocked(
+  x: number,
+  z: number,
+  y: number,
+  yaw: number,
+  dist: number,
+  colliders: readonly PropCollider[],
+  playable: { x: number; z: number },
+): boolean {
+  const nx = x + Math.sin(yaw) * dist
+  const nz = z + Math.cos(yaw) * dist
+  if (Math.abs(nx) > playable.x - 5 || Math.abs(nz) > playable.z - 5) return true
+  _feeler.set(nx, y + 1.1, nz)
+  return hitsPropCollider(_feeler, colliders, TANK_R + 0.55)
 }
 
 function yawToward(current: number, target: number, maxStep: number): number {
@@ -171,7 +198,7 @@ export async function spawnAiPz3Enemy(
   scene: THREE.Scene,
   opts: AiSpawnOptions,
 ): Promise<AiEnemy> {
-  const { team, position, yaw = Math.PI, smoke, heightAt } = opts
+  const { team, position, yaw = Math.PI, smoke, heightAt, persistMesh = false } = opts
   const tankId = opts.tankId ?? 'pz3'
   const chassis = tankOptionById(tankId)
   const handle = await loadPlayerTank(tankId)
@@ -189,8 +216,13 @@ export async function spawnAiPz3Enemy(
     team === 'friendly' ? `Friendly ${chassis.name}` : `Enemy ${chassis.name}`
   const combat = createCombatant(root, {
     maxHp: Math.round(chassis.maxHp * 0.85),
+    armor: chassis.armor,
     label,
     onDestroyed: (r) => {
+      if (persistMesh) {
+        r.visible = false
+        return
+      }
       spawnDestroyedWreck(scene, r, smoke)
     },
   })
@@ -203,6 +235,8 @@ export async function spawnAiPz3Enemy(
   let speed = 0
   let reloadLeft = 2.0 + Math.random() * 2
   let leakAcc = 0
+  /** +1 steer left, -1 steer right, 0 none — held while hugging an obstacle. */
+  let avoidSide = 0
 
   function spawnShell(): void {
     const def = ammoById('aphe')
@@ -246,10 +280,9 @@ export async function spawnAiPz3Enemy(
     camera: THREE.Camera | undefined,
   ): boolean {
     if (!target.containsPoint(shell.mesh.position)) return false
-    const def = ammoById('aphe')
     const stats = {
-      basePenetration: def.penetration * option.gun.aphePenMult * 0.85,
-      baseDamage: def.penDamage * option.gun.apheDmgMult * 0.85,
+      basePenetration: option.gun.aphePen * 0.9,
+      baseDamage: option.gun.apheDmg * 0.9,
       blastDamage: 0,
     }
     const result = target.resolveShellHit(shell.mesh.position, shell.velocity, stats, {
@@ -290,7 +323,7 @@ export async function spawnAiPz3Enemy(
   function tickShells(
     dt: number,
     hostiles: readonly AiHostile[],
-    playableHalf: number,
+    playable: { x: number; z: number },
     colliders: readonly PropCollider[],
     camera: THREE.Camera | undefined,
   ): void {
@@ -309,8 +342,8 @@ export async function spawnAiPz3Enemy(
         continue
       }
       if (
-        Math.abs(shell.mesh.position.x) > playableHalf - SHELL_RADIUS ||
-        Math.abs(shell.mesh.position.z) > playableHalf - SHELL_RADIUS ||
+        Math.abs(shell.mesh.position.x) > playable.x - SHELL_RADIUS ||
+        Math.abs(shell.mesh.position.z) > playable.z - SHELL_RADIUS ||
         shell.age >= SHELL_LIFE
       ) {
         removeShell(i)
@@ -349,34 +382,46 @@ export async function spawnAiPz3Enemy(
     resolveShellHit: (p, v, s, ctx) => combat.resolveShellHit(p, v, s, ctx),
 
     update(dt, ctx) {
-      const { hostiles, neighbors, playableHalf, colliders, camera } = ctx
+      const { hostiles, neighbors, playable, colliders, camera, objective } = ctx
       combat.tickMobility(dt)
 
       if (!combat.alive) {
-        tickShells(dt, hostiles, playableHalf, colliders, camera)
+        tickShells(dt, hostiles, playable, colliders, camera)
         return
       }
 
       const immobilized = combat.isImmobilized()
       const target = pickHostile(root.position, hostiles)
+      const hillDist = objective
+        ? Math.hypot(root.position.x - objective.x, root.position.z - objective.z)
+        : 0
+      const goHill = Boolean(objective && hillDist > objective.radius * 0.55)
 
-      if (!target) {
+      if (!target && !goHill) {
         speed = Math.max(0, speed - 10 * dt)
         updateWheels(wheels, dt, speed, 0)
-        tickShells(dt, hostiles, playableHalf, colliders, camera)
+        tickShells(dt, hostiles, playable, colliders, camera)
         return
       }
 
-      const tpos = target.root.position
-      const dtSafe = Math.max(dt, 1e-4)
-      const prev = _prevPos.get(target.root) ?? { x: tpos.x, z: tpos.z }
-      const tVelX = (tpos.x - prev.x) / dtSafe
-      const tVelZ = (tpos.z - prev.z) / dtSafe
-      _prevPos.set(target.root, { x: tpos.x, z: tpos.z })
+      const tpos = target?.root.position
+      const fightClose = Boolean(target && tpos && Math.hypot(tpos.x - root.position.x, tpos.z - root.position.z) < AI_ENGAGE)
+      const moveToHill = goHill && !fightClose
+      const aimX = moveToHill ? objective!.x : tpos?.x ?? objective?.x ?? 0
+      const aimZ = moveToHill ? objective!.z : tpos?.z ?? objective?.z ?? 0
+      const aimY = tpos ? tpos.y + 1.15 : root.position.y + 1.15
 
-      const distNow = Math.hypot(tpos.x - root.position.x, tpos.z - root.position.z)
+      const dtSafe = Math.max(dt, 1e-4)
+      const prev = tpos
+        ? _prevPos.get(target!.root) ?? { x: tpos.x, z: tpos.z }
+        : { x: aimX, z: aimZ }
+      const tVelX = tpos ? (tpos.x - prev.x) / dtSafe : 0
+      const tVelZ = tpos ? (tpos.z - prev.z) / dtSafe : 0
+      if (tpos && target) _prevPos.set(target.root, { x: tpos.x, z: tpos.z })
+
+      const distNow = Math.hypot(aimX - root.position.x, aimZ - root.position.z)
       const tFlight = THREE.MathUtils.clamp(distNow / SHELL_SPEED, 0.2, 2.8) * 1.12
-      _aimPoint.set(tpos.x + tVelX * tFlight, tpos.y + 1.15, tpos.z + tVelZ * tFlight)
+      _aimPoint.set(aimX + tVelX * tFlight, aimY, aimZ + tVelZ * tFlight)
 
       const dx = _aimPoint.x - root.position.x
       const dz = _aimPoint.z - root.position.z
@@ -410,14 +455,59 @@ export async function spawnAiPz3Enemy(
       while (yawWrapHull < -Math.PI) yawWrapHull += Math.PI * 2
 
       if (!immobilized) {
+        const hullYaw = root.rotation.y
+        const px = root.position.x
+        const pz = root.position.z
+        const py = root.position.y
+        const ahead =
+          feelerBlocked(px, pz, py, hullYaw, FEELER_NEAR, colliders, playable) ||
+          feelerBlocked(px, pz, py, hullYaw, FEELER_AHEAD, colliders, playable)
+        const left = feelerBlocked(
+          px,
+          pz,
+          py,
+          hullYaw + FEELER_ANG,
+          FEELER_SIDE,
+          colliders,
+          playable,
+        )
+        const right = feelerBlocked(
+          px,
+          pz,
+          py,
+          hullYaw - FEELER_ANG,
+          FEELER_SIDE,
+          colliders,
+          playable,
+        )
+
+        if (ahead) {
+          if (!left && right) avoidSide = 1
+          else if (!right && left) avoidSide = -1
+          else if (avoidSide === 0) avoidSide = yawWrapHull >= 0 ? 1 : -1
+        } else if (left && !right) {
+          avoidSide = -1
+        } else if (right && !left) {
+          avoidSide = 1
+        } else {
+          avoidSide = 0
+        }
+
+        const avoiding = avoidSide !== 0
+        const navYaw = avoiding ? hullYaw + avoidSide * 1.2 : desiredYaw
+
         const facingOk = Math.cos(yawWrapHull) > 0.35
         let throttle = 0
-        if (dist > AI_ENGAGE && facingOk) throttle = 1
+        if (ahead && left && right) throttle = -0.4
+        else if (avoiding) throttle = 0.7
+        else if (dist > AI_ENGAGE && facingOk) throttle = 1
         else if (dist < AI_TOO_CLOSE) throttle = -0.55
 
-        if (throttle !== 0) {
-          root.rotation.y = yawToward(root.rotation.y, desiredYaw, AI_TURN * dt)
-        }
+        root.rotation.y = yawToward(
+          root.rotation.y,
+          navYaw,
+          AI_TURN * (avoiding ? 1.55 : 1) * dt,
+        )
 
         if (throttle > 0) speed = Math.min(AI_MAX_SPEED, speed + 8 * dt)
         else if (throttle < 0) speed = Math.max(-4, speed - 6 * dt)
@@ -433,7 +523,7 @@ export async function spawnAiPz3Enemy(
 
         let blocked =
           resolvePropCollisions(root.position, TANK_R, colliders) ||
-          clampToArena(root.position, playableHalf, TANK_R)
+          clampToArena(root.position, playable, TANK_R)
 
         for (const other of neighbors) {
           if (other === root) continue
@@ -441,15 +531,21 @@ export async function spawnAiPz3Enemy(
         }
         blocked =
           resolvePropCollisions(root.position, TANK_R, colliders) ||
-          clampToArena(root.position, playableHalf, TANK_R) ||
+          clampToArena(root.position, playable, TANK_R) ||
           blocked
-        if (blocked) speed = 0
+        if (blocked) {
+          speed *= 0.4
+          if (avoidSide === 0) avoidSide = 1
+        }
 
+        let hullErr = navYaw - root.rotation.y
+        while (hullErr > Math.PI) hullErr -= Math.PI * 2
+        while (hullErr < -Math.PI) hullErr += Math.PI * 2
         updateWheels(
           wheels,
           dt,
           speed,
-          Math.abs(yawWrapHull) > 0.05 && throttle !== 0 ? -Math.sign(yawWrapHull) : 0,
+          Math.abs(hullErr) > 0.05 ? -Math.sign(hullErr) : 0,
         )
       } else {
         speed = 0
@@ -467,6 +563,7 @@ export async function spawnAiPz3Enemy(
 
       if (
         reloadLeft <= 0 &&
+        target &&
         dist < AI_FIRE_RANGE &&
         dist > 10 &&
         gunDot >= AI_FIRE_COS &&
@@ -485,7 +582,16 @@ export async function spawnAiPz3Enemy(
         )
       }
 
-      tickShells(dt, hostiles, playableHalf, colliders, camera)
+      tickShells(dt, hostiles, playable, colliders, camera)
+    },
+    reviveAt(pos, yaw) {
+      speed = 0
+      reloadLeft = 1.2
+      avoidSide = 0
+      root.position.copy(pos)
+      root.rotation.y = yaw
+      root.visible = true
+      combat.revive()
     },
   }
 

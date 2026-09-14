@@ -113,10 +113,21 @@ function isSkippedPart(name: string): boolean {
   const n = name.toLowerCase()
   return (
     n.includes('track') ||
+    n.includes('tread') ||
+    n.includes('kette') ||
     n.includes('wheel') ||
     n.includes('tire') ||
     n.includes('tyre') ||
     n.includes('chain')
+  )
+}
+
+function isTrackMaterialName(name: string | undefined): boolean {
+  if (!name) return false
+  const n = name.toLowerCase()
+  return (
+    /track|tread|kette|chain|panther-a-track|pzh_2000tracks|m1-tank-track/i.test(n) ||
+    n === 'material_5937'
   )
 }
 
@@ -147,6 +158,8 @@ export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSe
     const src = Array.isArray(obj.material) ? obj.material : [obj.material]
     const next = src.map((m) => {
       if (!m) return m
+      // Keep rubber tracks black — never wrap tread materials on hull multi-mats
+      if (isTrackMaterialName(m.name)) return m
       const mat = m.clone() as THREE.MeshStandardMaterial
       if ('map' in mat) {
         mat.map = map

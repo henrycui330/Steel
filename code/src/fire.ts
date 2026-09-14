@@ -1,13 +1,13 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { ammoById, type AmmoId, type WeaponId, AMMO_TYPES, type AmmoDef } from './ammo'
+import { ammoById, type AmmoId, type WeaponId, type AmmoDef } from './ammo'
 import {
   integrateShell,
   SHELL_RADIUS,
   SHELL_SPEED,
   type HeightSampler,
 } from './ballistics'
-import { getAimDirection, getAimLookPoint } from './aim'
+import { getAimDirection } from './aim'
 import { playFireSound } from './audio'
 import type { DummyTarget } from './dummy'
 import { hitsPropCollider, type PropCollider } from './collision'
@@ -23,8 +23,6 @@ const MG_RELEASE_DELAY = 0.02
 const MG_COOLDOWN = 0.09
 const MG_RADIUS = 0.045
 const MG_SPEED = SHELL_SPEED * 1.05
-/** Reticle converge range — shells fly muzzle → this point on the aim ray. */
-const AIM_CONVERGE_DIST = 72
 /** Visible shell length in meters (model is huge Sketchfab units). */
 const SHELL_MODEL_LENGTH = 0.55
 const SHELL_MODEL_URL = '/models/88mm_shell.glb'
@@ -64,6 +62,8 @@ export type FireSystem = {
   ) => boolean
   setReloadSec: (sec: number) => void
   setGunProfile: (profile: GunProfile) => void
+  setPlayableBounds: (bounds: { x: number; z: number }) => void
+  /** @deprecated use setPlayableBounds */
   setPlayableHalf: (half: number) => void
   setHeightAt: (fn: HeightSampler | null) => void
   selectAmmo: (id: AmmoId) => void
@@ -78,7 +78,6 @@ const _origin = new THREE.Vector3()
 const _dir = new THREE.Vector3()
 const _look = new THREE.Vector3()
 const _sparkPos = new THREE.Vector3()
-const _aimPoint = new THREE.Vector3()
 
 /** Align long axis to −Z (Three.js lookAt forward) and scale to game size. */
 function prepareShellModel(scene: THREE.Object3D): THREE.Group {
@@ -113,18 +112,15 @@ function disposeObject(root: THREE.Object3D): void {
   })
 }
 
+/**
+ * Shell leave direction = player aim from the muzzle.
+ * Never converge from camera height (that lofted shells into the sky at pitch 0).
+ */
 function aimDirFromMuzzle(
-  muzzle: THREE.Object3D,
-  camera: THREE.Camera | undefined,
+  _muzzle: THREE.Object3D,
+  _camera: THREE.Camera | undefined,
   out: THREE.Vector3,
 ): THREE.Vector3 {
-  muzzle.updateMatrixWorld(true)
-  muzzle.getWorldPosition(_origin)
-  if (camera) {
-    getAimLookPoint(camera.position, AIM_CONVERGE_DIST, _aimPoint)
-    out.copy(_aimPoint).sub(_origin)
-    if (out.lengthSq() > 1e-6) return out.normalize()
-  }
   return getAimDirection(out)
 }
 
@@ -170,7 +166,7 @@ export function createFireSystem(
       console.warn('[Steel] 88mm shell GLB failed — sphere fallback', err)
     })
 
-  let playableHalf = initialPlayableHalf
+  let playable = { x: initialPlayableHalf, z: initialPlayableHalf }
   let heightAt: HeightSampler | null = null
   let cooldown = 0
   let cooldownMax = reloadSec
@@ -180,12 +176,15 @@ export function createFireSystem(
   let weapon: WeaponId = 'main'
   let mgCooldown = 0
   let gun: GunProfile = {
-    aphePenMult: 1,
-    apheDmgMult: 1,
-    hePenMult: 1,
-    heBlastMult: 1,
+    aphePen: 120,
+    apheDmg: 320,
+    hePen: 16,
+    heDmg: 80,
+    heBlast: 140,
     traverseRadPerSec: 6.5,
     elevateRadPerSec: 4.5,
+    apLabel: 'AP',
+    heLabel: 'HE',
   }
 
   function effectiveAmmo(def: AmmoDef): {
@@ -202,15 +201,15 @@ export function createFireSystem(
     }
     if (def.id === 'aphe') {
       return {
-        penetration: def.penetration * gun.aphePenMult,
-        penDamage: def.penDamage * gun.apheDmgMult,
+        penetration: gun.aphePen,
+        penDamage: gun.apheDmg,
         blastDamage: 0,
       }
     }
     return {
-      penetration: def.penetration * gun.hePenMult,
-      penDamage: def.penDamage,
-      blastDamage: def.blastDamage * gun.heBlastMult,
+      penetration: gun.hePen,
+      penDamage: gun.heDmg,
+      blastDamage: gun.heBlast,
     }
   }
 
@@ -219,7 +218,9 @@ export function createFireSystem(
     loading = id
     chambered = null
     cooldown = cooldownMax
-    console.info(`[Steel] Loading ${AMMO_TYPES[id].name} (${cooldownMax.toFixed(1)}s)`)
+    console.info(
+      `[Steel] Loading ${id === 'aphe' ? (gun.apLabel ?? 'AP') : (gun.heLabel ?? 'HE')} (${cooldownMax.toFixed(1)}s)`,
+    )
   }
 
   function makeMainShellMesh(ammoId: AmmoId): THREE.Object3D {
@@ -305,8 +306,11 @@ export function createFireSystem(
   }
 
   function outOfBounds(pos: THREE.Vector3): boolean {
-    const limit = playableHalf - SHELL_RADIUS
-    return Math.abs(pos.x) > limit || Math.abs(pos.z) > limit || pos.y > 80
+    return (
+      Math.abs(pos.x) > playable.x - SHELL_RADIUS ||
+      Math.abs(pos.z) > playable.z - SHELL_RADIUS ||
+      pos.y > 80
+    )
   }
 
   function hitGround(pos: THREE.Vector3, radius: number): boolean {
@@ -425,8 +429,11 @@ export function createFireSystem(
     setGunProfile(profile) {
       gun = profile
     },
+    setPlayableBounds(bounds) {
+      playable = { x: bounds.x, z: bounds.z }
+    },
     setPlayableHalf(half) {
-      playableHalf = half
+      playable = { x: half, z: half }
     },
     setHeightAt(fn) {
       heightAt = fn
@@ -484,7 +491,9 @@ export function createFireSystem(
         cooldown = Math.max(0, cooldown - dt)
         if (cooldown <= 0 && chambered === null) {
           chambered = loading
-          console.info(`[Steel] ${AMMO_TYPES[chambered].name} READY`)
+          console.info(
+            `[Steel] ${chambered === 'aphe' ? (gun.apLabel ?? 'AP') : (gun.heLabel ?? 'HE')} READY`,
+          )
         }
       }
       if (mgCooldown > 0) mgCooldown = Math.max(0, mgCooldown - dt)

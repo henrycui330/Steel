@@ -1,5 +1,34 @@
 import type { AuthBackend, AuthResult, AuthUser, UserProfile } from './types'
 
+const FETCH_TIMEOUT_MS = 20_000
+
+async function readAuthResult(res: Response): Promise<AuthResult> {
+  const text = await res.text()
+  let data: Partial<AuthResult> & { error?: string } = {}
+  try {
+    data = text ? (JSON.parse(text) as AuthResult) : {}
+  } catch {
+    return {
+      ok: false,
+      error: `Auth server returned non-JSON (${res.status}). Try again in a moment.`,
+    }
+  }
+  if (!data.ok) {
+    return {
+      ok: false,
+      error:
+        data.error ||
+        (res.status === 0
+          ? 'Cannot reach auth server.'
+          : `Sign-up failed (HTTP ${res.status}).`),
+    }
+  }
+  if (!data.user || !data.session) {
+    return { ok: false, error: 'Auth server returned an incomplete response.' }
+  }
+  return { ok: true, user: data.user, session: data.session }
+}
+
 async function postJson(
   base: string,
   path: string,
@@ -8,11 +37,18 @@ async function postJson(
 ): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
-  return fetch(`${base}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+  try {
+    return await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    })
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export function getSteelApiBase(): string | null {
@@ -29,33 +65,55 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
 
     async register(username, password): Promise<AuthResult> {
       try {
+        const t0 = performance.now()
         const res = await postJson(base, '/auth/register', { username, password })
-        const data = (await res.json()) as AuthResult
-        if (!data.ok) return data
+        const result = await readAuthResult(res)
+        console.info(
+          `[Steel] Online register ${result.ok ? 'ok' : 'fail'} in ${(performance.now() - t0).toFixed(0)}ms` +
+            (result.ok ? '' : ` — ${result.error}`),
+        )
+        if (!result.ok) return result
         return {
           ok: true,
-          user: data.user,
-          session: { ...data.session, mode: 'online' },
+          user: result.user,
+          session: { ...result.session, mode: 'online' },
         }
       } catch (err) {
         console.warn('[Steel] Online register failed', err)
-        return { ok: false, error: 'Cannot reach auth server. Check VITE_STEEL_API / network.' }
+        const aborted = err instanceof Error && err.name === 'AbortError'
+        return {
+          ok: false,
+          error: aborted
+            ? 'Auth server timed out (20s). If using workers.dev, your network may block it — run local Worker (wrangler dev :8787) or use a VPN.'
+            : `Cannot reach auth server (${base}). Check VITE_STEEL_API, CORS, network, or workers.dev block.`,
+        }
       }
     },
 
     async login(username, password): Promise<AuthResult> {
       try {
+        const t0 = performance.now()
         const res = await postJson(base, '/auth/login', { username, password })
-        const data = (await res.json()) as AuthResult
-        if (!data.ok) return data
+        const result = await readAuthResult(res)
+        console.info(
+          `[Steel] Online login ${result.ok ? 'ok' : 'fail'} in ${(performance.now() - t0).toFixed(0)}ms` +
+            (result.ok ? '' : ` — ${result.error}`),
+        )
+        if (!result.ok) return result
         return {
           ok: true,
-          user: data.user,
-          session: { ...data.session, mode: 'online' },
+          user: result.user,
+          session: { ...result.session, mode: 'online' },
         }
       } catch (err) {
         console.warn('[Steel] Online login failed', err)
-        return { ok: false, error: 'Cannot reach auth server. Check VITE_STEEL_API / network.' }
+        const aborted = err instanceof Error && err.name === 'AbortError'
+        return {
+          ok: false,
+          error: aborted
+            ? 'Auth server timed out (20s). If using workers.dev, your network may block it — run local Worker (wrangler dev :8787) or use a VPN.'
+            : `Cannot reach auth server (${base}). Check VITE_STEEL_API, CORS, network, or workers.dev block.`,
+        }
       }
     },
 
@@ -69,9 +127,17 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
 
     async me(token: string): Promise<AuthUser | null> {
       try {
-        const res = await fetch(`${base}/auth/me`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+        let res: Response
+        try {
+          res = await fetch(`${base}/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: ctrl.signal,
+          })
+        } finally {
+          clearTimeout(timer)
+        }
         const data = (await res.json()) as { ok: boolean; user?: AuthUser; error?: string }
         if (!data.ok || !data.user) return null
         return data.user
@@ -83,14 +149,22 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
 
     async updateProfile(token: string, patch: Partial<UserProfile>): Promise<AuthUser | null> {
       try {
-        const res = await fetch(`${base}/auth/profile`, {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify(patch),
-        })
+        const ctrl = new AbortController()
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+        let res: Response
+        try {
+          res = await fetch(`${base}/auth/profile`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify(patch),
+            signal: ctrl.signal,
+          })
+        } finally {
+          clearTimeout(timer)
+        }
         const data = (await res.json()) as { ok: boolean; user?: AuthUser }
         if (!data.ok || !data.user) return null
         return data.user

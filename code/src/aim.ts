@@ -17,10 +17,10 @@ const RETICLE_DISTANCE = 48
 let aimPrecision = false
 let turretYawRate = 6.5
 let barrelPitchRate = 4.5
-const PITCH_MIN = THREE.MathUtils.degToRad(-8)
-const PITCH_MAX = THREE.MathUtils.degToRad(20)
-const AIM_PITCH_MIN = THREE.MathUtils.degToRad(-12)
-const AIM_PITCH_MAX = THREE.MathUtils.degToRad(28)
+let pitchMin = THREE.MathUtils.degToRad(-8)
+let pitchMax = THREE.MathUtils.degToRad(20)
+let aimPitchMin = THREE.MathUtils.degToRad(-12)
+let aimPitchMax = THREE.MathUtils.degToRad(28)
 
 let bound = false
 /** Turret yaw relative to hull (not world/map). */
@@ -49,6 +49,8 @@ export type AimFrame = {
   barrelHit: THREE.Vector3
   /** True when gun forward is close enough to aim that barrel HUD can hide. */
   gunSynced: boolean
+  /** Terrain range along aim (m / world units), or null if no hit in envelope. */
+  rangeM: number | null
 }
 
 export function bindMouseAim(): void {
@@ -59,7 +61,7 @@ export function bindMouseAim(): void {
     const sens = aimPrecision ? AIM_SENS_ZOOMED : AIM_SENS
     aimLocalYaw -= e.movementX * sens
     aimLocalPitch -= e.movementY * sens
-    aimLocalPitch = THREE.MathUtils.clamp(aimLocalPitch, AIM_PITCH_MIN, AIM_PITCH_MAX)
+    aimLocalPitch = THREE.MathUtils.clamp(aimLocalPitch, aimPitchMin, aimPitchMax)
   })
 }
 
@@ -77,6 +79,12 @@ export function setAimPrecision(enabled: boolean): void {
 export function setAimRates(traverseRadPerSec: number, elevateRadPerSec: number): void {
   turretYawRate = traverseRadPerSec
   barrelPitchRate = elevateRadPerSec
+}
+
+/** Overwrite local aim (artillery location mark). */
+export function setAimLocalYawPitch(yaw: number, pitch: number): void {
+  aimLocalYaw = yaw
+  aimLocalPitch = THREE.MathUtils.clamp(pitch, aimPitchMin, aimPitchMax)
 }
 
 export function getAimYaw(): number {
@@ -128,6 +136,21 @@ function stepAngle(current: number, target: number, maxStep: number): number {
   return current + THREE.MathUtils.clamp(delta, -maxStep, maxStep)
 }
 
+const RANGE_MAX = 600
+const RANGE_STEP = 1.5
+
+/** Distance along aim ray to first terrain contact (1 u ≈ 1 m). */
+function sampleAimRange(origin: THREE.Vector3, dir: THREE.Vector3): number | null {
+  for (let t = 2; t <= RANGE_MAX; t += RANGE_STEP) {
+    const y = origin.y + dir.y * t
+    const x = origin.x + dir.x * t
+    const z = origin.z + dir.z * t
+    const gy = heightAt ? heightAt(x, z) : 0
+    if (y <= gy + 0.05) return t
+  }
+  return null
+}
+
 /**
  * Lagged turret + ray reticles. No auto-aim — player aim only.
  */
@@ -144,7 +167,7 @@ export function updateTurretAim(
   if (!aimReady) resetAim()
 
   const targetLocalYaw = aimLocalYaw
-  const gunPitch = THREE.MathUtils.clamp(aimLocalPitch, PITCH_MIN, PITCH_MAX)
+  const gunPitch = THREE.MathUtils.clamp(aimLocalPitch, pitchMin, pitchMax)
   const targetPitch = -gunPitch
 
   // Skinned bones with gun along +X: yaw on Y, pitch on Z.
@@ -190,7 +213,7 @@ export function updateTurretAim(
   barrelWorld.copy(_muzzle).addScaledVector(_fwd, RETICLE_DISTANCE)
 
   const gunSynced = _fwd.dot(_aimDir) > 0.9995
-  void heightAt
+  const rangeM = sampleAimRange(_muzzle, _aimDir)
 
   return {
     fireYaw,
@@ -198,5 +221,6 @@ export function updateTurretAim(
     mouseHit: mouseWorld,
     barrelHit: barrelWorld,
     gunSynced,
+    rangeM,
   }
 }

@@ -2,8 +2,11 @@ import * as THREE from 'three'
 
 /** Muzzle speed (units/sec). */
 export const SHELL_SPEED = 180
-/** Flat shots — no lob. */
-export const SHELL_GRAVITY = 0
+/**
+ * Mild arcade gravity (world u/s²). Enough for a slight long-range drop;
+ * not howitzer loft. SPG high-angle stays a separate path when added.
+ */
+export const SHELL_GRAVITY = 1
 export const SHELL_RADIUS = 0.12
 export const SHELL_MAX_FLIGHT = 6
 
@@ -102,16 +105,19 @@ export function integrateShell(
  * horizontal range `range` with height delta `deltaY` (target − muzzle).
  * Returns null if unreachable.
  */
-export function elevationToHit(
+function elevationRoots(
   range: number,
   deltaY: number,
-  speed = SHELL_SPEED,
-  g = SHELL_GRAVITY,
-): number | null {
+  speed: number,
+  g: number,
+): [number, number] | null {
   const x = Math.max(range, 0.5)
   const y = deltaY
   const a = (g * x * x) / (2 * speed * speed)
-  if (a < 1e-8) return Math.atan2(y, x)
+  if (a < 1e-8) {
+    const flat = Math.atan2(y, x)
+    return [flat, flat]
+  }
   const A = a
   const B = -x
   const C = y + a
@@ -120,6 +126,17 @@ export function elevationToHit(
   const s = Math.sqrt(disc)
   const u1 = (-B - s) / (2 * A)
   const u2 = (-B + s) / (2 * A)
-  const u = Math.abs(u1) <= Math.abs(u2) ? u1 : u2
-  return Math.atan(u)
+  return [Math.atan(u1), Math.atan(u2)]
+}
+
+export function elevationToHit(
+  range: number,
+  deltaY: number,
+  speed = SHELL_SPEED,
+  g = SHELL_GRAVITY,
+): number | null {
+  const roots = elevationRoots(range, deltaY, speed, g)
+  if (!roots) return null
+  const [th1, th2] = roots
+  return Math.abs(th1) <= Math.abs(th2) ? th1 : th2
 }

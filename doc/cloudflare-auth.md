@@ -56,11 +56,33 @@ Wrangler prints a URL like:
 
 In `code/.env` (create from `.env.example`):
 
+Local (same-origin proxy — avoids CORS):
+
+```
+VITE_STEEL_API=/steel-api
+# Prefer local Worker when *.workers.dev is blocked on your network:
+VITE_STEEL_API_PROXY=http://127.0.0.1:8787
+# Or remote (needs working access to workers.dev):
+# VITE_STEEL_API_PROXY=https://steel-auth.YOUR_SUBDOMAIN.workers.dev
+```
+
+In another terminal:
+
+```bash
+cd code/workers/steel-auth
+npm run db:local   # once
+npm run dev        # http://127.0.0.1:8787
+```
+
+Then restart Vite (`npm run dev` in `code/`).
+
+GitHub Pages (CI secret `VITE_STEEL_API`):
+
 ```
 VITE_STEEL_API=https://steel-auth.YOUR_SUBDOMAIN.workers.dev
 ```
 
-Restart Vite (`npm run dev` in `code/`).
+If Pages signup times out, your ISP may block `*.workers.dev` — use a VPN or attach a custom domain to the Worker.
 
 ## Use Online in the game
 
@@ -70,9 +92,13 @@ Restart Vite (`npm run dev` in `code/`).
 
 Offline accounts and Online accounts are **separate**.
 
+## Signup performance note
+
+Online register/login hashes passwords with PBKDF2 on the Worker. Iteration count is kept **moderate (40k)** so Cloudflare CPU limits do not abort the request (symptoms: long wait, then “Server error”). Redeploy after changing `workers/steel-auth/src/crypto.ts`.
+
 ## CORS / other origins
 
-`wrangler.toml` `[vars] ALLOWED_ORIGINS` includes Vite local hosts and `https://henrycui330.github.io`. After changing origins, redeploy the Worker.
+Worker CORS allows `https://henrycui330.github.io` plus any `http(s)://localhost` / `127.0.0.1` port. After changing origins, redeploy the Worker. Local Vite can also use `/steel-api` proxy (no CORS).
 
 ## Routes
 

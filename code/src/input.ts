@@ -1,4 +1,4 @@
-/** Keyboard: WASD drive, Shift brake, Space fire, C camera; ↑/↓ ammo; 1/2 gun; RMB aim. */
+/** Keyboard: WASD drive, Shift brake, Space fire, C camera, U arty map; ↑/↓ ammo; 1/2 gun; RMB aim. */
 export type DriveInput = {
   forward: number
   turn: number
@@ -15,6 +15,7 @@ let aimToggleQueued = false
 let ammoSelectQueued: AmmoId | null = null
 let weaponSelectQueued: WeaponId | null = null
 let zoomDeltaQueued = 0
+let artilleryMapToggleQueued = false
 
 function isDown(code: string): boolean {
   return keys.has(code)
@@ -74,6 +75,13 @@ export function consumeWeaponSelect(): WeaponId | null {
   return id
 }
 
+/** Edge-triggered artillery aiming map (U). */
+export function consumeArtilleryMapToggle(): boolean {
+  if (!artilleryMapToggleQueued) return false
+  artilleryMapToggleQueued = false
+  return true
+}
+
 export function bindDriveInput(): void {
   window.addEventListener('keydown', (e) => {
     // Don’t steal keys while the HTML menu is up (scroll / forms).
@@ -101,6 +109,9 @@ export function bindDriveInput(): void {
     }
     if (e.code === 'Digit2' && !e.repeat) {
       weaponSelectQueued = 'mg'
+    }
+    if (e.code === 'KeyU' && !e.repeat) {
+      artilleryMapToggleQueued = true
     }
     keys.add(e.code)
   })
@@ -132,5 +143,6 @@ export function bindDriveInput(): void {
     ammoSelectQueued = null
     weaponSelectQueued = null
     zoomDeltaQueued = 0
+    artilleryMapToggleQueued = false
   })
 }

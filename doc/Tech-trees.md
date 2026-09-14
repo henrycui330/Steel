@@ -7,10 +7,10 @@ Leopard 1
 Leopard 2
 PzH 2000
  USA:
- M24 Chaffee
- Sherman 
- M26 Pershing
- M1 Abrams
+    M24 Chaffee
+    Sherman 
+    M26 Pershing
+    M1 Abrams
 Soviet:
  T-34
  T-44-100

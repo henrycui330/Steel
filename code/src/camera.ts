@@ -1,18 +1,18 @@
 import * as THREE from 'three'
-import { getAimLookPoint } from './aim'
+import { getAimDirection } from './aim'
 
 export type CameraMode = 'turret' | 'chase'
 
-const TURRET_CAM_HEIGHT = 1.25
+const TURRET_CAM_HEIGHT = 0.85
 const TURRET_CAM_BACK = 4.8
-const AIM_CAM_HEIGHT = 0.7
-const AIM_CAM_BACK = 1.6
-const AIM_LOOK_DISTANCE = 48
+const AIM_CAM_HEIGHT = 0.15
+const AIM_CAM_BACK = 1.4
+/** Look-at distance along the shoot/aim line (reticle converge). */
+const AIM_LOOK_DISTANCE = 72
 
 const CHASE_DISTANCE = 12
 const CHASE_HEIGHT = 5.5
-const CHASE_LOOK_AHEAD = 4
-const CHASE_LOOK_HEIGHT = 2.2
+const CHASE_LOOK_AHEAD = 48
 const CHASE_LERP = 8
 
 export const DEFAULT_FOV = 70
@@ -30,6 +30,8 @@ const _mount = new THREE.Vector3()
 const _back = new THREE.Vector3()
 const _up = new THREE.Vector3()
 const _quat = new THREE.Quaternion()
+const _aimDir = new THREE.Vector3()
+const _muzzlePos = new THREE.Vector3()
 
 let aimFov = AIM_FOV_DEFAULT
 
@@ -47,9 +49,9 @@ export function resetAimFov(): void {
 }
 
 /**
- * Camera sits behind the turret roof mount and looks along **player aim**.
- * Back offset uses aim direction (not mount local −Z) so skinned bones with
- * non-Z gun axes still frame the tank under the reticle.
+ * Camera sits behind the turret and looks at a point ON the shoot/aim line
+ * (from muzzle), so screen-center matches where shells go — not a parallel
+ * ray from a higher eye (that made shells look high/low vs the reticle).
  */
 export function updateTurretCamera(
   camera: THREE.PerspectiveCamera,
@@ -57,35 +59,47 @@ export function updateTurretCamera(
   turretMount: THREE.Object3D,
   _dt: number,
   aiming: boolean,
+  muzzle?: THREE.Object3D | null,
 ): void {
   turretMount.updateMatrixWorld(true)
   turretMount.getWorldPosition(_mount)
 
-  // Prefer aim axis; fall back to mount −Z if aim not bound yet.
-  getAimLookPoint(_mount, 1, lookTarget)
-  _back.subVectors(_mount, lookTarget)
-  if (_back.lengthSq() < 1e-8) {
-    turretMount.getWorldQuaternion(_quat)
-    _back.set(0, 0, -1).applyQuaternion(_quat)
+  if (muzzle) {
+    muzzle.updateMatrixWorld(true)
+    muzzle.getWorldPosition(_muzzlePos)
   } else {
-    _back.normalize()
+    _muzzlePos.copy(_mount)
   }
+
+  getAimDirection(_aimDir)
+  if (_aimDir.lengthSq() < 1e-8) {
+    turretMount.getWorldQuaternion(_quat)
+    _aimDir.set(0, 0, 1).applyQuaternion(_quat).normalize()
+  }
+
+  _back.copy(_aimDir).multiplyScalar(-1)
   _up.set(0, 1, 0)
 
   const back = aiming ? AIM_CAM_BACK : TURRET_CAM_BACK
   const height = aiming ? AIM_CAM_HEIGHT : TURRET_CAM_HEIGHT
 
-  camera.position.copy(_mount).addScaledVector(_back, back).addScaledVector(_up, height)
+  // Sit behind along aim axis, slight height for framing
+  camera.position
+    .copy(_muzzlePos)
+    .addScaledVector(_back, back)
+    .addScaledVector(_up, height)
 
-  getAimLookPoint(camera.position, AIM_LOOK_DISTANCE, lookTarget)
+  // Converge: look at a point on the same ray the shell flies
+  lookTarget.copy(_muzzlePos).addScaledVector(_aimDir, AIM_LOOK_DISTANCE)
   camera.lookAt(lookTarget)
 }
 
-/** Third-person chase: farther behind and above the tank. */
+/** Third-person chase: behind hull, look along aim so reticle ≈ shoot line. */
 export function updateChaseCamera(
   camera: THREE.PerspectiveCamera,
   tank: THREE.Object3D,
   dt: number,
+  muzzle?: THREE.Object3D | null,
 ): void {
   const yaw = tank.rotation.y
   desiredPos.set(
@@ -97,11 +111,17 @@ export function updateChaseCamera(
   const t = 1 - Math.exp(-CHASE_LERP * dt)
   camera.position.lerp(desiredPos, t)
 
-  lookTarget.set(
-    tank.position.x + Math.sin(yaw) * CHASE_LOOK_AHEAD,
-    tank.position.y + CHASE_LOOK_HEIGHT,
-    tank.position.z + Math.cos(yaw) * CHASE_LOOK_AHEAD,
-  )
+  if (muzzle) {
+    muzzle.updateMatrixWorld(true)
+    muzzle.getWorldPosition(_muzzlePos)
+  } else {
+    _muzzlePos.set(tank.position.x, tank.position.y + 2.2, tank.position.z)
+  }
+  getAimDirection(_aimDir)
+  if (_aimDir.lengthSq() < 1e-8) {
+    _aimDir.set(Math.sin(yaw), 0, Math.cos(yaw))
+  }
+  lookTarget.copy(_muzzlePos).addScaledVector(_aimDir, CHASE_LOOK_AHEAD)
   camera.lookAt(lookTarget)
 }
 
@@ -119,12 +139,13 @@ export function updatePlayerCamera(
   turretMount: THREE.Object3D,
   dt: number,
   aiming = false,
+  muzzle?: THREE.Object3D | null,
 ): void {
   updateFov(camera, aiming, dt)
   // Aim mode forces gun-sight cam even if chase was selected with C.
   if (aiming || mode === 'turret') {
-    updateTurretCamera(camera, tank, turretMount, dt, aiming)
+    updateTurretCamera(camera, tank, turretMount, dt, aiming, muzzle)
   } else {
-    updateChaseCamera(camera, tank, dt)
+    updateChaseCamera(camera, tank, dt, muzzle)
   }
 }

@@ -183,11 +183,11 @@ export function resolveArmorHit(
   }
 
   const overmatch = pen / effectiveArmor
-  // Front / hard plates: barely-overmatch pens stay soft; soft plates scale up harder.
+  // Heavy overmatch (modern KE into WWII steel) hits much harder — "sheer power".
   const overClamp =
     part.id === 'hullFront'
-      ? THREE.MathUtils.clamp(overmatch, 0.55, 1.05)
-      : THREE.MathUtils.clamp(overmatch, 0.85, 1.55)
+      ? THREE.MathUtils.clamp(overmatch, 0.55, overmatch >= 2 ? 2.6 : 1.15)
+      : THREE.MathUtils.clamp(overmatch, 0.85, overmatch >= 2 ? 2.4 : 1.55)
   const damage = Math.round(shell.baseDamage * part.damageMult * overClamp)
   const crit = Math.random() < part.critChance * THREE.MathUtils.clamp(overmatch, 0.8, 1.5)
 

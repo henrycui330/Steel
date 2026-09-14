@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import type { AmmoId } from './ammo'
-import type { HitResolution, ShellImpact } from './armor'
+import type { ArmorPartDef, ArmorPartId, HitResolution, ShellImpact } from './armor'
 import { createTankHitVolumes } from './hitParts'
 
 export const TRACK_DISABLE_SEC = 30
@@ -35,12 +35,16 @@ export type Combatant = {
   isImmobilized: () => boolean
   /** Seconds left on track disable (0 if mobile). */
   getTracksDisableLeft: () => number
+  /** Restore HP / alive after a KOTH respawn (mesh must still exist). */
+  revive: () => void
 }
 
 export type CombatantOptions = {
   maxHp: number
   /** Broad-phase radius on XZ (and soft Y gate). */
   broadRadius?: number
+  /** Per-tank armor table (defaults to Pz-III if omitted). */
+  armor?: Record<ArmorPartId, ArmorPartDef>
   onDestroyed?: (root: THREE.Group) => void
   /** Fired when APHE pens tracks (immobilize applied). */
   onTracksDisabled?: (seconds: number) => void
@@ -60,7 +64,7 @@ export function createCombatant(
   const maxHp = opts.maxHp
   const broadR = opts.broadRadius ?? 5.5
   const broadR2 = broadR * broadR
-  const volumes = createTankHitVolumes(root)
+  const volumes = createTankHitVolumes(root, opts.armor)
   let hp = maxHp
   let alive = true
   let tracksDisableLeft = 0
@@ -96,6 +100,13 @@ export function createCombatant(
     },
     getTracksDisableLeft() {
       return tracksDisableLeft
+    },
+    revive() {
+      alive = true
+      hp = maxHp
+      tracksDisableLeft = 0
+      root.visible = true
+      console.info(`[Steel] ${label} respawned HP ${hp}/${maxHp}`)
     },
     resolveShellHit(p, velocity, shellStats, ctx) {
       if (!alive) return null

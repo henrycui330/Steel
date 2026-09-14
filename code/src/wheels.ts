@@ -43,13 +43,20 @@ function isWheelMesh(obj: THREE.Object3D): obj is THREE.Mesh {
   const n = obj.name.toLowerCase()
   // Fused Sketchfab assemblies (whole bogie / track run) — never spin these
   if (n === 'wheels' || n === 'tracks' || n === 'track') return false
-  if (!n.includes('wheel')) return false
+  if (/tread|m1-tank-track|pzh_2000tracks/.test(n)) return false
+  // Named road wheels / idlers / sprockets (not tires-only deco without wheel parent)
+  const looksWheel =
+    n.includes('wheel') ||
+    /^wheel[_\s.-]?\d/.test(n) ||
+    /\bidler\b/.test(n) ||
+    /\bsprocket\b/.test(n)
+  if (!looksWheel) return false
 
   _box.setFromObject(obj)
   _box.getSize(_size)
   const longest = Math.max(_size.x, _size.y, _size.z)
   // Real road wheels are small; a multi-meter chunk is a fused mesh
-  if (longest > 1.25) return false
+  if (longest > 1.35) return false
   return true
 }
 
@@ -123,7 +130,8 @@ export function collectWheels(root: THREE.Object3D): WheelSet {
   })
 
   console.info(
-    `[Steel] Wheels: L=${left.length} R=${right.length} radius≈${radius.toFixed(2)}`,
+    `[Steel] Wheels TP2: L=${left.length} R=${right.length} radius≈${radius.toFixed(2)}` +
+      (left.length + right.length === 0 ? ' — will rely on track scroll if present' : ''),
   )
   return { left, right, radius }
 }

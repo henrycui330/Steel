@@ -1,16 +1,25 @@
 import * as THREE from 'three'
 import { createSandstoneTexture } from './textures'
 
-const WALL_HEIGHT = 2.5
+const WALL_HEIGHT = 3.2
 const WALL_THICKNESS = 0.6
 
+export type ArenaHalf = {
+  x: number
+  z: number
+}
+
 /**
- * Adds four visible arena walls around a square ground of `arenaSize`.
- * Returns the half-extent the tank center may reach (inside walls).
+ * Visible low perimeter walls — rectangular playable area (sizeX × sizeZ).
+ * Returns half-extents a tank center may reach (inside walls).
  */
-export function addArenaWalls(scene: THREE.Scene, arenaSize: number): number {
+export function addArenaWalls(
+  scene: THREE.Scene,
+  sizeX: number,
+  sizeZ: number = sizeX,
+): ArenaHalf {
   const wallMap = createSandstoneTexture(
-    Math.max(6, arenaSize / 28),
+    Math.max(6, Math.max(sizeX, sizeZ) / 28),
     WALL_HEIGHT / 1.6,
   )
   const wallMat = new THREE.MeshStandardMaterial({
@@ -20,14 +29,14 @@ export function addArenaWalls(scene: THREE.Scene, arenaSize: number): number {
     metalness: 0.04,
   })
 
-  const half = arenaSize / 2
-  const length = arenaSize + WALL_THICKNESS
+  const halfX = sizeX / 2
+  const halfZ = sizeZ / 2
 
   const specs: Array<{ w: number; d: number; x: number; z: number }> = [
-    { w: length, d: WALL_THICKNESS, x: 0, z: -half }, // north (-Z)
-    { w: length, d: WALL_THICKNESS, x: 0, z: half }, // south (+Z)
-    { w: WALL_THICKNESS, d: length, x: -half, z: 0 }, // west (-X)
-    { w: WALL_THICKNESS, d: length, x: half, z: 0 }, // east (+X)
+    { w: sizeX + WALL_THICKNESS, d: WALL_THICKNESS, x: 0, z: -halfZ },
+    { w: sizeX + WALL_THICKNESS, d: WALL_THICKNESS, x: 0, z: halfZ },
+    { w: WALL_THICKNESS, d: sizeZ + WALL_THICKNESS, x: -halfX, z: 0 },
+    { w: WALL_THICKNESS, d: sizeZ + WALL_THICKNESS, x: halfX, z: 0 },
   ]
 
   for (const s of specs) {
@@ -41,19 +50,25 @@ export function addArenaWalls(scene: THREE.Scene, arenaSize: number): number {
     scene.add(wall)
   }
 
-  return half - WALL_THICKNESS / 2
+  return {
+    x: halfX - WALL_THICKNESS / 2,
+    z: halfZ - WALL_THICKNESS / 2,
+  }
 }
 
-/** Clamp tank XZ so it stays inside the arena. Returns true if clamped (hard-stop). */
+/**
+ * Hard-stop XZ clamp for ground vehicles (tanks / SPG / AI).
+ */
 export function clampToArena(
   position: THREE.Vector3,
-  playableHalf: number,
+  playable: ArenaHalf,
   tankRadius: number,
 ): boolean {
-  const limit = playableHalf - tankRadius
+  const limX = playable.x - tankRadius
+  const limZ = playable.z - tankRadius
   const x0 = position.x
   const z0 = position.z
-  position.x = THREE.MathUtils.clamp(position.x, -limit, limit)
-  position.z = THREE.MathUtils.clamp(position.z, -limit, limit)
+  position.x = THREE.MathUtils.clamp(position.x, -limX, limX)
+  position.z = THREE.MathUtils.clamp(position.z, -limZ, limZ)
   return position.x !== x0 || position.z !== z0
 }

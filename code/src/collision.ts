@@ -183,6 +183,60 @@ export function hitsPropCollider(
   return false
 }
 
+/**
+ * Spiral-search for an XZ that clears prop solids (keeps tanks out of buildings).
+ */
+export function findClearSpawnNear(
+  x: number,
+  z: number,
+  colliders: readonly PropCollider[],
+  opts?: {
+    radius?: number
+    maxRange?: number
+    playableHalf?: number
+    playableHalfX?: number
+    playableHalfZ?: number
+    y?: number
+  },
+): { x: number; z: number } {
+  const r = opts?.radius ?? 2.6
+  const maxRange = opts?.maxRange ?? 180
+  const halfX = opts?.playableHalfX ?? opts?.playableHalf ?? 490
+  const halfZ = opts?.playableHalfZ ?? opts?.playableHalf ?? halfX
+  const y = opts?.y ?? 1
+  const probe = new THREE.Vector3(x, y, z)
+
+  if (Math.abs(x) <= halfX - 8 && Math.abs(z) <= halfZ - 8) {
+    if (!hitsPropCollider(probe, colliders, r)) return { x, z }
+  }
+
+  for (let rad = 5; rad <= maxRange; rad += 5) {
+    const steps = Math.max(10, Math.round((rad * Math.PI * 2) / 8))
+    for (let i = 0; i < steps; i++) {
+      const a = (i / steps) * Math.PI * 2 + rad * 0.07
+      const nx = x + Math.cos(a) * rad
+      const nz = z + Math.sin(a) * rad
+      if (Math.abs(nx) > halfX - 8 || Math.abs(nz) > halfZ - 8) continue
+      probe.set(nx, y, nz)
+      if (!hitsPropCollider(probe, colliders, r)) return { x: nx, z: nz }
+    }
+  }
+
+  // Last resort: scan toward map center in clear rings
+  const scanMax = Math.min(halfX, halfZ) * 0.7
+  for (let rad = 10; rad <= scanMax; rad += 12) {
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2
+      const nx = Math.cos(a) * rad
+      const nz = Math.sin(a) * rad
+      probe.set(nx, y, nz)
+      if (!hitsPropCollider(probe, colliders, r)) return { x: nx, z: nz }
+    }
+  }
+
+  return { x: 0, z: 0 }
+}
+
 export type PropSolidKind = 'tree' | 'rock' | 'cliff' | 'stump' | 'log'
 
 /** Estimate trunk/rock radius + shell-blocking height from prop role. */

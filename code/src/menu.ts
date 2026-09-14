@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { MAP_OPTIONS, mapOptionById, type MapId } from './maps/mapCatalog'
+import { mapOptionById, type MapId } from './maps/mapCatalog'
 import { TANK_OPTIONS, type TankId } from './tankCatalog'
 import type { Season, TimeOfDay, WeatherKind } from './environment'
 import {
@@ -25,7 +25,15 @@ import {
   type AuthUser,
 } from './auth'
 
-export type TeamId = 'red' | 'blue'
+import {
+  NATIONS,
+  nationByTeam,
+  type TeamId,
+} from './nations'
+
+export type { TeamId }
+
+export type GameModeId = 'skirmish' | 'koth'
 
 export type MenuSelection = {
   mapId: MapId
@@ -40,6 +48,7 @@ export type MenuSelection = {
   timeOfDay: TimeOfDay
   season: Season
   weather: WeatherKind
+  gameMode: GameModeId
 }
 
 type MatchDraft = {
@@ -49,17 +58,19 @@ type MatchDraft = {
   timeOfDay: TimeOfDay
   season: Season
   weather: WeatherKind
+  gameMode: GameModeId
 }
 
 const AI_SLOT_MAX = 3
 const DEFAULT_AI_TANK: TankId = 'pz3'
 const SVG_SIZE = 320
 
-function tankOptionsHtml(selected: TankId): string {
+function aiTankOptionsHtml(selected: TankId): string {
   return TANK_OPTIONS.map(
-    (t) =>
-      `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${t.name}</option>`,
-  ).join('')
+      (t) =>
+        `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${t.name}</option>`,
+    )
+    .join('')
 }
 
 function ensureRoot(): HTMLDivElement {
@@ -97,7 +108,7 @@ function showAuth(root: HTMLDivElement, resolve: (s: MenuSelection) => void): vo
   let mode: AuthMode = getPreferredAuthMode()
   let tab: 'login' | 'register' = 'login'
 
-  function render(error = '', busy = false): void {
+  function render(error = '', busy = false, keepUser = '', keepPass = ''): void {
     const api = getSteelApiBase()
     const modeNote =
       mode === 'online'
@@ -121,10 +132,10 @@ function showAuth(root: HTMLDivElement, resolve: (s: MenuSelection) => void): vo
         </div>
         <form class="auth-form" autocomplete="on">
           <label class="auth-label">Username
-            <input class="auth-input" name="username" type="text" maxlength="24" required autocomplete="username" ${busy ? 'disabled' : ''} />
+            <input class="auth-input" name="username" type="text" maxlength="24" required autocomplete="username" value="${keepUser.replace(/"/g, '&quot;')}" ${busy ? 'disabled' : ''} />
           </label>
           <label class="auth-label">Password
-            <input class="auth-input" name="password" type="password" minlength="6" required autocomplete="${tab === 'login' ? 'current-password' : 'new-password'}" ${busy ? 'disabled' : ''} />
+            <input class="auth-input" name="password" type="password" minlength="6" required autocomplete="${tab === 'login' ? 'current-password' : 'new-password'}" value="${keepPass.replace(/"/g, '&quot;')}" ${busy ? 'disabled' : ''} />
           </label>
           <p class="auth-error" data-error>${error}</p>
           <button type="submit" class="home-btn home-btn-play auth-submit" ${busy ? 'disabled' : ''}>
@@ -156,10 +167,11 @@ function showAuth(root: HTMLDivElement, resolve: (s: MenuSelection) => void): vo
       const username = String(fd.get('username') ?? '')
       const password = String(fd.get('password') ?? '')
       void (async () => {
-        render('', true)
+        render('', true, username, password)
         const result = tab === 'login' ? await login(username, password) : await register(username, password)
         if (!result.ok) {
-          render(result.error, false)
+          // Keep username; clear password on hard auth failure messages
+          render(result.error, false, username, '')
           return
         }
         showHome(root, resolve, result.user)
@@ -335,21 +347,29 @@ function showMatchSetup(
   clearRoot(root)
   root.classList.add('menu-screen-match')
 
-  let mapId: MapId = MAP_OPTIONS[0]?.id ?? 'forest'
+  let mapId: MapId = 'forest'
   const redAi: TankId[] = [DEFAULT_AI_TANK]
   const blueAi: TankId[] = [DEFAULT_AI_TANK]
   let timeOfDay: TimeOfDay = 'day'
   let season: Season = 'summer'
   let weather: WeatherKind = 'clear'
+  let gameMode: GameModeId = 'koth'
 
   root.innerHTML = `
     <div class="menu-panel menu-panel-wide">
       <p class="menu-brand">Steel</p>
       <h1 class="menu-title">Match setup</h1>
-      <p class="menu-sub">Pick the map, conditions, and AI loadouts. You’ll choose your spawn next.</p>
+      <p class="menu-sub">Pick a mode, conditions, and AI. You’ll choose your nation spawn next.</p>
+
+      <p class="menu-section">Mode</p>
+      <div class="env-row" data-env="mode">
+        <button type="button" class="env-chip is-selected" data-val="koth">King of the Hill</button>
+        <button type="button" class="env-chip" data-val="skirmish">Skirmish</button>
+      </div>
+      <p class="menu-hint" data-mode-hint>Hold Midwood for 90s. Infinite respawns until a nation wins.</p>
 
       <p class="menu-section">Map</p>
-      <div class="map-grid" role="listbox" aria-label="Map selection"></div>
+      <p class="menu-hint menu-map-fixed">Forest Overwatch — curved roads · North ruins · abandoned cars</p>
 
       <p class="menu-section">Time of day</p>
       <div class="env-row" data-env="time">
@@ -371,10 +391,10 @@ function showMatchSetup(
       </div>
       <p class="menu-hint">Rain: wet slip · Fog: low visibility · Summer heat / winter oil: older tanks only</p>
 
-      <p class="menu-section">Red team AI</p>
+      <p class="menu-section">Vostok Republic AI</p>
       <div class="match-panel" data-team-ai="red"></div>
 
-      <p class="menu-section">Blue team AI</p>
+      <p class="menu-section">United Meridian Democracy AI</p>
       <div class="match-panel" data-team-ai="blue"></div>
 
       <div class="menu-nav-row">
@@ -384,10 +404,8 @@ function showMatchSetup(
     </div>
   `
 
-  const mapGrid = root.querySelector('.map-grid')!
-
   function wireEnvRow(
-    key: 'time' | 'season' | 'weather',
+    key: 'time' | 'season' | 'weather' | 'mode',
     apply: (v: string) => void,
   ): void {
     const row = root.querySelector(`[data-env="${key}"]`)!
@@ -408,13 +426,21 @@ function showMatchSetup(
   wireEnvRow('weather', (v) => {
     weather = v as WeatherKind
   })
+  const modeHint = root.querySelector('[data-mode-hint]') as HTMLElement
+  wireEnvRow('mode', (v) => {
+    gameMode = v === 'skirmish' ? 'skirmish' : 'koth'
+    modeHint.textContent =
+      gameMode === 'koth'
+        ? 'Hold Midwood for 90s. Infinite respawns until a nation wins.'
+        : 'Wipe the enemy team. You lose if your tank is destroyed.'
+  })
 
   function renderTeamAi(team: 'red' | 'blue'): void {
     const box = root.querySelector(`[data-team-ai="${team}"]`)!
     const list = team === 'red' ? redAi : blueAi
     box.innerHTML = `
       <div class="match-row">
-        <span class="match-label">${team === 'red' ? 'Red' : 'Blue'} AI count</span>
+        <span class="match-label">${nationByTeam(team).short} AI count</span>
         <div class="match-stepper">
           <button type="button" class="match-step" data-team="${team}" data-dir="-1">−</button>
           <span class="match-value" data-count="${team}">${list.length}</span>
@@ -430,7 +456,7 @@ function showMatchSetup(
       row.innerHTML = `
         <span class="ai-slot-label">Slot ${i + 1}</span>
         <select class="ai-tank-select" data-team="${team}" data-slot="${i}">
-          ${tankOptionsHtml(tid)}
+          ${aiTankOptionsHtml(tid)}
         </select>
       `
       slots.appendChild(row)
@@ -456,21 +482,6 @@ function showMatchSetup(
     })
   }
 
-  for (const map of MAP_OPTIONS) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'tank-card map-card'
-    btn.dataset.id = map.id
-    btn.innerHTML = `<span class="tank-name">${map.name}</span><span class="tank-blurb">${map.blurb}</span>`
-    btn.addEventListener('click', () => {
-      mapId = map.id
-      mapGrid.querySelectorAll('.tank-card').forEach((el) => el.classList.remove('is-selected'))
-      btn.classList.add('is-selected')
-    })
-    mapGrid.appendChild(btn)
-  }
-  ;(mapGrid.querySelector('.tank-card') as HTMLButtonElement | null)?.click()
-
   renderTeamAi('red')
   renderTeamAi('blue')
 
@@ -483,6 +494,7 @@ function showMatchSetup(
       timeOfDay,
       season,
       weather,
+      gameMode,
     }
     showSpawnSelect(root, draft, resolve)
   })
@@ -506,18 +518,23 @@ function showSpawnSelect(
     ...map.spawns.blue.map((p, i) => ({ team: 'blue' as const, index: i, pos: p })),
   ]
 
+  const mapW = map.sizeX
+  const mapH = map.sizeZ
+  const aspect = mapW / mapH
+  const svgH = SVG_SIZE
+  const svgW = Math.max(120, Math.round(svgH * aspect))
+
   function toSvg(x: number, z: number): { cx: number; cy: number } {
-    const half = map.size / 2
     return {
-      cx: ((x + half) / map.size) * SVG_SIZE,
-      cy: ((half - z) / map.size) * SVG_SIZE,
+      cx: ((x + mapW / 2) / mapW) * svgW,
+      cy: ((mapH / 2 - z) / mapH) * svgH,
     }
   }
 
   const dots = markers
     .map((m) => {
       const { cx, cy } = toSvg(m.pos.x, m.pos.z)
-      return `<button type="button" class="spawn-dot spawn-${m.team}" data-team="${m.team}" data-index="${m.index}" style="left:${(cx / SVG_SIZE) * 100}%;top:${(cy / SVG_SIZE) * 100}%" aria-label="${m.team} spawn ${m.index + 1}"></button>`
+      return `<button type="button" class="spawn-dot spawn-${m.team}" data-team="${m.team}" data-index="${m.index}" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" aria-label="${nationByTeam(m.team).short} spawn ${m.index + 1}"></button>`
     })
     .join('')
 
@@ -525,16 +542,19 @@ function showSpawnSelect(
     <div class="menu-panel menu-panel-wide">
       <p class="menu-brand">Steel</p>
       <h1 class="menu-title">Choose spawn</h1>
-      <p class="menu-sub">${map.name} · ${draft.timeOfDay} · ${draft.season} · ${draft.weather} — click a spawn, then pick your tank.</p>
+      <p class="menu-sub">${map.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} · ${mapW}×${mapH}m — click a spawn, then pick your tank.</p>
 
       <div class="spawn-map-wrap">
-        <div class="spawn-map" style="width:${SVG_SIZE}px;height:${SVG_SIZE}px">
+        <div class="spawn-map" style="width:${svgW}px;height:${svgH}px">
           <div class="spawn-map-grid"></div>
+          ${draft.gameMode === 'koth' ? `<div class="spawn-hill" style="left:50%;top:50%" title="King of the Hill"></div>` : ''}
           ${dots}
         </div>
-        <div class="spawn-legend">
-          <span class="spawn-legend-red">Red</span>
-          <span class="spawn-legend-blue">Blue</span>
+        <div class="spawn-legend spawn-legend-nations">
+          ${NATIONS.map(
+            (n) =>
+              `<span class="spawn-legend-nation"><img src="${n.flagUrl}" alt="" width="28" height="20" />${n.short}</span>`,
+          ).join('')}
         </div>
       </div>
 
@@ -564,7 +584,7 @@ function showSpawnSelect(
       btn.classList.add('is-selected')
       team = (btn as HTMLElement).dataset.team as TeamId
       spawnIndex = Number((btn as HTMLElement).dataset.index)
-      picked.textContent = `${team === 'red' ? 'Red' : 'Blue'} spawn ${spawnIndex + 1}`
+      picked.textContent = `${nationByTeam(team).name} · spawn ${spawnIndex + 1}`
       picked.classList.toggle('is-red', team === 'red')
       picked.classList.toggle('is-blue', team === 'blue')
       refreshDeploy()
@@ -576,7 +596,7 @@ function showSpawnSelect(
     btn.type = 'button'
     btn.className = 'tank-card'
     btn.dataset.id = tank.id
-    btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-blurb">${tank.blurb}</span>`
+    btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-stats">Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}</span><span class="tank-blurb">${tank.blurb}</span>`
     btn.addEventListener('click', () => {
       tankId = tank.id
       tankGrid.querySelectorAll('.tank-card').forEach((el) => el.classList.remove('is-selected'))
@@ -604,6 +624,7 @@ function showSpawnSelect(
       timeOfDay: draft.timeOfDay,
       season: draft.season,
       weather: draft.weather,
+      gameMode: draft.gameMode,
     })
   })
 }

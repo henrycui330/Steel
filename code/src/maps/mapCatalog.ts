@@ -1,15 +1,14 @@
 import * as THREE from 'three'
 import {
+  FOREST_OVERWATCH_DEPTH,
   FOREST_OVERWATCH_SIZE,
+  FOREST_OVERWATCH_WIDTH,
   loadForestOverwatch,
 } from './forestOverwatch'
-import {
-  DUSTY_SIZE,
-  loadALittleDusty,
-} from './aLittleDusty'
 import type { PropCollider } from '../collision'
 
-export type MapId = 'forest' | 'dusty'
+/** Only Forest Overwatch is playable for now. */
+export type MapId = 'forest'
 
 export type TeamSpawns = {
   red: [THREE.Vector3, THREE.Vector3, THREE.Vector3]
@@ -20,6 +19,11 @@ export type MapOption = {
   id: MapId
   name: string
   blurb: string
+  /** X extent (width). */
+  sizeX: number
+  /** Z extent (depth / “height” on the map). */
+  sizeZ: number
+  /** Max axis — fog / shadows / legacy callers. */
   size: number
   /** @deprecated Prefer spawns — kept for older call sites. */
   playerSpawn: THREE.Vector3
@@ -43,34 +47,21 @@ function triple(
 }
 
 const FOREST_SPAWNS: TeamSpawns = {
-  red: triple([-80, -320], [0, -340], [80, -320]),
-  blue: triple([-80, 320], [0, 340], [80, 320]),
-}
-
-const DUSTY_SPAWNS: TeamSpawns = {
-  red: triple([-180, -300], [0, -330], [180, -300]),
-  blue: triple([-180, 300], [0, 330], [180, 300]),
+  red: triple([-60, -860], [0, -900], [60, -860]),
+  blue: triple([-60, 860], [0, 900], [60, 860]),
 }
 
 export const MAP_OPTIONS: MapOption[] = [
   {
     id: 'forest',
     name: 'Forest Overwatch',
-    blurb: '1000m flat arena · pine cover · open center',
+    blurb: '750×2000 pine hills · road clearings · 3 towns',
+    sizeX: FOREST_OVERWATCH_WIDTH,
+    sizeZ: FOREST_OVERWATCH_DEPTH,
     size: FOREST_OVERWATCH_SIZE,
     playerSpawn: FOREST_SPAWNS.red[1].clone(),
     enemySpawn: FOREST_SPAWNS.blue[1].clone(),
     spawns: FOREST_SPAWNS,
-    useArenaWalls: true,
-  },
-  {
-    id: 'dusty',
-    name: 'A little dusty',
-    blurb: '1000m desert · dunes · houses · camps',
-    size: DUSTY_SIZE,
-    playerSpawn: DUSTY_SPAWNS.red[1].clone(),
-    enemySpawn: DUSTY_SPAWNS.blue[1].clone(),
-    spawns: DUSTY_SPAWNS,
     useArenaWalls: true,
   },
 ]
@@ -87,6 +78,10 @@ export type MapLoadResult = {
   groundY: number
   /** If set, drive/AI sample this instead of flat groundY. */
   heightAt?: (x: number, z: number) => number
+  /** Optional road polylines for combat minimap. */
+  paths?: Array<{ points: Array<{ x: number; z: number }> }>
+  /** Optional runtime spawns. */
+  spawns?: TeamSpawns
 }
 
 export async function loadMap(
@@ -94,7 +89,6 @@ export async function loadMap(
   scene: THREE.Scene,
   ground: THREE.Mesh,
 ): Promise<MapLoadResult> {
-  if (id === 'dusty') return loadALittleDusty(scene, ground)
-  const forest = await loadForestOverwatch(scene, ground)
-  return { ...forest, groundY: 0 }
+  void id
+  return loadForestOverwatch(scene, ground)
 }
