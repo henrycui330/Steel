@@ -41,6 +41,116 @@ export function getDriveInput(): DriveInput {
   return { forward, turn, brake, fire }
 }
 
+/** Aircraft: mouse = pitch/roll stick, A/D = rudder, W/S = throttle, Space = fire. */
+export type FlightInput = {
+  /** -1..1, positive = nose up. */
+  pitch: number
+  /** -1..1, positive = roll right. */
+  roll: number
+  /** -1..1, positive = nose right. */
+  rudder: number
+  throttleUp: boolean
+  throttleDown: boolean
+  fire: boolean
+  /** Edge-triggered: release one bomb (B). */
+  dropBomb: boolean
+  /** Edge-triggered: toggle the bombsight scope (V). */
+  toggleSight: boolean
+  /** Edge-triggered: cut the bomb cinematic short (C). */
+  skipCinematic: boolean
+  /** Edge-triggered: punch out (Y). */
+  eject: boolean
+  /** No stick input recently — flight model auto-levels. */
+  handsOff: boolean
+}
+
+/** Virtual spring-centred stick, driven by relative mouse motion. */
+const STICK_SENS = 0.0042
+/** Stick returns to neutral this fast (per second) once the mouse stops. */
+const STICK_RETURN = 3.4
+/** Below this deflection with no fresh input we consider it hands-off. */
+const HANDS_OFF_DEFLECTION = 0.06
+
+let stickPitch = 0
+let stickRoll = 0
+let stickMovedAt = 0
+let flightBound = false
+let bombQueued = false
+let sightQueued = false
+let skipCineQueued = false
+let ejectQueued = false
+
+export function bindFlightInput(): void {
+  if (flightBound) return
+  flightBound = true
+  // Bomb release and the scope are edge-triggered: holding B must not dump the
+  // whole rack, and the scope is a toggle.
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return
+    if (e.code === 'KeyB') bombQueued = true
+    if (e.code === 'KeyV') sightQueued = true
+    if (e.code === 'KeyC') skipCineQueued = true
+    if (e.code === 'KeyY') ejectQueued = true
+  })
+  window.addEventListener('pointermove', (e) => {
+    if (!document.pointerLockElement) return
+    // Mouse up = nose up, matching the tank's mouse-up = look-up feel.
+    stickPitch -= e.movementY * STICK_SENS
+    stickRoll += e.movementX * STICK_SENS
+    stickPitch = Math.max(-1, Math.min(1, stickPitch))
+    stickRoll = Math.max(-1, Math.min(1, stickRoll))
+    stickMovedAt = performance.now()
+  })
+}
+
+export function getFlightInput(dt: number): FlightInput {
+  const decay = Math.pow(1 / (1 + STICK_RETURN), dt)
+  stickPitch *= decay
+  stickRoll *= decay
+
+  let rudder = 0
+  if (isDown('KeyD')) rudder += 1
+  if (isDown('KeyA')) rudder -= 1
+
+  const idleMs = performance.now() - stickMovedAt
+  const deflection = Math.abs(stickPitch) + Math.abs(stickRoll)
+  const handsOff = idleMs > 180 && deflection < HANDS_OFF_DEFLECTION && rudder === 0
+
+  const dropBomb = bombQueued
+  const toggleSight = sightQueued
+  const skipCinematic = skipCineQueued
+  const eject = ejectQueued
+  bombQueued = false
+  sightQueued = false
+  skipCineQueued = false
+  ejectQueued = false
+
+  return {
+    pitch: stickPitch,
+    roll: stickRoll,
+    rudder,
+    throttleUp: isDown('KeyW'),
+    throttleDown: isDown('KeyS'),
+    fire: isDown('Space'),
+    dropBomb,
+    toggleSight,
+    skipCinematic,
+    eject,
+    handsOff,
+  }
+}
+
+/** Centre the stick (deploy / respawn). */
+export function resetFlightInput(): void {
+  stickPitch = 0
+  stickRoll = 0
+  stickMovedAt = 0
+  bombQueued = false
+  sightQueued = false
+  skipCineQueued = false
+  ejectQueued = false
+}
+
 export function consumeCameraToggle(): boolean {
   if (!cameraToggleQueued) return false
   cameraToggleQueued = false

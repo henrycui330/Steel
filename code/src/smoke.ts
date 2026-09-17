@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 
-const SMOKE_URL = '/assets/warfare/smoke_soft.png'
+import { assetUrl } from './assetUrl'
+import { loadTextureCached } from './loadGltf'
+
+const SMOKE_URL = assetUrl('assets/warfare/smoke_soft.png')
 
 type Puff = {
   mesh: THREE.Mesh
@@ -33,8 +36,24 @@ export type SmokeSystem = {
  * Soft billboard smoke / fire for muzzle, engine, damage, wrecks.
  */
 export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem> {
-  const tex = await new THREE.TextureLoader().loadAsync(SMOKE_URL)
-  tex.colorSpace = THREE.SRGBColorSpace
+  let tex: THREE.Texture
+  try {
+    tex = await loadTextureCached(SMOKE_URL)
+  } catch (err) {
+    console.warn('[Steel] Smoke texture failed — canvas fallback', err)
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const ctx = canvas.getContext('2d')
+    if (ctx) {
+      const g = ctx.createRadialGradient(32, 32, 4, 32, 32, 30)
+      g.addColorStop(0, 'rgba(220,220,220,0.7)')
+      g.addColorStop(1, 'rgba(220,220,220,0)')
+      ctx.fillStyle = g
+      ctx.fillRect(0, 0, 64, 64)
+    }
+    tex = new THREE.CanvasTexture(canvas)
+  }
 
   const geo = new THREE.PlaneGeometry(1, 1)
   const puffs: Puff[] = []

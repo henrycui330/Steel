@@ -10,6 +10,7 @@ PzH 2000
     M24 Chaffee
     Sherman 
     M26 Pershing
+    M42 Duster
     M1 Abrams
 Soviet:
  T-34
@@ -17,3 +18,4 @@ Soviet:
  T-55
  T-72 Ural
  T-90
+ Yak-9

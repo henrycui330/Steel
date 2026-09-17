@@ -1,7 +1,8 @@
 import type { AmmoId } from './ammo'
 import { AMMO_ORDER, AMMO_TYPES } from './ammo'
 import type { FireHudState } from './fire'
-import { nationByTeam } from './nations'
+import { assetUrl, fixPublicUrl } from './assetUrl'
+import { nationByTeam, nationFlagSrc } from './nations'
 import * as THREE from 'three'
 
 export type CombatHudState = {
@@ -117,7 +118,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const mouse = document.createElement('div')
   mouse.className = 'xhair xhair-mouse'
   mouse.innerHTML =
-    '<img class="xhair-img" src="/assets/crosshair.png" alt="" draggable="false" />'
+    `<img class="xhair-img" src="${fixPublicUrl(assetUrl('assets/crosshair.png'))}" alt="" draggable="false" />`
 
   const barrel = document.createElement('div')
   barrel.className = 'xhair xhair-barrel'
@@ -363,7 +364,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   kothEl.hidden = true
   kothEl.innerHTML = `
     <div class="koth-side koth-vostok">
-      <img src="${vostok.flagUrl}" alt="" />
+      <img src="${nationFlagSrc(vostok)}" alt="" />
       <span class="koth-name">${vostok.short}</span>
       <div class="koth-bar"><i class="koth-fill koth-fill-v"></i></div>
       <span class="koth-time koth-time-v">0s</span>
@@ -376,7 +377,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       <span class="koth-time koth-time-m">0s</span>
       <div class="koth-bar"><i class="koth-fill koth-fill-m"></i></div>
       <span class="koth-name">${meridian.short}</span>
-      <img src="${meridian.flagUrl}" alt="" />
+      <img src="${nationFlagSrc(meridian)}" alt="" />
     </div>
   `
   const respawnEl = document.createElement('div')

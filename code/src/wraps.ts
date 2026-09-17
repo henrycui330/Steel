@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { assetUrl, fixPublicUrl } from './assetUrl'
+import { loadTextureCached } from './loadGltf'
 
 export type WrapId = 'stock' | 'china' | 'desert' | 'nato' | 'us' | 'patriotic'
 
@@ -23,31 +25,31 @@ export const WRAP_OPTIONS: WrapOption[] = [
     id: 'china',
     name: 'China camo',
     blurb: 'PLA digital pattern',
-    url: '/wraps/china-camo.webp',
+    url: assetUrl('wraps/china-camo.webp'),
   },
   {
     id: 'desert',
     name: 'Desert camo',
     blurb: 'Sand / dust theatre',
-    url: '/wraps/desert-camo.webp',
+    url: assetUrl('wraps/desert-camo.webp'),
   },
   {
     id: 'nato',
     name: 'NATO camo',
     blurb: 'Woodland NATO scheme',
-    url: '/wraps/nato-camo.jpeg',
+    url: assetUrl('wraps/nato-camo.jpeg'),
   },
   {
     id: 'us',
     name: 'US camo',
     blurb: 'US MERDC / woodland',
-    url: '/wraps/us-camo.webp',
+    url: assetUrl('wraps/us-camo.webp'),
   },
   {
     id: 'patriotic',
     name: 'Patriotic',
     blurb: 'Stars and stripes energy',
-    url: '/wraps/patriotic.webp',
+    url: assetUrl('wraps/patriotic.webp'),
   },
 ]
 
@@ -87,23 +89,15 @@ const textureCache = new Map<string, Promise<THREE.Texture>>()
 function loadWrapTexture(url: string): Promise<THREE.Texture> {
   let pending = textureCache.get(url)
   if (!pending) {
-    pending = new Promise((resolve, reject) => {
-      const loader = new THREE.TextureLoader()
-      loader.load(
-        url,
-        (tex) => {
-          tex.colorSpace = THREE.SRGBColorSpace
-          tex.wrapS = THREE.RepeatWrapping
-          tex.wrapT = THREE.RepeatWrapping
-          tex.repeat.set(2.4, 2.4)
-          tex.anisotropy = 4
-          tex.needsUpdate = true
-          resolve(tex)
-        },
-        undefined,
-        (err) => reject(err),
-      )
-    })
+    pending = (async () => {
+      const tex = await loadTextureCached(url)
+      tex.wrapS = THREE.RepeatWrapping
+      tex.wrapT = THREE.RepeatWrapping
+      tex.repeat.set(2.4, 2.4)
+      tex.anisotropy = 4
+      tex.needsUpdate = true
+      return tex
+    })()
     textureCache.set(url, pending)
   }
   return pending
@@ -144,7 +138,7 @@ export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSe
 
   let map: THREE.Texture
   try {
-    map = await loadWrapTexture(opt.url)
+    map = await loadWrapTexture(fixPublicUrl(opt.url))
   } catch (err) {
     console.warn('[Steel] Wrap texture failed', opt.url, err)
     return

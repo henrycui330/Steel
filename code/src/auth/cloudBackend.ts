@@ -29,6 +29,37 @@ async function readAuthResult(res: Response): Promise<AuthResult> {
   return { ok: true, user: data.user, session: data.session }
 }
 
+async function fetchWithRetry(
+  input: string,
+  init: RequestInit,
+  attempts = 3,
+): Promise<Response> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
+    const parent = init.signal
+    const onAbort = () => ctrl.abort()
+    parent?.addEventListener('abort', onAbort)
+    try {
+      return await fetch(input, { ...init, signal: ctrl.signal })
+    } catch (err) {
+      lastErr = err
+      const aborted = err instanceof Error && err.name === 'AbortError'
+      if (aborted && parent?.aborted) throw err
+      // QUIC / transient network blips — brief backoff then retry.
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 280 * (i + 1)))
+        continue
+      }
+    } finally {
+      clearTimeout(timer)
+      parent?.removeEventListener('abort', onAbort)
+    }
+  }
+  throw lastErr
+}
+
 async function postJson(
   base: string,
   path: string,
@@ -37,18 +68,12 @@ async function postJson(
 ): Promise<Response> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (token) headers.Authorization = `Bearer ${token}`
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-  try {
-    return await fetch(`${base}${path}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
-    })
-  } finally {
-    clearTimeout(timer)
-  }
+  return fetchWithRetry(`${base}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    cache: 'no-store',
+  })
 }
 
 export function getSteelApiBase(): string | null {
@@ -85,7 +110,7 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
           ok: false,
           error: aborted
             ? 'Auth server timed out (20s). If using workers.dev, your network may block it — run local Worker (wrangler dev :8787) or use a VPN.'
-            : `Cannot reach auth server (${base}). Check VITE_STEEL_API, CORS, network, or workers.dev block.`,
+            : `Cannot reach auth server (${base}). Network/QUIC glitch or workers.dev blocked — retry, use Offline mode, or VPN.`,
         }
       }
     },
@@ -112,7 +137,7 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
           ok: false,
           error: aborted
             ? 'Auth server timed out (20s). If using workers.dev, your network may block it — run local Worker (wrangler dev :8787) or use a VPN.'
-            : `Cannot reach auth server (${base}). Check VITE_STEEL_API, CORS, network, or workers.dev block.`,
+            : `Cannot reach auth server (${base}). Network/QUIC glitch or workers.dev blocked — retry, use Offline mode, or VPN.`,
         }
       }
     },
@@ -127,17 +152,10 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
 
     async me(token: string): Promise<AuthUser | null> {
       try {
-        const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-        let res: Response
-        try {
-          res = await fetch(`${base}/auth/me`, {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: ctrl.signal,
-          })
-        } finally {
-          clearTimeout(timer)
-        }
+        const res = await fetchWithRetry(`${base}/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        })
         const data = (await res.json()) as { ok: boolean; user?: AuthUser; error?: string }
         if (!data.ok || !data.user) return null
         return data.user
@@ -149,22 +167,15 @@ export function createCloudflareAuthBackend(apiBase: string): AuthBackend {
 
     async updateProfile(token: string, patch: Partial<UserProfile>): Promise<AuthUser | null> {
       try {
-        const ctrl = new AbortController()
-        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS)
-        let res: Response
-        try {
-          res = await fetch(`${base}/auth/profile`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(patch),
-            signal: ctrl.signal,
-          })
-        } finally {
-          clearTimeout(timer)
-        }
+        const res = await fetchWithRetry(`${base}/auth/profile`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(patch),
+          cache: 'no-store',
+        })
         const data = (await res.json()) as { ok: boolean; user?: AuthUser }
         if (!data.ok || !data.user) return null
         return data.user

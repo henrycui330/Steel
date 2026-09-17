@@ -1,7 +1,8 @@
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { estimatePropCollider, type PropCollider } from '../collision'
+import { assetUrl } from '../assetUrl'
+import { loadGltfCached, preloadUrls } from '../loadGltf'
 import { createAsphaltTexture, createPineForestFloorTexture } from '../textures'
 
 /** Playable arena — width (X) × depth/height (Z). */
@@ -57,13 +58,23 @@ export type ForestMapLoadResult = {
   paths?: Array<{ points: Array<{ x: number; z: number }> }>
 }
 
-const PINE_URL = '/maps/props/pine_tree.glb'
-const RUIN_HOUSE_URL = '/maps/props/ruined_house_low_poly.glb'
-const EMPTY_INTERIOR_URL = '/maps/props/empty_building_interior.glb'
-const CITY_RUIN_URL = '/maps/props/ruined_city_building.glb'
-const CRATES_URL = '/maps/props/crates_and_barrels.glb'
-const RUBBLE_URL = '/maps/props/construction_rubble.glb'
-const FANCY_CAR_URL = '/maps/props/fancy_cardestroyed.glb'
+const PINE_URL = assetUrl('maps/props/pine_tree.glb')
+const RUIN_HOUSE_URL = assetUrl('maps/props/ruined_house_low_poly.glb')
+const EMPTY_INTERIOR_URL = assetUrl('maps/props/empty_building_interior.glb')
+const CITY_RUIN_URL = assetUrl('maps/props/ruined_city_building.glb')
+const CRATES_URL = assetUrl('maps/props/crates_and_barrels.glb')
+const RUBBLE_URL = assetUrl('maps/props/construction_rubble.glb')
+const FANCY_CAR_URL = assetUrl('maps/props/fancy_cardestroyed.glb')
+
+export const FOREST_PROP_URLS: readonly string[] = [
+  PINE_URL,
+  RUIN_HOUSE_URL,
+  EMPTY_INTERIOR_URL,
+  CITY_RUIN_URL,
+  CRATES_URL,
+  RUBBLE_URL,
+  FANCY_CAR_URL,
+]
 /** Kept low — pines are heavy; instances share 1–2 merged meshes. */
 const TREE_COUNT = 72
 const CLEAR_SPAWN_HALF_X = 70
@@ -359,8 +370,7 @@ async function placePineTrees(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
-  const gltf = await loader.loadAsync(PINE_URL)
+  const gltf = await loadGltfCached(PINE_URL)
   const src = gltf.scene
   const unitHeight = uprightAndPlant(src)
   const parts = bakePineParts(src)
@@ -666,14 +676,13 @@ async function placeTownHouses(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
   const group = new THREE.Group()
   group.name = 'TownHouses'
   root.add(group)
 
   let count = 0
   try {
-    const houseGltf = await loader.loadAsync(RUIN_HOUSE_URL)
+    const houseGltf = await loadGltfCached(RUIN_HOUSE_URL)
     const house = prepareRuinPiece(houseGltf.scene)
     for (const spot of houseSpots()) {
       if (onAsphalt(spot.x, spot.z)) continue
@@ -695,7 +704,6 @@ async function placeLargeBuildings(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
   const group = new THREE.Group()
   group.name = 'LargeBuildings'
   root.add(group)
@@ -708,7 +716,7 @@ async function placeLargeBuildings(
 
   const plantSpots = async (url: string, spots: PropSpot[], label: string) => {
     try {
-      const gltf = await loader.loadAsync(url)
+      const gltf = await loadGltfCached(url)
       const piece = prepareRuinPiece(gltf.scene)
       let n = 0
       for (const spot of spots) {
@@ -723,25 +731,26 @@ async function placeLargeBuildings(
     }
   }
 
-  await plantSpots(
-    EMPTY_INTERIOR_URL,
-    [
-      ...townRing(south, 2, 48, 15, 0.0),
-      ...townRing(mid, 2, 55, 16, 0.6),
-      ...townRing(north, 2, 48, 15, 0.3),
-    ],
-    'Empty interiors',
-  )
-
-  await plantSpots(
-    CITY_RUIN_URL,
-    [
-      ...townRing(south, 2, 70, 18, 1.1),
-      ...townRing(mid, 2, 82, 19, 1.7),
-      ...townRing(north, 2, 70, 18, 1.4),
-    ],
-    'City ruins',
-  )
+  await Promise.all([
+    plantSpots(
+      EMPTY_INTERIOR_URL,
+      [
+        ...townRing(south, 2, 48, 15, 0.0),
+        ...townRing(mid, 2, 55, 16, 0.6),
+        ...townRing(north, 2, 48, 15, 0.3),
+      ],
+      'Empty interiors',
+    ),
+    plantSpots(
+      CITY_RUIN_URL,
+      [
+        ...townRing(south, 2, 70, 18, 1.1),
+        ...townRing(mid, 2, 82, 19, 1.7),
+        ...townRing(north, 2, 70, 18, 1.4),
+      ],
+      'City ruins',
+    ),
+  ])
 
   return count
 }
@@ -753,7 +762,6 @@ async function placeRubblePiles(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
   const group = new THREE.Group()
   group.name = 'TownRubble'
   root.add(group)
@@ -775,7 +783,7 @@ async function placeRubblePiles(
 
   let count = 0
   try {
-    const gltf = await loader.loadAsync(RUBBLE_URL)
+    const gltf = await loadGltfCached(RUBBLE_URL)
     const pile = prepareRuinPiece(gltf.scene)
     for (const spot of spots) {
       if (onAsphalt(spot.x, spot.z)) continue
@@ -797,7 +805,6 @@ async function placeSupplyDumps(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
   const group = new THREE.Group()
   group.name = 'SupplyDumps'
   root.add(group)
@@ -816,7 +823,7 @@ async function placeSupplyDumps(
 
   let count = 0
   try {
-    const gltf = await loader.loadAsync(CRATES_URL)
+    const gltf = await loadGltfCached(CRATES_URL)
     const dump = prepareRuinPiece(gltf.scene)
     for (const spot of spots) {
       if (onAsphalt(spot.x, spot.z)) continue
@@ -838,14 +845,13 @@ async function placeAbandonedCars(
   root: THREE.Group,
   colliders: PropCollider[],
 ): Promise<number> {
-  const loader = new GLTFLoader()
   const group = new THREE.Group()
   group.name = 'FancyWrecks'
   root.add(group)
 
   let piece: ReturnType<typeof prepareRuinPiece>
   try {
-    const gltf = await loader.loadAsync(FANCY_CAR_URL)
+    const gltf = await loadGltfCached(FANCY_CAR_URL)
     piece = prepareRuinPiece(gltf.scene)
   } catch (err) {
     console.warn(`[Steel] Fancy car load failed`, err)
@@ -959,6 +965,7 @@ export async function loadForestOverwatch(
   scene: THREE.Scene,
   ground: THREE.Mesh,
 ): Promise<ForestMapLoadResult> {
+  void preloadUrls(FOREST_PROP_URLS)
   // Heightfield replaces the shared flat ground plane
   ground.visible = false
 
@@ -979,47 +986,33 @@ export async function loadForestOverwatch(
     console.warn('[Steel] Forest roads failed to load', err)
   }
 
-  let treeCount = 0
-  try {
-    treeCount = await placePineTrees(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Forest pine trees failed to load', err)
-  }
-
-  let ruinCount = 0
-  try {
-    ruinCount = await placeTownHouses(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Town houses failed', err)
-  }
-
-  let largeCount = 0
-  try {
-    largeCount = await placeLargeBuildings(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Large buildings failed', err)
-  }
-
-  let rubbleCount = 0
-  try {
-    rubbleCount = await placeRubblePiles(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Rubble failed', err)
-  }
-
-  let dumpCount = 0
-  try {
-    dumpCount = await placeSupplyDumps(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Supply dumps failed', err)
-  }
-
-  let carCount = 0
-  try {
-    carCount = await placeAbandonedCars(root, colliders)
-  } catch (err) {
-    console.warn('[Steel] Fancy wrecks failed', err)
-  }
+  const [treeCount, ruinCount, largeCount, rubbleCount, dumpCount, carCount] =
+    await Promise.all([
+      placePineTrees(root, colliders).catch((err) => {
+        console.warn('[Steel] Forest pine trees failed to load', err)
+        return 0
+      }),
+      placeTownHouses(root, colliders).catch((err) => {
+        console.warn('[Steel] Town houses failed', err)
+        return 0
+      }),
+      placeLargeBuildings(root, colliders).catch((err) => {
+        console.warn('[Steel] Large buildings failed', err)
+        return 0
+      }),
+      placeRubblePiles(root, colliders).catch((err) => {
+        console.warn('[Steel] Rubble failed', err)
+        return 0
+      }),
+      placeSupplyDumps(root, colliders).catch((err) => {
+        console.warn('[Steel] Supply dumps failed', err)
+        return 0
+      }),
+      placeAbandonedCars(root, colliders).catch((err) => {
+        console.warn('[Steel] Fancy wrecks failed', err)
+        return 0
+      }),
+    ])
 
   console.info(
     `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${ruinCount} houses, ${largeCount} large buildings, ${rubbleCount} rubble, ${dumpCount} crates, ${carCount} fancy wrecks, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders`,

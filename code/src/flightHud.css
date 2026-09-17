@@ -1,0 +1,411 @@
+/* Flight HUD (Phase F4U task F3). Scoped to .fhud — never touches tank HUD. */
+
+.fhud {
+  --fh-ink: #7df0b8;
+  --fh-warn: #ff8355;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 35;
+  font: 600 12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.08em;
+  color: var(--fh-ink);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.85);
+}
+
+/* ——— Artificial horizon ——— */
+.fh-horizon {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 520px;
+  height: 420px;
+  margin: -210px 0 0 -260px;
+  overflow: hidden;
+  opacity: 0.85;
+}
+
+.fh-ladder {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.fh-rung {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 240px;
+  margin-left: -120px;
+  /* Centre the rung on its own offset; margin-top carries the pitch offset. */
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.fh-rung i {
+  display: block;
+  height: 1px;
+  width: 78px;
+  background: currentColor;
+}
+
+.fh-rung-down i {
+  background: repeating-linear-gradient(
+    to right,
+    currentColor 0 7px,
+    transparent 7px 13px
+  );
+}
+
+.fh-rung-zero {
+  width: 400px;
+  margin-left: -200px;
+  opacity: 1;
+}
+
+.fh-rung-zero i {
+  width: 168px;
+  height: 2px;
+}
+
+/* ——— Fixed aircraft reference (does not roll) ——— */
+.fh-reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #fff;
+}
+
+.fh-ret-l,
+.fh-ret-r {
+  display: block;
+  width: 26px;
+  height: 2px;
+  background: currentColor;
+}
+
+.fh-ret-dot {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+/* ——— Side gauges ——— */
+.fh-gauge {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  border: 1px solid rgba(125, 240, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-left {
+  left: 40px;
+}
+
+.fh-right {
+  right: 40px;
+}
+
+.fh-label {
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.fh-value {
+  font-size: 26px;
+  line-height: 1.05;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-value.is-low {
+  color: var(--fh-warn);
+}
+
+.fh-unit {
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+/* ——— Heading ——— */
+.fh-heading {
+  position: absolute;
+  top: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 16px;
+  border: 1px solid rgba(125, 240, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-hdg-card {
+  font-size: 16px;
+  color: #fff;
+}
+
+.fh-hdg-num {
+  font-size: 12px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ——— Throttle ——— */
+.fh-throttle {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  border: 1px solid rgba(125, 240, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-thr-bar {
+  width: 190px;
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fh-thr-fill {
+  display: block;
+  height: 100%;
+  width: 55%;
+  background: linear-gradient(90deg, #4fd9a0, #9dfbc8);
+}
+
+.fh-thr-num {
+  font-size: 13px;
+  min-width: 42px;
+  text-align: right;
+}
+
+/* ——— Wing guns ——— */
+.fh-guns {
+  position: absolute;
+  bottom: 30px;
+  right: 40px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 13px;
+  border: 1px solid rgba(125, 240, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-guns .fh-value {
+  font-size: 15px;
+  min-width: 46px;
+  text-align: right;
+}
+
+.fh-heat {
+  width: 58px;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.fh-heat-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #6fd3a2, #ffb570);
+  transition: width 0.08s linear;
+}
+
+.fh-heat-fill.is-hot {
+  background: var(--fh-warn);
+}
+
+.fh-reticle.is-firing {
+  color: #ffdf8a;
+}
+
+/* ——— Bombs ——— */
+.fh-bombs {
+  position: absolute;
+  bottom: 74px;
+  right: 40px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 13px;
+  border: 1px solid rgba(125, 240, 184, 0.28);
+  border-radius: 6px;
+  background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-bombs .fh-value {
+  font-size: 15px;
+  min-width: 18px;
+  text-align: right;
+}
+
+.fh-bomb-fall {
+  font-size: 11px;
+  opacity: 0.75;
+  min-width: 38px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fh-bombs.is-on-target {
+  border-color: rgba(255, 131, 85, 0.75);
+  background: rgba(50, 20, 10, 0.6);
+}
+
+/* ——— Bombsight scope (picture-in-picture) ——— */
+.fh-scope {
+  position: absolute;
+  top: var(--scope-pad, 20px);
+  right: var(--scope-pad, 20px);
+  width: var(--scope-size, 300px);
+  height: var(--scope-size, 300px);
+}
+
+.fh-scope-frame {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(125, 240, 184, 0.5);
+  border-radius: 4px;
+  box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.55);
+}
+
+.fh-scope-frame.is-on-target {
+  border-color: var(--fh-warn);
+}
+
+.fh-scope-v,
+.fh-scope-h {
+  position: absolute;
+  background: rgba(125, 240, 184, 0.65);
+}
+
+.fh-scope-v {
+  left: 50%;
+  top: 8%;
+  bottom: 8%;
+  width: 1px;
+}
+
+.fh-scope-h {
+  top: 50%;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+}
+
+.fh-scope-frame.is-on-target .fh-scope-v,
+.fh-scope-frame.is-on-target .fh-scope-h {
+  background: var(--fh-warn);
+}
+
+.fh-scope-tag,
+.fh-scope-fall {
+  position: absolute;
+  bottom: 5px;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  opacity: 0.8;
+}
+
+.fh-scope-tag {
+  left: 7px;
+}
+
+.fh-scope-fall {
+  right: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ——— Annunciators ——— */
+.fh-warn,
+.fh-caution,
+.fh-mode {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.fh-warn {
+  top: calc(50% + 120px);
+  color: #fff;
+  background: rgba(190, 52, 22, 0.85);
+  border: 1px solid var(--fh-warn);
+  letter-spacing: 0.22em;
+}
+
+.fh-warn.is-on {
+  opacity: 1;
+  animation: fh-blink 0.55s steps(2, end) infinite;
+}
+
+.fh-caution {
+  top: calc(50% + 152px);
+  color: #ffdca8;
+  border: 1px solid rgba(255, 196, 106, 0.55);
+  background: rgba(58, 38, 8, 0.72);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+}
+
+.fh-caution.is-on {
+  opacity: 1;
+}
+
+.fh-mode {
+  top: calc(50% + 182px);
+  color: #bfe9ff;
+  border: 1px solid rgba(143, 211, 255, 0.4);
+  background: rgba(10, 26, 38, 0.6);
+  font-size: 10px;
+}
+
+.fh-mode.is-on {
+  opacity: 1;
+}
+
+@keyframes fh-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fh-warn.is-on {
+    animation: none;
+  }
+}

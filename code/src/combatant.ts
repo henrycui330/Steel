@@ -31,6 +31,17 @@ export type Combatant = {
     shellStats: Omit<ShellImpact, 'speed'>,
     ctx?: ShellHitContext,
   ) => CombatHitResult | null
+  /**
+   * Armour resolution **without** applying it — for the kill cam, which has to
+   * know whether a shell in flight is lethal before it lands. Compare
+   * `damage >= hp` to decide; `crit` is a fresh random roll here and will not
+   * match the one the real hit makes, so it can't be predicted.
+   */
+  previewShellHit: (
+    p: THREE.Vector3,
+    velocity: THREE.Vector3,
+    shellStats: Omit<ShellImpact, 'speed'>,
+  ) => HitResolution | null
   tickMobility: (dt: number) => void
   isImmobilized: () => boolean
   /** Seconds left on track disable (0 if mobile). */
@@ -43,6 +54,11 @@ export type CombatantOptions = {
   maxHp: number
   /** Broad-phase radius on XZ (and soft Y gate). */
   broadRadius?: number
+  /**
+   * Hit height relative to the root (metres). Aircraft need this — the default
+   * absolute Y gate (−0.5…6) only covers ground vehicles.
+   */
+  altitudeSpan?: number
   /** Per-tank armor table (defaults to Pz-III if omitted). */
   armor?: Record<ArmorPartId, ArmorPartDef>
   onDestroyed?: (root: THREE.Group) => void
@@ -64,6 +80,7 @@ export function createCombatant(
   const maxHp = opts.maxHp
   const broadR = opts.broadRadius ?? 5.5
   const broadR2 = broadR * broadR
+  const altSpan = opts.altitudeSpan
   const volumes = createTankHitVolumes(root, opts.armor)
   let hp = maxHp
   let alive = true
@@ -85,6 +102,10 @@ export function createCombatant(
       const dx = p.x - _tmp.x
       const dz = p.z - _tmp.z
       if (dx * dx + dz * dz > broadR2) return false
+      if (altSpan != null) {
+        const dy = p.y - _tmp.y
+        return dy > -altSpan && dy < altSpan
+      }
       return p.y > -0.5 && p.y < 6
     },
     tickMobility(dt) {
@@ -107,6 +128,11 @@ export function createCombatant(
       tracksDisableLeft = 0
       root.visible = true
       console.info(`[Steel] ${label} respawned HP ${hp}/${maxHp}`)
+    },
+    previewShellHit(p, velocity, shellStats) {
+      if (!alive) return null
+      volumes.updateWorld()
+      return volumes.resolveHit(p, velocity, shellStats)
     },
     resolveShellHit(p, velocity, shellStats, ctx) {
       if (!alive) return null

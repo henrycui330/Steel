@@ -1,5 +1,6 @@
 import type { ArmorPartDef, ArmorPartId } from './armor'
 import { armorKit, frontArmorMm } from './armorKits'
+import { assetUrl } from './assetUrl'
 
 export type TankId =
   | 'tiger'
@@ -11,12 +12,15 @@ export type TankId =
   | 'chaffee'
   | 'sherman'
   | 'pershing'
+  | 'duster'
   | 'abrams'
   | 't34'
   | 't44'
   | 't55'
   | 't72'
   | 't90'
+  | 'corsair'
+  | 'yak9'
 
 export type DriveProfile = {
   maxSpeed: number
@@ -78,6 +82,25 @@ export type TankOption = {
    * Self-propelled gun — deploy/map location-aim loop (PzH 2000).
    */
   artillery?: boolean
+  /**
+   * Fixed-wing aircraft — flies instead of driving. Takes the air branch in
+   * `startMission`. Also available as an AI slot (see `spawnAiCorsair`).
+   */
+  aircraft?: boolean
+  /**
+   * Yaw (radians) to bake into podium / raw GLB so nose faces camera-forward.
+   * Flight load path applies the same via `loadAircraft`.
+   */
+  aircraftNoseYaw?: number
+  /**
+   * SPAAG / AA — high gun elevation + fast reload. When set, `main` applies
+   * `aimPitchMinDeg` / `aimPitchMaxDeg` (defaults −5° / +85°).
+   */
+  antiAir?: boolean
+  /** Override gun depression (degrees). Used with `antiAir` or SPG. */
+  aimPitchMinDeg?: number
+  /** Override gun elevation (degrees). */
+  aimPitchMaxDeg?: number
   /** Tech-tree nation — used for country-by-country track/wheel passes. */
   nation?: 'germany' | 'usa' | 'soviet'
 }
@@ -195,6 +218,20 @@ const PERSHING_DRIVE: DriveProfile = {
   tiltFromAccel: 0.012,
 }
 
+/** M42 Duster — SPAAG on M41 chassis (fast traverse, light skin). */
+const DUSTER_DRIVE: DriveProfile = {
+  maxSpeed: 18.5,
+  maxReverse: 7,
+  accel: 13,
+  reverseAccel: 9,
+  brakeDecel: 26,
+  coastDrag: 5.4,
+  turnRate: 2.75,
+  turnInPlace: 1.35,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
 /** M1A1 Abrams — modern MBT / 120mm. */
 const ABRAMS_DRIVE: DriveProfile = {
   maxSpeed: 18,
@@ -307,14 +344,32 @@ const LEOPARD2_DRIVE: DriveProfile = {
   tiltFromAccel: 0.011,
 }
 
-/** Selectable player tanks (files in public/models/). */
+/**
+ * Placeholder ground profile for the Corsair. Aircraft never use the drive
+ * controller — the flight model moves them — but the shared option shape
+ * requires a profile.
+ */
+const CORSAIR_DRIVE: DriveProfile = {
+  maxSpeed: 0,
+  maxReverse: 0,
+  accel: 0,
+  reverseAccel: 0,
+  brakeDecel: 0,
+  coastDrag: 0,
+  turnRate: 0,
+  turnInPlace: 0,
+  tiltMax: 0,
+  tiltFromAccel: 0,
+}
+
+/** Selectable player vehicles (files in public/models/). */
 export const TANK_OPTIONS: TankOption[] = [
   {
     id: 'tiger',
     name: 'Pz-V Panther A',
     role: 'Heavy medium',
     blurb: 'Fast for its weight · long 75mm · frontal slope · open-ground hunter',
-    url: '/models/tiger.glb?v=4',
+    url: assetUrl('models/tiger.glb?v=4'),
     reloadSec: 6.5,
     maxHp: 1100,
     targetWidth: 3.05,
@@ -339,7 +394,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Pz-III L',
     role: 'Flanking blitz',
     blurb: 'Fast · agile · quick reload · made for flank and encircle',
-    url: '/models/pz3.glb?v=4',
+    url: assetUrl('models/pz3.glb?v=4'),
     reloadSec: 4,
     maxHp: 680,
     targetWidth: 2.7,
@@ -364,7 +419,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Pz-IV',
     role: 'Medium workhorse',
     blurb: 'Balanced · long 75mm · the German jack-of-all-trades',
-    url: '/models/pz4.glb?v=30',
+    url: assetUrl('models/pz4.glb?v=30'),
     reloadSec: 5.5,
     maxHp: 920,
     targetWidth: 2.7,
@@ -389,7 +444,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Leopard 1',
     role: 'Cold-war MBT',
     blurb: 'Fast · sharp 105mm · thin skin · shoot and scoot',
-    url: '/models/leopard.glb?v=3',
+    url: assetUrl('models/leopard.glb?v=3'),
     reloadSec: 5,
     maxHp: 980,
     targetWidth: 2.95,
@@ -414,7 +469,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Leopard 2A6',
     role: 'Modern MBT',
     blurb: 'L55 120mm · composite armor · NATO spearhead',
-    url: '/models/leopard2.glb?v=13',
+    url: assetUrl('models/leopard2.glb?v=13'),
     reloadSec: 5.5,
     maxHp: 1520,
     targetWidth: 3.35,
@@ -439,7 +494,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'PzH 2000',
     role: 'SPG · 155mm howitzer',
     blurb: 'Stop · map-aim · lock · fire for effect',
-    url: '/models/pzh2000.glb?v=8',
+    url: assetUrl('models/pzh2000.glb?v=8'),
     reloadSec: 8.0,
     maxHp: 1050,
     targetWidth: 3.5,
@@ -465,7 +520,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'M24 Chaffee',
     role: 'Light infantry support',
     blurb: 'Quick · light · 75mm · built to aid infantry in fast fights',
-    url: '/models/m24_chaffee.glb?v=1',
+    url: assetUrl('models/m24_chaffee.glb?v=1'),
     reloadSec: 4.2,
     maxHp: 620,
     targetWidth: 2.85,
@@ -490,7 +545,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'M4 Sherman Firefly',
     role: 'Medium · 17-pdr',
     blurb: 'Allied medium · long 17-pounder · hard AP punch',
-    url: '/models/m4_sherman_firefly.glb?v=1',
+    url: assetUrl('models/m4_sherman_firefly.glb?v=1'),
     reloadSec: 6.2,
     maxHp: 900,
     targetWidth: 2.95,
@@ -515,7 +570,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'M26 Pershing',
     role: 'Heavy medium · 90mm',
     blurb: 'Late-war US · thick face · 90mm M3',
-    url: '/models/m26_pershing.glb?v=2',
+    url: assetUrl('models/m26_pershing.glb?v=2'),
     reloadSec: 6.0,
     maxHp: 1180,
     targetWidth: 3.15,
@@ -536,11 +591,40 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'duster',
+    name: 'M42 Duster',
+    role: 'SPAAG · twin 40mm',
+    blurb: 'Open turret · twin Bofors · owns low-flying aircraft',
+    url: assetUrl('models/m42_duster.glb?v=1'),
+    reloadSec: 0.38,
+    maxHp: 560,
+    targetWidth: 3.23,
+    vintageCrew: true,
+    nation: 'usa',
+    antiAir: true,
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 85,
+    rigidRig: false,
+    drive: DUSTER_DRIVE,
+    armor: armorKit({ front: 25, side: 12, rear: 12, turret: 15 }),
+    gun: {
+      aphePen: 52,
+      apheDmg: 110,
+      hePen: 10,
+      heDmg: 70,
+      heBlast: 110,
+      traverseRadPerSec: 8.8,
+      elevateRadPerSec: 7.2,
+      apLabel: 'AP 40mm',
+      heLabel: 'HE-T 40mm',
+    },
+  },
+  {
     id: 'abrams',
     name: 'M1A1 Abrams',
     role: 'Modern MBT · 120mm',
     blurb: 'US heavyweight · composite armor · L44 120mm',
-    url: '/models/m1a1_abrams.glb?v=2',
+    url: assetUrl('models/m1a1_abrams.glb?v=2'),
     reloadSec: 5.0,
     maxHp: 1580,
     targetWidth: 3.65,
@@ -565,7 +649,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'T-34',
     role: 'Soviet medium · 76mm',
     blurb: 'Sloped armor · wide tracks · the Red Army workhorse',
-    url: '/models/t34.glb?v=2',
+    url: assetUrl('models/t34.glb?v=2'),
     reloadSec: 5.2,
     maxHp: 860,
     targetWidth: 3.0,
@@ -590,7 +674,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'T-44-100',
     role: 'Soviet medium · 100mm',
     blurb: 'Low silhouette · hard 100mm · bridge from T-34 to T-54',
-    url: '/models/t44_100.glb?v=2',
+    url: assetUrl('models/t44_100.glb?v=2'),
     reloadSec: 5.8,
     maxHp: 1020,
     targetWidth: 3.1,
@@ -615,7 +699,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'T-55',
     role: 'Cold-war MBT · 100mm',
     blurb: 'Ubiquitous · thick face · D-10T 100mm',
-    url: '/models/t55.glb?v=2',
+    url: assetUrl('models/t55.glb?v=2'),
     reloadSec: 5.5,
     maxHp: 1180,
     targetWidth: 3.3,
@@ -640,7 +724,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'T-72 Ural',
     role: 'Cold-war MBT · 125mm',
     blurb: 'Autoloader · low profile · 2A46 125mm',
-    url: '/models/t72.glb?v=1',
+    url: assetUrl('models/t72.glb?v=1'),
     reloadSec: 6.5,
     maxHp: 1380,
     targetWidth: 3.55,
@@ -665,7 +749,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'T-90',
     role: 'Modern MBT · 125mm',
     blurb: 'Shtora · Kontakt · 2A46M 125mm — final boss',
-    url: '/models/t90.glb?v=9',
+    url: assetUrl('models/t90.glb?v=9'),
     reloadSec: 6.2,
     maxHp: 1600,
     targetWidth: 3.7,
@@ -683,6 +767,62 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 4.6,
       apLabel: 'APFSDS',
       heLabel: 'HE',
+    },
+  },
+  {
+    id: 'corsair',
+    name: 'F4U-1A Corsair',
+    role: 'Fighter-bomber · air',
+    blurb: 'Bent-wing carrier fighter · six .50 cals · owns the sky',
+    url: assetUrl('models/f4u_corsair.glb?v=1'),
+    reloadSec: 0.12,
+    maxHp: 520,
+    // Wingspan, not track gauge — the air rig scales from this.
+    targetWidth: 12.5,
+    vintageCrew: true,
+    nation: 'usa',
+    aircraft: true,
+    // Required by the shared option shape but unused: the flight model owns
+    // aircraft movement (Phase F4U task F2).
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 16, side: 12, rear: 10, turret: 14 }),
+    gun: {
+      aphePen: 26,
+      apheDmg: 55,
+      hePen: 8,
+      heDmg: 30,
+      heBlast: 40,
+      traverseRadPerSec: 2.4,
+      elevateRadPerSec: 2.0,
+      apLabel: 'AP .50',
+      heLabel: 'API .50',
+    },
+  },
+  {
+    id: 'yak9',
+    name: 'Yak-9',
+    role: 'Fighter · air',
+    blurb: 'Soviet interceptor · 20mm ShVAK · light and mean',
+    url: assetUrl('models/yak9.glb?v=1'),
+    reloadSec: 0.14,
+    maxHp: 480,
+    targetWidth: 9.74,
+    vintageCrew: true,
+    nation: 'soviet',
+    aircraft: true,
+    aircraftNoseYaw: -Math.PI / 2,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 14, side: 10, rear: 8, turret: 12 }),
+    gun: {
+      aphePen: 38,
+      apheDmg: 78,
+      hePen: 12,
+      heDmg: 42,
+      heBlast: 55,
+      traverseRadPerSec: 2.6,
+      elevateRadPerSec: 2.2,
+      apLabel: 'AP 20mm',
+      heLabel: 'HE 20mm',
     },
   },
 ]

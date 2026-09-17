@@ -1,6 +1,5 @@
 import * as THREE from 'three'
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { cloneGltfScene } from './loadGltf'
 import { tankOptionById, type TankId } from './tankCatalog'
 import { paintTankDunkelgrau } from './paint'
 import { applyTankWrap } from './wraps'
@@ -13,19 +12,6 @@ export type PlayerTankHandle = TankHandle & {
   barrel: THREE.Object3D
   /** Coax MG flash/spawn point (turret roof / beside barrel — not main muzzle). */
   mgMuzzle: THREE.Object3D
-}
-
-async function glbAvailable(url: string): Promise<boolean> {
-  try {
-    const clean = url.split('?')[0]
-    const res = await fetch(clean, { method: 'HEAD' })
-    if (!res.ok) return false
-    const type = res.headers.get('content-type') ?? ''
-    if (type.includes('text/html')) return false
-    return true
-  } catch {
-    return false
-  }
 }
 
 function enableShadows(root: THREE.Object3D): void {
@@ -482,6 +468,10 @@ function prepareAbrams(root: THREE.Object3D): boolean {
 function preparePershing(root: THREE.Object3D): boolean {
   if (root.getObjectByName('turret_017')) return false
   if (root.getObjectByName('Turret_01') && root.getObjectByName('gun_01Shape5')) return false
+  // M42 Duster also has Object_9 / Object_22 / Object_23 — reject twin-track SPAAG.
+  if (root.getObjectByName('Object_3') && root.getObjectByName('Object_5') && root.getObjectByName('Object_24')) {
+    return false
+  }
   let isPzh = false
   root.traverse((o) => {
     if (/pzh|PzH_?2000/i.test(o.name)) isPzh = true
@@ -505,6 +495,38 @@ function preparePershing(root: THREE.Object3D): boolean {
     barrel.attach(mantlet)
   }
   console.info('[Steel] Pershing: labeled Hull/Turret/Barrel (Object_9 + Object_22)')
+  return true
+}
+
+/**
+ * M42 Duster War Thunder pack — Object_* only.
+ * Object_23 ≈ open turret basket; Object_24 ≈ twin 40mm cradle + tubes.
+ * Object_3 / Object_5 ≈ left/right track runs (fingerprint vs Pershing).
+ */
+function prepareDuster(root: THREE.Object3D): boolean {
+  const turretMain = root.getObjectByName('Object_23')
+  const barrel = root.getObjectByName('Object_24')
+  const trackL = root.getObjectByName('Object_3')
+  const trackR = root.getObjectByName('Object_5')
+  if (
+    !(turretMain instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh) ||
+    !(trackL instanceof THREE.Mesh) ||
+    !(trackR instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+
+  const hull = root.getObjectByName('Object_11') ?? root.getObjectByName('Object_10')
+  if (hull) hull.name = 'Hull'
+
+  turretMain.name = 'Turret'
+  for (const n of ['Object_21', 'Object_22', 'Object_2', 'Object_6', 'Object_4', 'Object_8']) {
+    const extra = root.getObjectByName(n)
+    if (extra) turretMain.attach(extra)
+  }
+  barrel.name = 'Barrel'
+  console.info('[Steel] Duster: labeled Hull/Turret/Barrel (Object_23 + Object_24)')
   return true
 }
 
@@ -981,6 +1003,7 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareT44(model) ||
       prepareT34(model) ||
       prepareAbrams(model) ||
+      prepareDuster(model) ||
       preparePershing(model) ||
       prepareShermanFirefly(model) ||
       prepareChaffee(model) ||
@@ -1013,38 +1036,18 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
   return finishRig(root, turretMesh)
 }
 
-/** Shared GLB fetch — AI + player both use Pz-III without downloading twice. */
-const gltfSceneCache = new Map<string, Promise<THREE.Object3D>>()
-
+/** Shared GLB fetch — AI + player both use the same download. */
 function loadGltfSceneClone(url: string): Promise<THREE.Object3D> {
-  let pending = gltfSceneCache.get(url)
-  if (!pending) {
-    pending = (async () => {
-      const loader = new GLTFLoader()
-      const draco = new DRACOLoader()
-      draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
-      loader.setDRACOLoader(draco)
-      console.info('[Steel] Fetching GLB', url)
-      const gltf = await loader.loadAsync(url)
-      console.info('[Steel] GLB ready', url)
-      return gltf.scene
-    })()
-    gltfSceneCache.set(url, pending)
-  }
-  return pending.then((scene) => scene.clone(true))
+  return cloneGltfScene(url)
 }
 
 /** Load the tank chosen on the main menu. */
 export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
   const option = tankOptionById(id)
-  if (await glbAvailable(option.url)) {
-    try {
-      // Multi-mesh Pz-IV bake exports named Hull/Turret/Barrel — use normal pivots.
-      // Sketchfab packs without part names (e.g. Chaffee) use rigidRig.
-      return await loadGltf(option.url, option.targetWidth, !!option.rigidRig)
-    } catch (err) {
-      console.warn('[Steel] Failed to parse', option.url, err)
-    }
+  try {
+    return await loadGltf(option.url, option.targetWidth, !!option.rigidRig)
+  } catch (err) {
+    console.warn('[Steel] Failed to load', option.url, err)
   }
 
   console.info('[Steel] Missing', option.url, '— procedural fallback')

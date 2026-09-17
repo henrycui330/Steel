@@ -108,6 +108,20 @@ export type ShellImpact = {
   blastDamage?: number
 }
 
+/**
+ * Chance a penetration of this plate is a catastrophic kill. Shared so the
+ * kill cam can tell when the odds saturate (rear plate and turret ring both
+ * exceed 1.0 under overmatch, making those kills certain and predictable).
+ */
+export function critProbability(
+  part: ArmorPartDef,
+  penetration: number,
+  effectiveArmor: number,
+): number {
+  const overmatch = effectiveArmor > 0 ? penetration / effectiveArmor : 0
+  return part.critChance * THREE.MathUtils.clamp(overmatch, 0.8, 1.5)
+}
+
 export function shellPenetrationAtSpeed(basePen: number, speed: number): number {
   const ratio = THREE.MathUtils.clamp(speed / SHELL_SPEED, 0.25, 1.15)
   return basePen * ratio
@@ -189,7 +203,7 @@ export function resolveArmorHit(
       ? THREE.MathUtils.clamp(overmatch, 0.55, overmatch >= 2 ? 2.6 : 1.15)
       : THREE.MathUtils.clamp(overmatch, 0.85, overmatch >= 2 ? 2.4 : 1.55)
   const damage = Math.round(shell.baseDamage * part.damageMult * overClamp)
-  const crit = Math.random() < part.critChance * THREE.MathUtils.clamp(overmatch, 0.8, 1.5)
+  const crit = Math.random() < critProbability(part, pen, effectiveArmor)
 
   return {
     kind: 'penetrated',

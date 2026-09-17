@@ -1,6 +1,8 @@
 import * as THREE from 'three'
 import { mapOptionById, type MapId } from './maps/mapCatalog'
-import { TANK_OPTIONS, type TankId } from './tankCatalog'
+import { TANK_OPTIONS, tankOptionById, type TankId } from './tankCatalog'
+import { FOREST_PROP_URLS } from './maps/forestOverwatch'
+import { preloadUrls, warmLoaders } from './loadGltf'
 import type { Season, TimeOfDay, WeatherKind } from './environment'
 import {
   WRAP_OPTIONS,
@@ -28,6 +30,7 @@ import {
 import {
   NATIONS,
   nationByTeam,
+  nationFlagSrc,
   type TeamId,
 } from './nations'
 
@@ -65,12 +68,18 @@ const AI_SLOT_MAX = 3
 const DEFAULT_AI_TANK: TankId = 'pz3'
 const SVG_SIZE = 320
 
+function warmupMatchAssets(tankIds: readonly TankId[] = []): void {
+  warmLoaders()
+  const tankUrls = [...new Set([DEFAULT_AI_TANK, ...tankIds])]
+    .map((id) => tankOptionById(id).url)
+  void preloadUrls([...FOREST_PROP_URLS, ...tankUrls])
+}
+
 function aiTankOptionsHtml(selected: TankId): string {
   return TANK_OPTIONS.map(
-      (t) =>
-        `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${t.name}</option>`,
-    )
-    .join('')
+    (t) =>
+      `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${t.name}${t.aircraft ? ' (air)' : ''}</option>`,
+  ).join('')
 }
 
 function ensureRoot(): HTMLDivElement {
@@ -94,6 +103,7 @@ export function showMainMenu(): Promise<MenuSelection> {
     initAuth()
     const root = ensureRoot()
     void (async () => {
+      warmupMatchAssets()
       const user = await getCurrentUser()
       if (user) showHome(root, resolve, user)
       else showAuth(root, resolve)
@@ -188,6 +198,7 @@ function showHome(
   user: AuthUser,
 ): void {
   syncWrapFromProfile(user.profile.wrapId)
+  warmupMatchAssets()
   clearRoot(root)
   root.classList.add('menu-screen-home')
   const mode = getSession()?.mode ?? 'offline'
@@ -496,6 +507,7 @@ function showMatchSetup(
       weather,
       gameMode,
     }
+    warmupMatchAssets([...draft.redAi, ...draft.blueAi])
     showSpawnSelect(root, draft, resolve)
   })
 }
@@ -507,6 +519,7 @@ function showSpawnSelect(
 ): void {
   clearRoot(root)
   root.classList.add('menu-screen-spawn')
+  warmupMatchAssets([...draft.redAi, ...draft.blueAi])
 
   const map = mapOptionById(draft.mapId)
   let team: TeamId | null = null
@@ -553,7 +566,7 @@ function showSpawnSelect(
         <div class="spawn-legend spawn-legend-nations">
           ${NATIONS.map(
             (n) =>
-              `<span class="spawn-legend-nation"><img src="${n.flagUrl}" alt="" width="28" height="20" />${n.short}</span>`,
+              `<span class="spawn-legend-nation"><img src="${nationFlagSrc(n)}" alt="" width="28" height="20" />${n.short}</span>`,
           ).join('')}
         </div>
       </div>
@@ -596,9 +609,13 @@ function showSpawnSelect(
     btn.type = 'button'
     btn.className = 'tank-card'
     btn.dataset.id = tank.id
-    btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-stats">Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}</span><span class="tank-blurb">${tank.blurb}</span>`
+    const stats = tank.aircraft
+      ? `Air · guns + bombs · KOTH support`
+      : `Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}`
+    btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-stats">${stats}</span><span class="tank-blurb">${tank.blurb}</span>`
     btn.addEventListener('click', () => {
       tankId = tank.id
+      warmupMatchAssets([tankId, ...draft.redAi, ...draft.blueAi])
       tankGrid.querySelectorAll('.tank-card').forEach((el) => el.classList.remove('is-selected'))
       btn.classList.add('is-selected')
       refreshDeploy()

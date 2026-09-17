@@ -1,0 +1,98 @@
+/* Impact cinematic (bomb cam / kill cam): letterbox bars + slate.
+   Pointer-transparent so the player keeps control through the shot. */
+.impactcam {
+  --bar-h: 9vh;
+  position: fixed;
+  inset: 0;
+  /* Above the flight HUD (35), below the match-end screen (40). */
+  z-index: 36;
+  pointer-events: none;
+  font-family: 'Barlow Condensed', 'IBM Plex Sans', sans-serif;
+}
+
+.impactcam-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--bar-h);
+  background: #000;
+  transform: scaleY(0);
+  transition: transform 260ms ease-out;
+}
+
+.impactcam-bar.top {
+  top: 0;
+  transform-origin: top;
+}
+
+.impactcam-bar.bottom {
+  bottom: 0;
+  transform-origin: bottom;
+}
+
+.impactcam.in .impactcam-bar {
+  transform: scaleY(1);
+}
+
+.impactcam-slate {
+  position: absolute;
+  left: 3.2vw;
+  bottom: calc(var(--bar-h) + 14px);
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 240ms ease-out 120ms, transform 240ms ease-out 120ms;
+}
+
+.impactcam.in .impactcam-slate {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.impactcam-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #ff3b30;
+  box-shadow: 0 0 10px #ff3b30;
+  animation: impactcam-blink 1s steps(2, end) infinite;
+}
+
+.impactcam-label {
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+}
+
+.impactcam-hint {
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+@keyframes impactcam-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  50.01%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .impactcam-bar,
+  .impactcam-slate {
+    transition: none;
+  }
+  .impactcam-dot {
+    animation: none;
+  }
+}

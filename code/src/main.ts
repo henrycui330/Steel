@@ -1,9 +1,10 @@
 import './style.css'
 import * as THREE from 'three'
 import { spawnAiPz3Enemy, playerAsHostile, type AiEnemy } from './aiEnemy'
-import { unlockAudio } from './audio'
+import { spawnAiCorsair, isAircraftTankId } from './aiAircraft'
+import { unlockAudio, createDieselEngine, createPropEngine } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
-import { bindMouseAim, getAimDirection, resetAim, setAimHeightAt, setAimLocalYawPitch, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
+import { bindMouseAim, getAimDirection, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
 import { type CameraMode, adjustAimZoom, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
@@ -20,11 +21,23 @@ import {
   consumeCameraToggle,
   consumeZoomDelta,
   getDriveInput,
+  bindFlightInput,
+  getFlightInput,
+  resetFlightInput,
 } from './input'
 import { createArtilleryController, type ArtilleryController } from './artillery'
 import { loadPlayerTank } from './loadTank'
-import { FOREST_TOWNS } from './maps/forestOverwatch'
+import { loadPlayerAircraft, type AircraftHandle } from './loadAircraft'
+import { createAircraftFlight } from './aircraftFlight'
+import { createAircraftChaseCamera } from './aircraftCamera'
+import { createFlightHud } from './flightHud'
+import { createAircraftGuns } from './aircraftGuns'
+import { createAircraftBombs } from './aircraftBombs'
+import { createImpactCinematic, BOMB_SHOT, KILL_SHOT } from './impactCinematic'
+import { createEjectCinematic } from './ejectCinematic'
+import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
+import { onGltfProgress, preloadUrls } from './loadGltf'
 import { showMainMenu, type MenuSelection, type TeamId } from './menu'
 import { nationByTeam } from './nations'
 import {
@@ -48,12 +61,24 @@ import { collectTracks, updateTracks } from './tracks'
 import { spawnDestroyedWreck, updateWrecks } from './wreck'
 import { createEnvironment } from './environment'
 import { showMatchEnd } from './endScreen'
+import { createPodium3d, type Podium3d, type PodiumPlace } from './podium3d'
+import { createMatchScoreboard, type ScoreRow } from './scoreboard'
+import { getSession } from './auth'
 
 /** Expose for threejs-devtools-mcp bridge helpers / run_js. */
 ;(window as unknown as { THREE: typeof THREE }).THREE = THREE
 
 const DEFAULT_ARENA = 150
 const TANK_RADIUS = 1.8
+/** Spawn altitude above the ground spawn point for aircraft. */
+const AIR_SPAWN_ALT = 140
+/** Aircraft ceiling above map ground level. */
+const AIR_CEILING = 460
+/** Aircraft turn back this far inside the tank arena walls. */
+const AIR_WALL_INSET = 12
+/** Ceiling on a single simulated step, so the bomb cam's fast-forward can't
+ *  hand the flight model or AI a step big enough to go unstable. */
+const MAX_SIM_DT = 0.07
 
 const scene = new THREE.Scene()
 scene.fog = null
@@ -71,7 +96,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.setClearColor(PALETTE.sky, 1)
 renderer.shadowMap.enabled = true
-renderer.shadowMap.type = THREE.PCFSoftShadowMap
+renderer.shadowMap.type = THREE.PCFShadowMap
 document.body.appendChild(renderer.domElement)
 
 // Official Three.js DevTools observe hook (MCP bridge)
@@ -144,9 +169,11 @@ function configureShadowsForMap(sizeX: number, sizeZ: number): void {
 bindDriveInput()
 bindMouseAim()
 
-const clock = new THREE.Clock()
+const timer = new THREE.Timer()
 const fire = createFireSystem(scene, playable.x)
 let mapColliders: readonly PropCollider[] = []
+/** When set, the render loop shows the victory stage instead of the battle. */
+let podiumStage: Podium3d | null = null
 
 function onResize(): void {
   const width = window.innerWidth
@@ -154,6 +181,38 @@ function onResize(): void {
   camera.aspect = width / height
   camera.updateProjectionMatrix()
   renderer.setSize(width, height)
+  podiumStage?.resize(width, height)
+}
+
+/** Build the 3D podium: 1st centre, runner-up left, 3rd right. */
+async function startVictoryStage(
+  rows: readonly ScoreRow[],
+  win: boolean,
+  team?: TeamId,
+): Promise<void> {
+  const top = rows.slice(0, 3)
+  if (top.length === 0) return
+  try {
+    const stage = await createPodium3d(
+      top.map((row, i) => ({
+        place: (i + 1) as PodiumPlace,
+        name: row.name,
+        tankId: row.tankId,
+        tankName: row.tankName,
+        team: row.team,
+        kills: row.kills,
+        deaths: row.deaths,
+        isPlayer: row.isPlayer,
+      })),
+      { win, team },
+    )
+    stage.resize(window.innerWidth, window.innerHeight)
+    renderer.setClearColor(0x000000, 1)
+    podiumStage = stage
+    console.info(`[Steel] Victory stage — ${top.length} on the podium`)
+  } catch (err) {
+    console.warn('[Steel] Victory stage failed — HTML board only', err)
+  }
 }
 
 window.addEventListener('resize', onResize)
@@ -169,6 +228,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
   fire.setGunProfile(option.gun)
   fire.setPlayableBounds(playable)
   setAimRates(option.gun.traverseRadPerSec, option.gun.elevateRadPerSec)
+  if (option.antiAir || option.aimPitchMinDeg != null || option.aimPitchMaxDeg != null) {
+    setAimPitchLimits(option.aimPitchMinDeg ?? -5, option.aimPitchMaxDeg ?? 85)
+  } else {
+    resetAimPitchLimits()
+  }
   resetShotRecoil()
 
   const env = createEnvironment(
@@ -182,20 +246,55 @@ async function startMission(sel: MenuSelection): Promise<void> {
   loading.id = 'loading-overlay'
   loading.innerHTML = `<p class="loading-brand">Steel</p><p class="loading-msg">Loading ${mapOpt.name}…</p>`
   document.body.appendChild(loading)
+  const loadingMsg = loading.querySelector('.loading-msg') as HTMLElement
+  const stopProgress = onGltfProgress((p) => {
+    const mb = p.bytes > 0 ? ` · ${(p.bytes / 1_048_576).toFixed(0)} MB` : ''
+    loadingMsg.textContent =
+      p.active + p.done === 0
+        ? `Loading ${mapOpt.name}…`
+        : `Loading models… ${p.done} ready${p.active ? ` · ${p.active} downloading` : ''}${mb}`
+  })
+  void preloadUrls([
+    ...FOREST_PROP_URLS,
+    option.url,
+    ...redAi.map((id) => tankOptionById(id).url),
+    ...blueAi.map((id) => tankOptionById(id).url),
+  ])
 
   let mapGroundY = 0
   let heightAt: ((x: number, z: number) => number) | undefined
   let mapPaths: Array<{ points: Array<{ x: number; z: number }> }> | undefined
   let mapSpawns = mapOpt.spawns
+  let playerHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
+  let airHandleEarly: AircraftHandle | null = null
+  let smokeEarly: Awaited<ReturnType<typeof createSmokeSystem>> | null = null
+  const isAir = option.aircraft === true
   try {
-    const map = await loadMap(mapId, scene, ground)
-    mapColliders = map.colliders
-    mapGroundY = map.groundY
-    heightAt = map.heightAt
-    mapPaths = map.paths
-    if (map.spawns) mapSpawns = map.spawns
+    const [mapRes, smokeRes, playerRes] = await Promise.allSettled([
+      loadMap(mapId, scene, ground),
+      createSmokeSystem(scene),
+      isAir ? loadPlayerAircraft(tankId) : loadPlayerTank(tankId),
+    ])
+    if (mapRes.status === 'fulfilled') {
+      mapColliders = mapRes.value.colliders
+      mapGroundY = mapRes.value.groundY
+      heightAt = mapRes.value.heightAt
+      mapPaths = mapRes.value.paths
+      if (mapRes.value.spawns) mapSpawns = mapRes.value.spawns
+    } else {
+      console.warn('[Steel] Map load failed', mapRes.reason)
+      mapColliders = []
+    }
+    if (smokeRes.status === 'fulfilled') smokeEarly = smokeRes.value
+    else console.warn('[Steel] Smoke load failed', smokeRes.reason)
+    if (playerRes.status === 'fulfilled') {
+      if (isAir) airHandleEarly = playerRes.value as AircraftHandle
+      else playerHandleEarly = playerRes.value as Awaited<ReturnType<typeof loadPlayerTank>>
+    } else {
+      console.warn('[Steel] Player vehicle load failed', playerRes.reason)
+    }
   } catch (err) {
-    console.warn('[Steel] Map load failed', err)
+    console.warn('[Steel] Map / tank / smoke load failed', err)
     mapColliders = []
   }
 
@@ -227,6 +326,523 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const sampleY = (x: number, z: number) =>
     heightAt ? heightAt(x, z) : mapGroundY
 
+  // ——— Air branch (Phase F4U) ———
+  // F2: the Corsair flies. Chase camera and instruments here are provisional —
+  // F3 replaces them with the real chase cam + flight HUD. This deliberately
+  // returns before any tank drive/aim/fire setup is built, so tanks can't
+  // regress from air work.
+  if (isAir) {
+    const air = airHandleEarly ?? (await loadPlayerAircraft(tankId))
+    const base = mapSpawns[team][spawnIndex] ?? mapSpawns[team][0]!
+    air.root.position.set(base.x, sampleY(base.x, base.z) + AIR_SPAWN_ALT, base.z)
+    air.root.rotation.y = Math.atan2(-base.x, -base.z)
+    scene.add(air.root)
+
+    // Plane never captures the hill — only ground units do. In KOTH a crash
+    // or eject respawns; in Skirmish either one ends the match.
+    let airCrashed = false
+    let airDeadFor = 0
+    const flight = createAircraftFlight({
+      root: air.root,
+      heightAt: sampleY,
+      throttle: 0.55,
+      // Share the tanks' playable box so air and ground agree on the arena,
+      // pulled in a little so the aircraft turns before clipping a wall.
+      bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
+      ceiling: mapGroundY + AIR_CEILING,
+      onCrash: ({ speed }) => {
+        bailOut('crash', speed)
+      },
+    })
+
+    function bailOut(reason: 'crash' | 'eject', speed: number): void {
+      if (airCrashed || airEnded) return
+      airCrashed = true
+      airDeadFor = 0
+      bombCam.cancel()
+      ejectCam.cancel()
+      airBoard.noteDeath(air.root)
+      if (reason === 'eject') {
+        console.info(`[Steel] Corsair ejected at ${speed.toFixed(0)} m/s`)
+      } else {
+        console.info(`[Steel] Corsair crashed at ${speed.toFixed(0)} m/s`)
+      }
+      if (!isKoth) {
+        finishAirMatch(
+          'lose',
+          reason === 'eject' ? 'Ejected' : 'Shot Down',
+          reason === 'eject'
+            ? `You punched out of ${option.name}.`
+            : `You flew ${option.name} into the deck at ${Math.round(speed)} m/s.`,
+        )
+      } else {
+        flightHud.setRespawn(KOTH_RESPAWN_SEC)
+        console.info(`[Steel] Air KOTH respawn in ${KOTH_RESPAWN_SEC}s`)
+      }
+    }
+
+    let ejectSpeed = 0
+    const ejectCam = createEjectCinematic({
+      scene,
+      heightAt: sampleY,
+      onShow: (showing) => flightHud.setVisible(!showing),
+      onDone: () => {
+        bailOut('eject', ejectSpeed)
+      },
+    })
+
+    function startEject(): void {
+      if (airCrashed || airEnded || ejectCam.active()) return
+      bombCam.cancel()
+      ejectSpeed = flight.telemetry().speed
+      flight.forceCrash()
+      ejectCam.begin({
+        aircraft: air.root,
+        velocity: flight.velocity,
+      })
+      console.info(`[Steel] Eject seat — ${ejectSpeed.toFixed(0)} m/s`)
+    }
+    bindFlightInput()
+    resetFlightInput()
+    lockPointer(renderer.domElement)
+
+    const propEngine = createPropEngine()
+    propEngine.start()
+    propEngine.setIntensity(0.35)
+
+    stopProgress()
+    loading.remove()
+    console.info(
+      `[Steel] ${option.name} · ${isKoth ? 'KOTH' : 'Skirmish'} — wingspan ${air.wingspan.toFixed(2)}m · spawn alt ${air.root.position.y.toFixed(0)}m`,
+    )
+
+    const chase = createAircraftChaseCamera({
+      camera,
+      target: air.root,
+      velocity: flight.velocity,
+      heightAt: sampleY,
+    })
+    chase.reset()
+
+    const flightHud = createFlightHud()
+
+    let airKoth = createKothState()
+    const airHillRing = isKoth ? createHillRing(scene) : null
+    if (airHillRing) {
+      airHillRing.position.y = sampleY(KOTH_CENTER.x, KOTH_CENTER.z) + 0.12
+    }
+    const airObjective = isKoth
+      ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS }
+      : undefined
+    if (isKoth) {
+      flightHud.setKoth({
+        vostokHold: 0,
+        meridianHold: 0,
+        owner: 'none',
+        winSec: KOTH_WIN_SEC,
+      })
+      console.info(
+        `[Steel] Air KOTH — ground units hold Midwood ${KOTH_WIN_SEC}s · you strafe · respawn ${KOTH_RESPAWN_SEC}s`,
+      )
+    }
+
+    // ——— Armour to strafe (F5) ———
+    // Ground AI is spawned here rather than reusing the tank path's block so
+    // the tank flow stays untouched. Kill credit uses the same scoreboard.
+    const airBoard = createMatchScoreboard()
+    const airEnemies: AiEnemy[] = []
+    const airFriendlies: AiEnemy[] = []
+    type AirAiSlot = { unit: AiEnemy; teamSide: TeamId; slot: number; deadFor: number }
+    const airAiSlots: AirAiSlot[] = []
+    const airOpposite: TeamId = team === 'red' ? 'blue' : 'red'
+    let airSeq = 0
+
+    airBoard.register({
+      id: 'player',
+      name: getSession()?.username ?? 'You',
+      tankId,
+      tankName: option.name,
+      team,
+      isPlayer: true,
+      root: air.root,
+    })
+
+    const airPlayerCombat = createCombatant(air.root, {
+      maxHp: option.maxHp,
+      armor: option.armor,
+      broadRadius: 9,
+      altitudeSpan: 7,
+      label: 'Player',
+      onDestroyed: () => {
+        if (airCrashed || airEnded) return
+        const spd = flight.telemetry().speed
+        flight.forceCrash()
+        bailOut('crash', spd)
+        console.info('[Steel] Player Corsair shot down')
+      },
+    })
+    const airPlayerHostile = playerAsHostile(airPlayerCombat)
+
+    const airJobs: Array<Promise<void>> = []
+    const airFlightBounds = { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET }
+    const airCeiling = mapGroundY + AIR_CEILING
+    for (const [list, side, teamSide] of [
+      [team === 'red' ? blueAi : redAi, 'enemy', airOpposite],
+      [team === 'red' ? redAi : blueAi, 'friendly', team],
+    ] as const) {
+      for (let i = 0; i < list.length && i < 3; i++) {
+        const chassisId = list[i]!
+        const chassis = tankOptionById(chassisId)
+        const pos = spawnAt(teamSide, i)
+        const id = `ai-${++airSeq}`
+        const display = `${nationByTeam(teamSide).short} ${chassis.name}`
+        const slot = i
+        const yaw = Math.atan2(-pos.x, -pos.z)
+        const common = {
+          team: side,
+          tankId: chassisId,
+          position: pos,
+          yaw,
+          smoke: smokeEarly ?? undefined,
+          heightAt: sampleY,
+          persistMesh: isKoth,
+          onKill: () => airBoard.noteKillById(id),
+          onDeath: () => airBoard.noteDeathById(id),
+        } as const
+        airJobs.push(
+          (isAircraftTankId(chassisId)
+            ? spawnAiCorsair(scene, {
+                ...common,
+                bounds: airFlightBounds,
+                ceiling: airCeiling,
+                spawnAlt: AIR_SPAWN_ALT,
+              })
+            : spawnAiPz3Enemy(scene, common)
+          ).then((unit) => {
+            airBoard.register({
+              id,
+              name: display,
+              tankId: chassisId,
+              tankName: chassis.name,
+              team: teamSide,
+              root: unit.root,
+            })
+            ;(side === 'enemy' ? airEnemies : airFriendlies).push(unit)
+            airAiSlots.push({ unit, teamSide, slot, deadFor: 0 })
+          }),
+        )
+      }
+    }
+    await Promise.allSettled(airJobs)
+    console.info(
+      `[Steel] Air mission — ${airEnemies.length} hostile / ${airFriendlies.length} friendly AI`,
+    )
+
+    const guns = createAircraftGuns({
+      scene,
+      root: air.root,
+      gun: option.gun,
+      heightAt: sampleY,
+      bounds: playable,
+      velocity: flight.velocity,
+    })
+    guns.setOnKill((victim) => {
+      airBoard.noteKill(air.root)
+      console.info(`[Steel] Corsair guns destroyed ${victim.name || 'target'}`)
+    })
+
+    const bombs = createAircraftBombs({
+      scene,
+      root: air.root,
+      heightAt: sampleY,
+      bounds: playable,
+      velocity: flight.velocity,
+    })
+    bombs.setOnKill((victim) => {
+      airBoard.noteKill(air.root)
+      console.info(`[Steel] Corsair bomb destroyed ${victim.name || 'target'}`)
+    })
+
+    // Release cinematic: time dilates and the camera rides the bomb down.
+    // One at a time — a second bomb dropped mid-shot keeps the current one.
+    const bombCam = createImpactCinematic({
+      heightAt: sampleY,
+      profile: BOMB_SHOT,
+      onShow: (showing) => flightHud.setVisible(!showing),
+    })
+    bombs.setOnRelease((b) => {
+      if (airEnded || bombCam.active() || b.flightTime <= 0) return
+      bombCam.begin(b)
+      console.info(`[Steel] Bomb cam — ${b.flightTime.toFixed(1)}s fall`)
+    })
+
+    // Bombsight scope renders the target area as a second, narrow-FOV pass.
+    // Off by default so the extra draw call is opt-in.
+    let scopeOn = false
+    const scopeCam = new THREE.PerspectiveCamera(20, 1, 1, camera.far)
+    const scopeLook = new THREE.Vector3()
+
+    let airEnded = false
+    let deferredAirEnd:
+      | { kind: 'win' | 'lose'; title: string; sub: string; endTeam?: TeamId }
+      | null = null
+
+    function presentAirMatchEnd(
+      kind: 'win' | 'lose',
+      title: string,
+      sub: string,
+      endTeam: TeamId = team,
+    ): void {
+      propEngine.stop()
+      bombCam.cancel()
+      ejectCam.cancel()
+      document.exitPointerLock?.()
+      flightHud.setVisible(false)
+      flightHud.setRespawn(null)
+      // Death is recorded in onCrash / eject (and KOTH can crash more than once).
+      const rows = airBoard.ranked()
+      showMatchEnd({
+        kind,
+        team: endTeam,
+        title,
+        sub,
+        leaderboard: rows,
+        podium3d: true,
+      })
+      void startVictoryStage(rows, kind === 'win', endTeam)
+    }
+
+    /**
+     * Same end path as tanks: HTML board + 3D podium. A win that lands mid
+     * bomb-cam waits for the shot so the kill isn't covered by the stage.
+     */
+    function finishAirMatch(
+      kind: 'win' | 'lose',
+      title: string,
+      sub: string,
+      endTeam: TeamId = team,
+    ): void {
+      if (airEnded) return
+      airEnded = true
+      if (kind === 'win' && bombCam.active()) {
+        deferredAirEnd = { kind, title, sub, endTeam }
+        return
+      }
+      presentAirMatchEnd(kind, title, sub, endTeam)
+    }
+
+    function countAirOnHill(side: TeamId): number {
+      let n = 0
+      const list = side === team ? airFriendlies : airEnemies
+      for (const u of list) {
+        if (u.aircraft) continue
+        if (u.alive && inHill(u.root.position.x, u.root.position.z)) n++
+      }
+      return n
+    }
+
+    function respawnAirPlayer(): void {
+      const pos = spawnAt(team, spawnIndex)
+      const yaw = Math.atan2(-pos.x, -pos.z)
+      pos.y = sampleY(pos.x, pos.z) + AIR_SPAWN_ALT
+      flight.reset(pos, yaw, 0.55)
+      guns.refill()
+      bombs.refill()
+      airPlayerCombat.revive()
+      chase.reset()
+      airCrashed = false
+      airDeadFor = 0
+      flightHud.setRespawn(null)
+      propEngine.setIntensity(0.35)
+      lockPointer(renderer.domElement)
+      console.info('[Steel] Corsair KOTH respawn')
+    }
+
+    function tickAirRespawns(dt: number): void {
+      if (!isKoth || airEnded) return
+      if (airCrashed) {
+        airDeadFor += dt
+        flightHud.setRespawn(Math.max(0, KOTH_RESPAWN_SEC - airDeadFor))
+        if (airDeadFor >= KOTH_RESPAWN_SEC) respawnAirPlayer()
+      }
+      for (const rec of airAiSlots) {
+        if (rec.unit.alive) {
+          rec.deadFor = 0
+          continue
+        }
+        rec.deadFor += dt
+        if (rec.deadFor >= KOTH_RESPAWN_SEC) {
+          const pos = spawnAt(rec.teamSide, rec.slot)
+          rec.unit.reviveAt(pos, Math.atan2(-pos.x, -pos.z))
+          rec.deadFor = 0
+        }
+      }
+    }
+
+    function flyLoop(now = performance.now()): void {
+      requestAnimationFrame(flyLoop)
+      timer.update(now)
+      const realDt = Math.min(timer.getDelta(), 0.05)
+      if (podiumStage) {
+        podiumStage.update(realDt)
+        renderer.render(podiumStage.scene, podiumStage.camera)
+        return
+      }
+      // The bomb cinematic dilates sim time. Clamped again after scaling so a
+      // fast-forward frame can't hand the flight model a destabilising step.
+      const dt = bombCam.active()
+        ? Math.min(realDt * bombCam.timeScale(), MAX_SIM_DT)
+        : realDt
+
+      const raw = getFlightInput(dt)
+      if (raw.skipCinematic) bombCam.cancel()
+      if (raw.eject && !airCrashed && !airEnded && !ejectCam.active()) {
+        startEject()
+      }
+      // The shot takes the camera off the aircraft, so hand the stick to the
+      // auto-leveller for the duration — bombing runs start in a dive, and
+      // flying blind into the deck isn't the player's mistake. C takes over.
+      const input =
+        bombCam.active() || ejectCam.active()
+          ? { ...raw, pitch: 0, roll: 0, rudder: 0, handsOff: true, fire: false, dropBomb: false }
+          : raw
+      const tm = flight.update(dt, input)
+      if (!tm.crashed) air.spinProp(dt, tm.throttle)
+      if (tm.crashed) bombCam.cancel()
+      // Prop idle: throttle + airspeed; silent while crashed / match over.
+      if (airEnded || airCrashed || ejectCam.active()) {
+        propEngine.setIntensity(0)
+      } else {
+        const thr = tm.throttle
+        const spd = Math.min(1, tm.speed / 100)
+        propEngine.setIntensity(0.25 + thr * 0.45 + spd * 0.3)
+      }
+      // Chase cam keeps real dt so it isn't sluggish, and yields to the bomb
+      // cam — it re-acquires by lerping back from wherever the shot ended.
+      if (!bombCam.active() && !ejectCam.active() && !airCrashed) {
+        chase.update(realDt, tm)
+      }
+      ejectCam.update(realDt, camera)
+
+      if (!airEnded) {
+        const neighbors = airEnemies.concat(airFriendlies).map((a) => a.root)
+        const playerLive = airPlayerCombat.alive && !airCrashed
+        for (const unit of airEnemies) {
+          unit.update(dt, {
+            hostiles: playerLive ? [airPlayerHostile, ...airFriendlies] : airFriendlies,
+            neighbors,
+            playable,
+            colliders: mapColliders,
+            camera,
+            objective: airObjective,
+          })
+        }
+        for (const unit of airFriendlies) {
+          unit.update(dt, {
+            hostiles: airEnemies,
+            neighbors,
+            playable,
+            colliders: mapColliders,
+            camera,
+            objective: airObjective,
+          })
+        }
+
+        if (!airCrashed && !ejectCam.active()) {
+          guns.update(dt, input.fire, airEnemies, camera)
+          if (input.toggleSight) {
+            scopeOn = !scopeOn
+            console.info(`[Steel] Bombsight ${scopeOn ? 'ON' : 'OFF'}`)
+          }
+          bombs.update(dt, input.dropBomb, airEnemies, camera)
+        }
+
+        if (isKoth) {
+          airKoth = tickKoth(
+            airKoth,
+            dt,
+            countAirOnHill('red'),
+            countAirOnHill('blue'),
+          )
+          if (airHillRing) setHillRingColor(airHillRing, airKoth.owner)
+          flightHud.setKoth({
+            vostokHold: airKoth.vostokHold,
+            meridianHold: airKoth.meridianHold,
+            owner: airKoth.owner,
+            winSec: KOTH_WIN_SEC,
+          })
+          if (airKoth.winner) {
+            const won = airKoth.winner === team
+            const winner = nationByTeam(airKoth.winner)
+            finishAirMatch(
+              won ? 'win' : 'lose',
+              won ? 'Victory' : 'Defeat',
+              `${winner.name} held Midwood.`,
+              airKoth.winner,
+            )
+          }
+        } else if (
+          !airCrashed &&
+          airEnemies.length > 0 &&
+          airEnemies.every((e) => !e.alive)
+        ) {
+          finishAirMatch('win', 'Air Superiority', 'Every hostile vehicle destroyed.')
+        }
+
+        tickAirRespawns(dt)
+      }
+
+      updateWrecks(dt, smokeEarly ?? undefined)
+      bombCam.update(realDt, camera)
+      if (deferredAirEnd && !bombCam.active()) {
+        const end = deferredAirEnd
+        deferredAirEnd = null
+        presentAirMatchEnd(end.kind, end.title, end.sub, end.endTeam)
+      }
+
+      const pred = bombs.prediction()
+      flightHud.update(
+        tm,
+        { ammo: guns.ammo(), heat: guns.heat(), firing: guns.firing() },
+        {
+          remaining: bombs.remaining(),
+          fallTime: pred.valid ? pred.time : null,
+          onTarget: pred.valid && pred.lethal,
+          scopeOn,
+        },
+      )
+
+      renderer.render(scene, camera)
+
+      // ——— Bombsight pass ———
+      const showScope =
+        scopeOn && pred.valid && !tm.crashed && !bombCam.active() && !airCrashed
+      if (showScope) {
+        // Look from the aircraft down the release solution, so the scope frames
+        // exactly where a bomb dropped now would land.
+        scopeCam.position.copy(air.root.position)
+        scopeLook.copy(pred.point)
+        scopeCam.up.set(0, 1, 0)
+        scopeCam.lookAt(scopeLook)
+        scopeCam.updateProjectionMatrix()
+
+        const r = flightHud.scopeRect()
+        // Viewport/scissor take CSS pixels: Three.js multiplies by the pixel
+        // ratio itself, so scaling by DPR here would square it on a retina
+        // display. The GL origin is bottom-left, the HUD rect is top-left.
+        const glY = window.innerHeight - r.y - r.h
+        renderer.setScissorTest(true)
+        renderer.setViewport(r.x, glY, r.w, r.h)
+        renderer.setScissor(r.x, glY, r.w, r.h)
+        renderer.render(scene, scopeCam)
+        renderer.setScissorTest(false)
+        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
+      }
+    }
+    flyLoop()
+    return
+  }
+
   function spawnAt(teamSide: TeamId, index: number): THREE.Vector3 {
     const list = mapSpawns[teamSide]
     const base = list[index] ?? list[0]!
@@ -249,7 +865,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   setAimHeightAt(heightAt ?? null)
   fire.setHeightAt(heightAt ?? null)
 
-  const smoke = await createSmokeSystem(scene)
+  const smoke = smokeEarly ?? (await createSmokeSystem(scene))
 
   const playerSpawn = spawnAt(team, spawnIndex)
   // Face toward map center
@@ -271,50 +887,111 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const allAi: AiEnemy[] = []
   const aiSlots: Array<{ unit: AiEnemy; teamSide: TeamId; slot: number; deadFor: number }> =
     []
+  const board = createMatchScoreboard()
+  let aiSeq = 0
   try {
-    const loadingMsg = loading.querySelector('.loading-msg')
-    if (loadingMsg) loadingMsg.textContent = `Loading ${option.name}…`
-
-    const playerHandle = await loadPlayerTank(tankId)
+    const playerHandle = playerHandleEarly ?? (await loadPlayerTank(tankId))
 
     if (allyAiTanks.length > 0 || foeAiTanks.length > 0) {
-      if (loadingMsg) loadingMsg.textContent = 'Loading AI…'
       try {
         const allySlots = freeSpawnIndices(team, spawnIndex)
+        const foeSlots = freeSpawnIndices(opposite, null)
+        const jobs: Array<
+          Promise<{ unit: AiEnemy; teamSide: TeamId; slot: number; side: 'friendly' | 'enemy' }>
+        > = []
         for (let i = 0; i < allyAiTanks.length && i < allySlots.length; i++) {
-          const slot = allySlots[i]
+          const slot = allySlots[i]!
           const pos = spawnAt(team, slot)
           const yaw = Math.atan2(-pos.x, -pos.z)
-          const unit = await spawnAiPz3Enemy(scene, {
-            team: 'friendly',
-            tankId: allyAiTanks[i],
+          const tankForAi = allyAiTanks[i]!
+          const chassis = tankOptionById(tankForAi)
+          const id = `ai-${++aiSeq}`
+          const display = `${nationByTeam(team).short} ${chassis.name}`
+          const common = {
+            team: 'friendly' as const,
+            tankId: tankForAi,
             position: pos,
             yaw,
             smoke,
-            heightAt,
+            heightAt: sampleY,
             persistMesh: isKoth,
-          })
-          friendlies.push(unit)
-          allAi.push(unit)
-          aiSlots.push({ unit, teamSide: team, slot, deadFor: 0 })
+            onKill: () => board.noteKillById(id),
+            onDeath: () => board.noteDeathById(id),
+          }
+          jobs.push(
+            (isAircraftTankId(tankForAi)
+              ? spawnAiCorsair(scene, {
+                  ...common,
+                  bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
+                  ceiling: mapGroundY + AIR_CEILING,
+                  spawnAlt: AIR_SPAWN_ALT,
+                })
+              : spawnAiPz3Enemy(scene, common)
+            ).then((unit) => {
+              board.register({
+                id,
+                name: display,
+                tankId: tankForAi,
+                tankName: chassis.name,
+                team,
+                root: unit.root,
+              })
+              return { unit, teamSide: team, slot, side: 'friendly' as const }
+            }),
+          )
         }
-        const foeSlots = freeSpawnIndices(opposite, null)
         for (let i = 0; i < foeAiTanks.length && i < foeSlots.length; i++) {
-          const slot = foeSlots[i]
+          const slot = foeSlots[i]!
           const pos = spawnAt(opposite, slot)
           const yaw = Math.atan2(-pos.x, -pos.z)
-          const unit = await spawnAiPz3Enemy(scene, {
-            team: 'enemy',
-            tankId: foeAiTanks[i],
+          const tankForAi = foeAiTanks[i]!
+          const chassis = tankOptionById(tankForAi)
+          const id = `ai-${++aiSeq}`
+          const display = `${nationByTeam(opposite).short} ${chassis.name}`
+          const common = {
+            team: 'enemy' as const,
+            tankId: tankForAi,
             position: pos,
             yaw,
             smoke,
-            heightAt,
+            heightAt: sampleY,
             persistMesh: isKoth,
-          })
-          enemies.push(unit)
+            onKill: () => board.noteKillById(id),
+            onDeath: () => board.noteDeathById(id),
+          }
+          jobs.push(
+            (isAircraftTankId(tankForAi)
+              ? spawnAiCorsair(scene, {
+                  ...common,
+                  bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
+                  ceiling: mapGroundY + AIR_CEILING,
+                  spawnAlt: AIR_SPAWN_ALT,
+                })
+              : spawnAiPz3Enemy(scene, common)
+            ).then((unit) => {
+              board.register({
+                id,
+                name: display,
+                tankId: tankForAi,
+                tankName: chassis.name,
+                team: opposite,
+                root: unit.root,
+              })
+              return { unit, teamSide: opposite, slot, side: 'enemy' as const }
+            }),
+          )
+        }
+        const spawned = await Promise.allSettled(jobs)
+        for (const result of spawned) {
+          if (result.status !== 'fulfilled') {
+            console.warn('[Steel] AI spawn failed', result.reason)
+            continue
+          }
+          const { unit, teamSide, slot, side } = result.value
+          if (side === 'friendly') friendlies.push(unit)
+          else enemies.push(unit)
           allAi.push(unit)
-          aiSlots.push({ unit, teamSide: opposite, slot, deadFor: 0 })
+          aiSlots.push({ unit, teamSide, slot, deadFor: 0 })
         }
       } catch (err) {
         console.warn('[Steel] Failed to spawn AI', err)
@@ -337,6 +1014,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       armor: option.armor,
       label: 'Player',
       onDestroyed: (r) => {
+        board.noteDeath(r)
         console.info('[Steel] Player destroyed')
         if (isKoth) {
           r.visible = false
@@ -345,6 +1023,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
         spawnDestroyedWreck(scene, r, smoke)
       },
     })
+    const playerName = getSession()?.username?.trim() || 'Commander'
+    board.register({
+      id: 'player',
+      name: playerName,
+      tankId,
+      tankName: option.name,
+      team,
+      isPlayer: true,
+      root: tank,
+    })
+    fire.setOnKill(() => board.noteKill(tank))
     const playerHostile = playerAsHostile(playerCombat)
 
     const drive = createDriveController(option.drive)
@@ -395,6 +1084,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
         })
       : null
 
+    // ——— Kill cam ———
+    // Cued by `fire.ts` for a shell already in flight that its own armour
+    // preview says is fatal, so ordinary hits, bounces and misses never
+    // interrupt play. Ammo-rack kills are the one gap: `crit` is rolled with
+    // Math.random() at resolution time, so it can't be known in advance.
+    const killCam = createImpactCinematic({
+      heightAt: sampleY,
+      profile: KILL_SHOT,
+      onShow: (showing) => hud.setVisible(!showing),
+    })
+    fire.setOnLethalShot((shot) => {
+      if (matchOver || killCam.active()) return
+      killCam.begin(shot)
+      console.info(`[Steel] Kill cam — impact in ${shot.flightTime.toFixed(2)}s`)
+    })
+
     let cameraMode: CameraMode = 'turret'
     let aiming = false
     let matchOver = false
@@ -412,8 +1117,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const _fwd = new THREE.Vector3()
 
     updatePlayerCamera(cameraMode, camera, tank, turretMount, 1, aiming, muzzle)
+    stopProgress()
     loading.remove()
     lockPointer(renderer.domElement)
+
+    const dieselEngine = createDieselEngine()
+    dieselEngine.start()
+    dieselEngine.setIntensity(0.2)
+
     if (isKoth) {
       hud.setKoth({
         vostokHold: 0,
@@ -431,6 +1142,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (playerCombat.alive && team === side && inHill(tank.position.x, tank.position.z)) n++
       const list = side === team ? friendlies : enemies
       for (const u of list) {
+        if (u.aircraft) continue
         if (u.alive && inHill(u.root.position.x, u.root.position.z)) n++
       }
       return n
@@ -446,6 +1158,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       playerCombat.revive()
       playerDeadFor = 0
       hud.setRespawn(null)
+      dieselEngine.setIntensity(0.2)
       console.info('[Steel] Player KOTH respawn')
     }
 
@@ -473,15 +1186,46 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
     }
 
+    type MatchEndSpec = {
+      kind: 'win' | 'lose'
+      team?: TeamId
+      title?: string
+      sub?: string
+    }
+
+    function finishMatch(end: MatchEndSpec): void {
+      matchOver = true
+      dieselEngine.stop()
+      document.exitPointerLock()
+      hud.setVisible(false)
+      const rows = board.ranked()
+      showMatchEnd({ ...end, leaderboard: rows, podium3d: true })
+      void startVictoryStage(rows, end.kind === 'win', end.team)
+    }
+
+    /**
+     * The shot that ends the match is exactly the shot the kill cam is playing,
+     * so hold the end screen until the cinematic lets go — otherwise the podium
+     * lands on top of the kill it was built to celebrate.
+     */
+    let deferredEnd: MatchEndSpec | null = null
+    function requestMatchEnd(end: MatchEndSpec): void {
+      if (matchOver) return
+      matchOver = true
+      if (killCam.active()) {
+        deferredEnd = end
+        return
+      }
+      finishMatch(end)
+    }
+
     function checkMatchEnd(): void {
       if (matchOver) return
       if (isKoth) {
         if (!koth.winner) return
-        matchOver = true
-        document.exitPointerLock()
         const won = koth.winner === team
         const winner = nationByTeam(koth.winner)
-        showMatchEnd({
+        requestMatchEnd({
           kind: won ? 'win' : 'lose',
           team: koth.winner,
           title: won ? 'Victory' : 'Defeat',
@@ -490,15 +1234,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         return
       }
       if (!playerCombat.alive) {
-        matchOver = true
-        document.exitPointerLock()
-        showMatchEnd('lose')
+        requestMatchEnd({ kind: 'lose', team })
         return
       }
       if (enemies.length > 0 && enemies.every((e) => !e.alive)) {
-        matchOver = true
-        document.exitPointerLock()
-        showMatchEnd('win')
+        requestMatchEnd({ kind: 'win', team })
       }
     }
 
@@ -646,6 +1386,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
         _exhaust.set(0, 1.35, -2.4)
         tank.localToWorld(_exhaust)
         smoke.engineExhaust(_exhaust, 0.35 + Math.min(1, speed / 14) * 0.35)
+        const maxSp = Math.max(1, option.drive.maxSpeed)
+        dieselEngine.setIntensity(0.18 + Math.min(1, speed / maxSp) * 0.82)
+      } else {
+        dieselEngine.setIntensity(0)
       }
 
       if (allAi.length > 0) {
@@ -684,11 +1428,34 @@ async function startMission(sel: MenuSelection): Promise<void> {
       return aim
     }
 
-    function animate(): void {
+    function animate(now = performance.now()): void {
       requestAnimationFrame(animate)
-      const dt = Math.min(clock.getDelta(), 0.05)
+      timer.update(now)
+      const realDt = Math.min(timer.getDelta(), 0.05)
+      if (podiumStage) {
+        podiumStage.update(realDt)
+        renderer.render(podiumStage.scene, podiumStage.camera)
+        return
+      }
+      // C skips the kill cam rather than toggling camera mode — consuming the
+      // key here keeps it away from updateTank for this frame.
+      if (killCam.active() && consumeCameraToggle()) killCam.cancel()
+      const dt = killCam.active()
+        ? Math.min(realDt * killCam.timeScale(), MAX_SIM_DT)
+        : realDt
+
       const aim = updateTank(dt)
-      updatePlayerCamera(cameraMode, camera, tank, turretMount, dt, aiming, muzzle)
+      // Camera smoothing stays on real time so it never feels sluggish, and
+      // yields to the kill cam, which it then lerps back from.
+      if (!killCam.active()) {
+        updatePlayerCamera(cameraMode, camera, tank, turretMount, realDt, aiming, muzzle)
+      }
+      killCam.update(realDt, camera)
+      if (deferredEnd && !killCam.active()) {
+        const end = deferredEnd
+        deferredEnd = null
+        finishMatch(end)
+      }
       hud.updateCrosshairs(camera, aim.mouseHit, aim.barrelHit, aim.gunSynced)
       hud.updateCombat({
         hp: playerCombat.hp,
@@ -717,8 +1484,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
     )
     animate()
   } catch (err) {
-    loading.remove()
-    throw err
+    stopProgress()
+    console.error('[Steel] Mission failed to start', err)
+    loadingMsg.textContent = 'Could not load models. Check the network, then retry.'
+    if (!loading.querySelector('.loading-retry')) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'loading-retry'
+      btn.textContent = 'Reload'
+      btn.addEventListener('click', () => window.location.reload())
+      loading.appendChild(btn)
+    }
   }
 }
 

@@ -34,6 +34,7 @@ const _local = new THREE.Vector3()
 const _inv = new THREE.Matrix4()
 const _normalWorld = new THREE.Vector3()
 const _dir = new THREE.Vector3()
+const _localDir = new THREE.Vector3()
 
 /**
  * Build gameplay hit volumes from the tank's world bounds.
@@ -163,30 +164,71 @@ export function createTankHitVolumes(
     normalLocal: new THREE.Vector3(0, 0, 1),
   }
 
-  function pickNormal(part: LocalPart, localPoint: THREE.Vector3): THREE.Vector3 {
-    // If inside a slab, use configured normal; else nearest-face normal of that box
-    const b = part.box
-    const dxL = localPoint.x - b.min.x
-    const dxR = b.max.x - localPoint.x
-    const dyB = localPoint.y - b.min.y
-    const dyT = b.max.y - localPoint.y
-    const dzR = localPoint.z - b.min.z
-    const dzF = b.max.z - localPoint.z
-    const faces: Array<{ d: number; n: THREE.Vector3 }> = [
-      { d: dxL, n: new THREE.Vector3(-1, 0, 0) },
-      { d: dxR, n: new THREE.Vector3(1, 0, 0) },
-      { d: dyB, n: new THREE.Vector3(0, -1, 0) },
-      { d: dyT, n: new THREE.Vector3(0, 1, 0) },
-      { d: dzR, n: new THREE.Vector3(0, 0, -1) },
-      { d: dzF, n: new THREE.Vector3(0, 0, 1) },
-    ]
-    faces.sort((a, b) => a.d - b.d)
-    // Prefer the authoring normal when it's among the two closest faces
-    const best = faces[0].n
-    if (part.normalLocal.dot(best) > 0.5 || part.normalLocal.dot(faces[1]?.n ?? best) > 0.5) {
-      return part.normalLocal.clone()
+  /**
+   * Plate normal for armour resolution.
+   *
+   * Always the **authored** outward normal for that plate — never the nearest
+   * AABB face of the hit volume. Hits are point samples, so a sample that
+   * lands deep in a plate box is nearer that box's *inner* face; picking by
+   * proximity flipped the normal and made dead-on shots report ricochets
+   * (`against <= 0.08`). Oblique ricochets still work: the tank's yaw rotates
+   * the authored normal in world space, so a turned front plate still exceeds
+   * `autoRicochetDeg`.
+   *
+   * After transforming to world, flip so the normal faces the incoming round
+   * (in case a part table ever stores an inward vector).
+   */
+  function plateNormalWorld(
+    part: LocalPart,
+    incomingDir: THREE.Vector3,
+    out: THREE.Vector3,
+  ): THREE.Vector3 {
+    out.copy(part.normalLocal).transformDirection(root.matrixWorld).normalize()
+    if (out.dot(incomingDir) > 0) out.negate()
+    return out
+  }
+
+  /**
+   * When a sample lands inside the broad hull (skipping a thin outer plate at
+   * ~1.5 m/step), pick the plate the round *entered through* from its local
+   * travel direction — not from where the sample sits inside.
+   *
+   * Entry face = the face opposing travel: a round with localDir.z > 0 came in
+   * through the rear (−Z), not the front.
+   */
+  function hullFallbackFromDir(localDir: THREE.Vector3): LocalPart {
+    const ax = Math.abs(localDir.x)
+    const ay = Math.abs(localDir.y)
+    const az = Math.abs(localDir.z)
+    if (ay >= ax && ay >= az) {
+      // Steep dive / loft into the roof — treat as turret ring vulnerability.
+      return {
+        def: armorTable.turretRing,
+        box: hullFallback.box,
+        normalLocal: new THREE.Vector3(0, localDir.y > 0 ? -1 : 1, 0),
+      }
     }
-    return best
+    if (az >= ax) {
+      if (localDir.z > 0) {
+        // Traveling nose-ward → entered through the rear.
+        return {
+          def: armorTable.hullRear,
+          box: hullFallback.box,
+          normalLocal: new THREE.Vector3(0, 0, -1),
+        }
+      }
+      return {
+        def: armorTable.hullFront,
+        box: hullFallback.box,
+        normalLocal: new THREE.Vector3(0, 0, 1),
+      }
+    }
+    // Traveling +X → entered through the left (−X) side.
+    return {
+      def: armorTable.hullSide,
+      box: hullFallback.box,
+      normalLocal: new THREE.Vector3(localDir.x > 0 ? -1 : 1, 0, 0),
+    }
   }
 
   return {
@@ -197,6 +239,11 @@ export function createTankHitVolumes(
       _inv.copy(root.matrixWorld).invert()
       _local.copy(worldPoint).applyMatrix4(_inv)
 
+      _dir.copy(velocity)
+      if (_dir.lengthSq() < 1e-6) return null
+      _dir.normalize()
+      _localDir.copy(_dir).transformDirection(_inv).normalize()
+
       let hit: LocalPart | null = null
       for (const p of parts) {
         if (p.box.containsPoint(_local)) {
@@ -206,28 +253,10 @@ export function createTankHitVolumes(
       }
       if (!hit) {
         if (!hullFallback.box.containsPoint(_local)) return null
-        hit = hullFallback
-        const z = _local.z
-        const x = _local.x
-        const zMid = (min.z + max.z) * 0.5
-        if (z > zMid + (max.z - min.z) * 0.2)
-          hit = { ...hit, def: armorTable.hullFront, normalLocal: new THREE.Vector3(0, 0, 1) }
-        else if (z < zMid - (max.z - min.z) * 0.2)
-          hit = { ...hit, def: armorTable.hullRear, normalLocal: new THREE.Vector3(0, 0, -1) }
-        else if (Math.abs(x - mid.x) > (max.x - min.x) * 0.25) {
-          hit = {
-            ...hit,
-            def: armorTable.hullSide,
-            normalLocal: new THREE.Vector3(Math.sign(x - mid.x) || 1, 0, 0),
-          }
-        }
+        hit = hullFallbackFromDir(_localDir)
       }
 
-      const nLocal = pickNormal(hit, _local)
-      _normalWorld.copy(nLocal).transformDirection(root.matrixWorld).normalize()
-      _dir.copy(velocity)
-      if (_dir.lengthSq() < 1e-6) return null
-      _dir.normalize()
+      plateNormalWorld(hit, _dir, _normalWorld)
 
       return resolveArmorHit(hit.def, _normalWorld, _dir, {
         speed: velocity.length(),

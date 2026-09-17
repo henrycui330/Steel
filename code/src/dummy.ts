@@ -1,6 +1,5 @@
 import * as THREE from 'three'
-import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { cloneGltfScene } from './loadGltf'
 import type { HitResolution, ShellImpact } from './armor'
 import type { ShellHitContext } from './combatant'
 import { createTankHitVolumes } from './hitParts'
@@ -31,6 +30,16 @@ export type DummyTarget = {
     shellStats: Omit<ShellImpact, 'speed'>,
     ctx?: ShellHitContext,
   ) => DummyHitResult | null
+  /**
+   * Same resolution **without** applying it, so the kill cam can tell whether
+   * a shell in flight is lethal. Decide on `damage >= hp`; the `crit` flag is
+   * a fresh random roll that won't match the real hit's.
+   */
+  previewShellHit: (
+    p: THREE.Vector3,
+    velocity: THREE.Vector3,
+    shellStats: Omit<ShellImpact, 'speed'>,
+  ) => HitResolution | null
 }
 
 function enableShadows(root: THREE.Object3D): void {
@@ -63,13 +72,7 @@ export async function spawnStaticPz3Dummy(
   yaw = Math.PI,
 ): Promise<DummyTarget> {
   const url = tankOptionById('pz3').url
-  const loader = new GLTFLoader()
-  const draco = new DRACOLoader()
-  draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/')
-  loader.setDRACOLoader(draco)
-
-  const gltf = await loader.loadAsync(url)
-  const model = gltf.scene
+  const model = await cloneGltfScene(url)
   model.name = 'dummyPz3Model'
   normalizeModel(model)
   paintTankDunkelgrau(model)
@@ -116,6 +119,11 @@ export async function spawnStaticPz3Dummy(
     containsPoint(p) {
       if (!alive) return false
       return broad.containsPoint(p)
+    },
+    previewShellHit(p, velocity, shellStats) {
+      if (!alive) return null
+      volumes.updateWorld()
+      return volumes.resolveHit(p, velocity, shellStats)
     },
     resolveShellHit(p, velocity, shellStats) {
       if (!alive) return null

@@ -81,6 +81,19 @@ export function setAimRates(traverseRadPerSec: number, elevateRadPerSec: number)
   barrelPitchRate = elevateRadPerSec
 }
 
+/** Gun depression / elevation limits (degrees). AA needs a much higher max. */
+export function setAimPitchLimits(minDeg: number, maxDeg: number): void {
+  pitchMin = THREE.MathUtils.degToRad(minDeg)
+  pitchMax = THREE.MathUtils.degToRad(maxDeg)
+  aimPitchMin = THREE.MathUtils.degToRad(minDeg - 4)
+  aimPitchMax = THREE.MathUtils.degToRad(maxDeg + 8)
+}
+
+/** Restore MBT-ish defaults after an AA / SPG session. */
+export function resetAimPitchLimits(): void {
+  setAimPitchLimits(-8, 20)
+}
+
 /** Overwrite local aim (artillery location mark). */
 export function setAimLocalYawPitch(yaw: number, pitch: number): void {
   aimLocalYaw = yaw

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { assetUrl } from './assetUrl'
+import { loadGltfCached } from './loadGltf'
 import { ammoById, type AmmoId, type WeaponId, type AmmoDef } from './ammo'
 import {
   integrateShell,
@@ -7,11 +8,14 @@ import {
   SHELL_SPEED,
   type HeightSampler,
 } from './ballistics'
+import type { ShellImpact } from './armor'
 import { getAimDirection } from './aim'
 import { playFireSound } from './audio'
 import type { DummyTarget } from './dummy'
 import { hitsPropCollider, type PropCollider } from './collision'
 import { showHitBanner, worldToScreen } from './hitFeedback'
+import type { TrackedProjectile } from './impactCinematic'
+import { predictLethalHit } from './lethalShot'
 import type { GunProfile } from './tankCatalog'
 
 const SHELL_LIFETIME = 4
@@ -25,7 +29,7 @@ const MG_RADIUS = 0.045
 const MG_SPEED = SHELL_SPEED * 1.05
 /** Visible shell length in meters (model is huge Sketchfab units). */
 const SHELL_MODEL_LENGTH = 0.55
-const SHELL_MODEL_URL = '/models/88mm_shell.glb'
+const SHELL_MODEL_URL = assetUrl('models/88mm_shell.glb')
 
 export type FireHudState = {
   weapon: WeaponId
@@ -43,6 +47,12 @@ type Shell = {
   ammoId: AmmoId
   lifetime: number
   hitRadius: number
+  /** False once removed — the kill cam holds the handle past the impact. */
+  dead: boolean
+  /** The kill cam has already been offered this shell. */
+  tracked: boolean
+  /** Unspent frame time, carried so every step is exactly SHELL_SUBSTEP. */
+  accum: number
 }
 
 type PendingShot = {
@@ -71,8 +81,30 @@ export type FireSystem = {
   toggleWeapon: () => void
   getWeapon: () => WeaponId
   getHudState: () => FireHudState
+  /** Called when a player shell destroys a target (victim root). */
+  setOnKill: (fn: ((victim: THREE.Object3D) => void) | null) => void
+  /**
+   * Called once for a shell in flight that is predicted to destroy what it is
+   * about to hit — the kill cam's cue. Fires with `KILL_CAM_LEAD` to run.
+   */
+  setOnLethalShot: (fn: ((shot: TrackedProjectile) => void) | null) => void
   dispose: () => void
 }
+
+/** How much of a shell's flight the kill cam gets, in sim seconds. */
+const KILL_CAM_LEAD = 0.45
+/**
+ * Shells advance in fixed steps with the remainder carried between frames,
+ * never in one variable-sized frame step.
+ *
+ * Hits are point samples against the armour volumes, so the step size decides
+ * which plate a shell can land on: a whole 60 fps frame is ~3 m of travel at
+ * 180 u/s, wide enough to skip straight over a 1.6 m-deep rear plate, and a
+ * frame-time wobble was enough to turn a penetration into a bounce. Fixed
+ * steps make a given shot resolve the same way on any machine, and let the
+ * kill cam's look-ahead march the exact sample sequence the shell will follow.
+ */
+const SHELL_SUBSTEP = 1 / 120
 
 const _origin = new THREE.Vector3()
 const _dir = new THREE.Vector3()
@@ -155,8 +187,7 @@ export function createFireSystem(
   const mgGeometry = new THREE.SphereGeometry(MG_RADIUS, 6, 6)
   let shellTemplate: THREE.Group | null = null
   let shellTemplateFailed = false
-  void new GLTFLoader()
-    .loadAsync(SHELL_MODEL_URL)
+  void loadGltfCached(SHELL_MODEL_URL)
     .then((gltf) => {
       shellTemplate = prepareShellModel(gltf.scene)
       console.info('[Steel] 88mm shell model ready')
@@ -175,6 +206,8 @@ export function createFireSystem(
   let chambered: AmmoId | null = 'aphe'
   let weapon: WeaponId = 'main'
   let mgCooldown = 0
+  let onKill: ((victim: THREE.Object3D) => void) | null = null
+  let onLethalShot: ((shot: TrackedProjectile) => void) | null = null
   let gun: GunProfile = {
     aphePen: 120,
     apheDmg: 320,
@@ -286,11 +319,15 @@ export function createFireSystem(
       ammoId,
       lifetime: isMg ? MG_LIFETIME : SHELL_LIFETIME,
       hitRadius: isMg ? MG_RADIUS : SHELL_RADIUS,
+      dead: false,
+      tracked: false,
+      accum: 0,
     })
   }
 
   function removeAt(index: number): void {
     const shell = shells[index]
+    shell.dead = true
     scene.remove(shell.mesh)
     // MG / sphere fallback own their materials; GLB clones share template geo — don't dispose.
     if (shell.mesh instanceof THREE.Mesh) {
@@ -333,6 +370,15 @@ export function createFireSystem(
     if (s.visible) showHitBanner(text, kind, s.x, s.y - 28)
   }
 
+  function shellStatsFor(ammoId: AmmoId): Omit<ShellImpact, 'speed'> {
+    const eff = effectiveAmmo(ammoById(ammoId))
+    return {
+      basePenetration: eff.penetration,
+      baseDamage: eff.penDamage,
+      blastDamage: eff.blastDamage,
+    }
+  }
+
   function processDummyHits(
     shell: Shell,
     shellIndex: number,
@@ -340,13 +386,7 @@ export function createFireSystem(
     camera: THREE.Camera | undefined,
   ): boolean {
     if (!dummies) return false
-    const def = ammoById(shell.ammoId)
-    const eff = effectiveAmmo(def)
-    const stats = {
-      basePenetration: eff.penetration,
-      baseDamage: eff.penDamage,
-      blastDamage: eff.blastDamage,
-    }
+    const stats = shellStatsFor(shell.ammoId)
 
     for (const d of dummies) {
       if (!d.containsPoint(shell.mesh.position)) continue
@@ -358,6 +398,7 @@ export function createFireSystem(
       const { resolution, destroyed, tracksDisabled } = result
       _sparkPos.copy(shell.mesh.position)
       const isMg = shell.ammoId === 'mg'
+      if (destroyed) onKill?.(d.root)
       if (resolution.kind === 'ricochet') {
         flashSpark(scene, _sparkPos, 0xe8e8e8, isMg ? 0.45 : 1)
         if (!isMg) {
@@ -450,6 +491,12 @@ export function createFireSystem(
     getWeapon() {
       return weapon
     },
+    setOnKill(fn) {
+      onKill = fn
+    },
+    setOnLethalShot(fn) {
+      onLethalShot = fn
+    },
     selectAmmo(id) {
       if (id === 'mg') {
         this.setWeapon('mg')
@@ -534,32 +581,72 @@ export function createFireSystem(
       for (let i = shells.length - 1; i >= 0; i--) {
         const shell = shells[i]
         shell.age += dt
-        integrateShell(shell.mesh.position, shell.velocity, dt)
+        shell.accum += dt
+
+        let removed = false
+        while (shell.accum >= SHELL_SUBSTEP) {
+          shell.accum -= SHELL_SUBSTEP
+          integrateShell(shell.mesh.position, shell.velocity, SHELL_SUBSTEP)
+
+          if (hitGround(shell.mesh.position, shell.hitRadius)) {
+            removeAt(i)
+            removed = true
+            break
+          }
+
+          // A ricochet returns false: the round lives on with a reflected
+          // velocity, so keep stepping it through the rest of the frame.
+          if (processDummyHits(shell, i, dummies, camera)) {
+            removed = true
+            break
+          }
+
+          if (
+            propColliders &&
+            propColliders.length > 0 &&
+            hitsPropCollider(shell.mesh.position, propColliders, shell.hitRadius)
+          ) {
+            flashSpark(scene, shell.mesh.position, 0xb0a080, shell.ammoId === 'mg' ? 0.4 : 1)
+            removeAt(i)
+            removed = true
+            break
+          }
+        }
+        if (removed) continue
 
         if (shell.velocity.lengthSq() > 1e-4) {
           _look.copy(shell.mesh.position).add(shell.velocity)
           shell.mesh.lookAt(_look)
         }
 
-        if (hitGround(shell.mesh.position, shell.hitRadius)) {
-          removeAt(i)
-          continue
-        }
-
-        if (processDummyHits(shell, i, dummies, camera)) continue
-
-        if (
-          propColliders &&
-          propColliders.length > 0 &&
-          hitsPropCollider(shell.mesh.position, propColliders, shell.hitRadius)
-        ) {
-          flashSpark(scene, shell.mesh.position, 0xb0a080, shell.ammoId === 'mg' ? 0.4 : 1)
-          removeAt(i)
-          continue
-        }
-
         if (shell.age >= shell.lifetime || outOfBounds(shell.mesh.position)) {
           removeAt(i)
+          continue
+        }
+
+        // Kill cam cue. MG rounds are excluded: a burst would re-trigger on
+        // every round in the air, and a fatal .30 cal is a fluke, not a shot.
+        if (onLethalShot && !shell.tracked && shell.ammoId !== 'mg' && dummies) {
+          const lethal = predictLethalHit({
+            position: shell.mesh.position,
+            velocity: shell.velocity,
+            hitRadius: shell.hitRadius,
+            stats: shellStatsFor(shell.ammoId),
+            targets: dummies,
+            dt: SHELL_SUBSTEP,
+            horizon: KILL_CAM_LEAD,
+            heightAt,
+            blockers: propColliders,
+          })
+          if (lethal) {
+            shell.tracked = true
+            onLethalShot({
+              position: shell.mesh.position,
+              impact: lethal.point,
+              flightTime: lethal.time,
+              live: () => !shell.dead,
+            })
+          }
         }
       }
 

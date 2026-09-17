@@ -81,6 +81,8 @@ export type AiUpdateContext = {
 
 export type AiEnemy = DummyTarget & {
   team: AiTeam
+  /** True for SPAAG / Corsair AI — skips KOTH hill occupancy. */
+  aircraft?: boolean
   update: (dt: number, ctx: AiUpdateContext) => void
   reviveAt: (pos: THREE.Vector3, yaw: number) => void
 }
@@ -95,6 +97,10 @@ export type AiSpawnOptions = {
   heightAt?: (x: number, z: number) => number
   /** If false, hide the tank on death (KOTH respawn) instead of wrecking it. */
   persistMesh?: boolean
+  /** Called when this AI's shell destroys a target. */
+  onKill?: () => void
+  /** Called when this AI is destroyed (before wreck / hide). */
+  onDeath?: (root: THREE.Object3D) => void
 }
 
 const _muzzlePos = new THREE.Vector3()
@@ -219,6 +225,7 @@ export async function spawnAiPz3Enemy(
     armor: chassis.armor,
     label,
     onDestroyed: (r) => {
+      opts.onDeath?.(r)
       if (persistMesh) {
         r.visible = false
         return
@@ -317,6 +324,7 @@ export async function spawnAiPz3Enemy(
         else showHitBanner(`HIT −${resolution.damage}${youTag}`, 'pen', s.x, s.y - 28)
       }
     }
+    if (destroyed) opts.onKill?.()
     return true
   }
 
@@ -380,6 +388,7 @@ export async function spawnAiPz3Enemy(
     maxHp: combat.maxHp,
     containsPoint: (p) => combat.containsPoint(p),
     resolveShellHit: (p, v, s, ctx) => combat.resolveShellHit(p, v, s, ctx),
+    previewShellHit: (p, v, s) => combat.previewShellHit(p, v, s),
 
     update(dt, ctx) {
       const { hostiles, neighbors, playable, colliders, camera, objective } = ctx
