@@ -1,7 +1,6 @@
 import type { AmmoId } from './ammo'
 import { AMMO_ORDER, AMMO_TYPES } from './ammo'
 import type { FireHudState } from './fire'
-import { assetUrl, fixPublicUrl } from './assetUrl'
 import { nationByTeam, nationFlagSrc } from './nations'
 import * as THREE from 'three'
 
@@ -106,6 +105,176 @@ function headingCardinal(deg: number): string {
   return labels[i]!
 }
 
+const _proj = new THREE.Vector3()
+
+/** World point → CSS pixels. False when behind the camera. */
+function projectToScreen(
+  camera: THREE.Camera,
+  world: THREE.Vector3,
+): { x: number; y: number; on: boolean } {
+  _proj.copy(world).project(camera)
+  const on = _proj.z > -1 && _proj.z < 1
+  return {
+    x: (_proj.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-_proj.y * 0.5 + 0.5) * window.innerHeight,
+    on,
+  }
+}
+
+export type MinimapWidget = {
+  el: HTMLElement
+  update: (opts: {
+    posX: number
+    posZ: number
+    headingDeg: number
+    foes?: ReadonlyArray<{ x: number; z: number }>
+    allies?: ReadonlyArray<{ x: number; z: number }>
+  }) => void
+}
+
+/** Shared tactical map — tank HUD and flight HUD. */
+export function createMinimapWidget(minimap?: HudMinimapConfig): MinimapWidget {
+  const mapSizeX = Math.max(1, minimap?.mapSizeX ?? minimap?.mapSize ?? 150)
+  const mapSizeZ = Math.max(1, minimap?.mapSizeZ ?? minimap?.mapSize ?? mapSizeX)
+  const halfX = mapSizeX * 0.5
+  const halfZ = mapSizeZ * 0.5
+  const aspect = mapSizeX / mapSizeZ
+  const svgH = 180
+  const svgW = Math.max(56, Math.round(svgH * aspect))
+  const theme = minimap?.theme ?? 'default'
+  const toCx = (x: number) => ((x + halfX) / mapSizeX) * svgW
+  const toCy = (z: number) => ((halfZ - z) / mapSizeZ) * svgH
+  const pathStroke = Math.max(1.6, (10 / Math.max(mapSizeX, mapSizeZ)) * svgH)
+
+  const el = document.createElement('div')
+  el.className = `hud-minimap is-${theme}`
+  el.innerHTML = `
+    <div class="minimap-frame">
+      <svg class="minimap-svg" viewBox="0 0 ${svgW} ${svgH}" aria-hidden="true">
+        <defs>
+          <linearGradient id="mm-forest-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#3a6b3e"/>
+            <stop offset="55%" stop-color="#4f7d45"/>
+            <stop offset="100%" stop-color="#2f5534"/>
+          </linearGradient>
+          <linearGradient id="mm-desert-grad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#c9a878"/>
+            <stop offset="100%" stop-color="#a8895c"/>
+          </linearGradient>
+          <linearGradient id="mm-city-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#4a4e52"/>
+            <stop offset="50%" stop-color="#5a5e62"/>
+            <stop offset="100%" stop-color="#3a3e42"/>
+          </linearGradient>
+        </defs>
+        <rect class="minimap-arena minimap-arena-${theme}" x="0" y="0" width="${svgW}" height="${svgH}" />
+        <g class="minimap-paths"></g>
+        <g class="minimap-towns"></g>
+        <g class="minimap-hill"></g>
+        <g class="minimap-spawns"></g>
+        <g class="minimap-foes"></g>
+        <g class="minimap-allies"></g>
+        <polygon class="minimap-player" points="0,-7 5.5,6 -5.5,6" />
+      </svg>
+      <div class="minimap-legend">
+        <span class="mm-key mm-road"></span>ROAD
+        <span class="mm-key mm-town"></span>TOWN
+        <span class="mm-key mm-you"></span>YOU
+      </div>
+    </div>
+  `
+  const pathsG = el.querySelector('.minimap-paths') as SVGGElement
+  const townsG = el.querySelector('.minimap-towns') as SVGGElement
+  const spawnsG = el.querySelector('.minimap-spawns') as SVGGElement
+  const foesG = el.querySelector('.minimap-foes') as SVGGElement
+  const alliesG = el.querySelector('.minimap-allies') as SVGGElement
+  const playerMark = el.querySelector('.minimap-player') as SVGPolygonElement
+
+  if (minimap?.paths) {
+    for (const path of minimap.paths) {
+      if (path.points.length < 2) continue
+      const d = path.points
+        .map((p, i) => `${i === 0 ? 'M' : 'L'}${toCx(p.x).toFixed(1)} ${toCy(p.z).toFixed(1)}`)
+        .join(' ')
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      line.setAttribute('class', 'minimap-road')
+      line.setAttribute('d', d)
+      line.setAttribute('fill', 'none')
+      line.setAttribute('stroke-width', String(pathStroke))
+      pathsG.appendChild(line)
+    }
+  }
+  if (minimap?.towns) {
+    for (const t of minimap.towns) {
+      const r = ((t.radius ?? 120) / Math.max(mapSizeX, mapSizeZ)) * svgH
+      const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      c.setAttribute('class', 'minimap-town')
+      c.setAttribute('cx', String(toCx(t.x)))
+      c.setAttribute('cy', String(toCy(t.z)))
+      c.setAttribute('r', String(Math.max(5, r * 0.55)))
+      townsG.appendChild(c)
+      if (t.name) {
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        label.setAttribute('class', 'minimap-town-label')
+        label.setAttribute('x', String(toCx(t.x)))
+        label.setAttribute('y', String(toCy(t.z) + 3))
+        label.textContent = t.name.slice(0, 3).toUpperCase()
+        townsG.appendChild(label)
+      }
+    }
+  }
+  if (minimap?.hill) {
+    const hillG = el.querySelector('.minimap-hill') as SVGGElement
+    const hx = toCx(minimap.hill.x)
+    const hy = toCy(minimap.hill.z)
+    const hr = (minimap.hill.radius / mapSizeZ) * svgH
+    const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+    ring.setAttribute('class', 'minimap-hill-ring')
+    ring.setAttribute('cx', String(hx))
+    ring.setAttribute('cy', String(hy))
+    ring.setAttribute('r', String(Math.max(6, hr)))
+    hillG.appendChild(ring)
+  }
+  if (minimap?.spawns) {
+    for (const s of minimap.spawns) {
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+      dot.setAttribute('class', `minimap-spawn minimap-spawn-${s.team}`)
+      dot.setAttribute('cx', String(toCx(s.x)))
+      dot.setAttribute('cy', String(toCy(s.z)))
+      dot.setAttribute('r', '2.4')
+      spawnsG.appendChild(dot)
+    }
+  }
+
+  return {
+    el,
+    update(opts) {
+      playerMark.setAttribute(
+        'transform',
+        `translate(${toCx(opts.posX)} ${toCy(opts.posZ)}) rotate(${opts.headingDeg})`,
+      )
+      foesG.replaceChildren()
+      for (const f of opts.foes ?? []) {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        dot.setAttribute('class', 'minimap-foe')
+        dot.setAttribute('cx', String(toCx(f.x)))
+        dot.setAttribute('cy', String(toCy(f.z)))
+        dot.setAttribute('r', '3.2')
+        foesG.appendChild(dot)
+      }
+      alliesG.replaceChildren()
+      for (const a of opts.allies ?? []) {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        dot.setAttribute('class', 'minimap-ally')
+        dot.setAttribute('cx', String(toCx(a.x)))
+        dot.setAttribute('cy', String(toCy(a.z)))
+        dot.setAttribute('r', '2.8')
+        alliesG.appendChild(dot)
+      }
+    },
+  }
+}
+
 /**
  * Tank combat HUD — Phase U + minimap.
  * Corners · sight READY/range · compass · speed · minimap.
@@ -117,12 +286,11 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
   const mouse = document.createElement('div')
   mouse.className = 'xhair xhair-mouse'
-  mouse.innerHTML =
-    `<img class="xhair-img" src="${fixPublicUrl(assetUrl('assets/crosshair.png'))}" alt="" draggable="false" />`
+  mouse.innerHTML = '<span class="xhair-dot"></span>'
 
   const barrel = document.createElement('div')
   barrel.className = 'xhair xhair-barrel'
-  barrel.setAttribute('hidden', '')
+  barrel.innerHTML = '<span class="xhair-dot"></span>'
 
   const aimMask = document.createElement('div')
   aimMask.className = 'aim-mask'
@@ -424,11 +592,12 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     setAiming(aiming) {
       root.classList.toggle('is-aiming', aiming)
     },
-    updateCrosshairs(_camera, _mouseHit, _barrelHit, _gunSynced = false) {
-      const cx = window.innerWidth * 0.5
-      const cy = window.innerHeight * 0.5
-      placeEl(mouse, cx, cy, true)
-      placeEl(barrel, cx, cy, true)
+    updateCrosshairs(camera, mouseHit, barrelHit, gunSynced = false) {
+      const mousePt = projectToScreen(camera, mouseHit)
+      const barrelPt = projectToScreen(camera, barrelHit)
+      placeEl(mouse, mousePt.x, mousePt.y, mousePt.on)
+      placeEl(barrel, barrelPt.x, barrelPt.y, barrelPt.on)
+      barrel.classList.toggle('is-synced', gunSynced)
     },
     updateCombat(state) {
       const hpPct = THREE.MathUtils.clamp(state.hp / state.maxHp, 0, 1)

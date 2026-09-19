@@ -158,6 +158,16 @@ export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSe
       if ('map' in mat) {
         mat.map = map
         if ('color' in mat && mat.color) mat.color.set(0xffffff)
+        // Old normal / ORM maps stay in UV space 1 and tint large roof plates.
+        mat.normalMap = null
+        mat.roughnessMap = null
+        mat.metalnessMap = null
+        mat.aoMap = null
+        mat.metalness = 0.08
+        mat.roughness = 0.86
+        if ('specularIntensity' in mat) {
+          ;(mat as THREE.MeshPhysicalMaterial).specularIntensity = 0
+        }
         mat.needsUpdate = true
       }
       return mat

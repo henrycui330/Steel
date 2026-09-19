@@ -1,0 +1,92 @@
+.lock-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+  font-family: 'Courier New', Courier, monospace;
+}
+
+.lock-diamond {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  will-change: transform;
+}
+
+.lock-diamond-ring,
+.lock-diamond-fill {
+  position: absolute;
+  inset: 0;
+  display: block;
+  box-sizing: border-box;
+}
+
+.lock-diamond-ring {
+  border: 2px solid rgba(120, 220, 140, 0.85);
+  background: transparent;
+}
+
+.lock-diamond-fill {
+  inset: 4px;
+  background: rgba(120, 220, 140, 0.15);
+  transform: scale(0.15);
+  transform-origin: center;
+}
+
+.lock-diamond[data-mode='soft'] .lock-diamond-ring {
+  border-color: rgba(160, 210, 255, 0.9);
+}
+
+.lock-diamond[data-mode='soft'] .lock-diamond-fill {
+  background: transparent;
+  transform: scale(0) !important;
+}
+
+.lock-diamond[data-mode='acquiring'] .lock-diamond-ring {
+  border-color: rgba(240, 200, 80, 0.95);
+}
+
+.lock-diamond[data-mode='acquiring'] .lock-diamond-fill {
+  background: rgba(240, 200, 80, 0.35);
+}
+
+.lock-diamond[data-mode='hard'] .lock-diamond-ring {
+  border-color: rgba(255, 70, 70, 0.95);
+  box-shadow: 0 0 10px rgba(255, 60, 60, 0.45);
+}
+
+.lock-diamond[data-mode='hard'] .lock-diamond-fill {
+  background: rgba(255, 70, 70, 0.45);
+  transform: scale(1) !important;
+}
+
+.lock-banner {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  padding: 0.35rem 1.1rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #ff4a4a;
+  text-shadow:
+    0 0 8px rgba(255, 40, 40, 0.7),
+    0 1px 0 #200;
+  border: 2px solid rgba(255, 70, 70, 0.85);
+  background: rgba(20, 0, 0, 0.55);
+  animation: lock-banner-pulse 0.9s ease-in-out infinite;
+  white-space: nowrap;
+}
+
+@keyframes lock-banner-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}

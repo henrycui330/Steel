@@ -73,6 +73,13 @@ export type GunOptions = {
   bounds: { x: number; z: number }
   /** Aircraft world velocity, added to muzzle velocity. */
   velocity: THREE.Vector3
+  /**
+   * Local muzzle stations. Default = six wing .50s.
+   * Pass a single nose station for jets (e.g. F-16 M61).
+   */
+  stations?: ReadonlyArray<readonly [number, number, number]>
+  /** If true, each station is used once (no left/right mirror). */
+  noMirrorStations?: boolean
 }
 
 export function createAircraftGuns(opts: GunOptions): AircraftGuns {
@@ -86,7 +93,16 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
 
   // Muzzles are real children so they inherit the aircraft's attitude.
   const muzzles: THREE.Object3D[] = []
-  for (const [x, y, z] of STATIONS) {
+  const stations = opts.stations ?? STATIONS
+  const mirror = !opts.noMirrorStations
+  for (const [x, y, z] of stations) {
+    if (!mirror) {
+      const m = new THREE.Object3D()
+      m.position.set(x, y, z)
+      root.add(m)
+      muzzles.push(m)
+      continue
+    }
     for (const side of [1, -1]) {
       const m = new THREE.Object3D()
       m.position.set(x * side, y, z)

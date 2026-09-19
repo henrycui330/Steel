@@ -1,6 +1,6 @@
 import './flightHud.css'
 import type { FlightTelemetry } from './aircraftFlight'
-import type { HudKothState } from './hud'
+import { createMinimapWidget, type HudKothState, type HudMinimapConfig } from './hud'
 import { nationByTeam, nationFlagSrc } from './nations'
 
 /**
@@ -34,13 +34,37 @@ export type BombHudState = {
   scopeOn: boolean
 }
 
+/** F-16 missile lock + ammo. */
+export type MissileHudState = {
+  phase: 'idle' | 'soft' | 'acquiring' | 'hard'
+  ammo?: number
+}
+
 /** Screen rect of the scope, so the renderer can match its viewport. */
 export type ScopeRect = { x: number; y: number; w: number; h: number }
 export const SCOPE_SIZE = 300
 export const SCOPE_PAD = 20
 
+export type FlightTactical = {
+  hp: number
+  maxHp: number
+  posX: number
+  posZ: number
+  /** Map arrow: 0 = +Z, clockwise toward +X. Not the compass tape. */
+  headingDeg: number
+  foes?: ReadonlyArray<{ x: number; z: number }>
+  allies?: ReadonlyArray<{ x: number; z: number }>
+}
+
 export type FlightHud = {
-  update: (tm: FlightTelemetry, guns?: GunHudState, bombs?: BombHudState) => void
+  update: (
+    tm: FlightTelemetry,
+    guns?: GunHudState,
+    bombs?: BombHudState,
+    tactical?: FlightTactical,
+    missiles?: MissileHudState | null,
+    countermeasures?: { releasing: boolean } | null,
+  ) => void
   setVisible: (visible: boolean) => void
   setKoth: (state: HudKothState | null) => void
   setRespawn: (secondsLeft: number | null) => void
@@ -72,7 +96,7 @@ function ladderHtml(): string {
   return rows.join('')
 }
 
-export function createFlightHud(): FlightHud {
+export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   const root = document.createElement('div')
   root.className = 'fhud'
   root.innerHTML = `
@@ -113,6 +137,13 @@ export function createFlightHud(): FlightHud {
       <span class="fh-value fh-bomb-count">0</span>
       <span class="fh-bomb-fall">—</span>
     </div>
+    <div class="fh-msl" hidden>
+      <span class="fh-label">MSL</span>
+      <span class="fh-value fh-msl-status">—</span>
+      <span class="fh-msl-ammo" hidden></span>
+      <span class="fh-msl-hint">P lock/unlock · M fire · Q chaff</span>
+    </div>
+    <div class="fh-cm-banner" hidden>Releasing, Chaff, Flare</div>
     <div class="fh-scope" hidden>
       <div class="fh-scope-frame">
         <i class="fh-scope-v"></i>
@@ -124,6 +155,13 @@ export function createFlightHud(): FlightHud {
     <div class="fh-warn fh-stall">STALL</div>
     <div class="fh-caution">CEILING</div>
     <div class="fh-mode fh-autolevel">AUTO-LEVEL</div>
+    <div class="fh-hp combat-hp">
+      <div class="hud-plate-head">
+        <span class="combat-label">HP</span>
+        <span class="combat-value hp-text">0</span>
+      </div>
+      <div class="combat-bar"><i class="combat-bar-fill hp-fill"></i></div>
+    </div>
   `
   document.body.appendChild(root)
 
@@ -155,6 +193,12 @@ export function createFlightHud(): FlightHud {
   respawnEl.hidden = true
   respawnEl.innerHTML = `<span class="respawn-label">RESPAWN</span><span class="respawn-count">5</span>`
   root.append(kothEl, respawnEl)
+  const mini = createMinimapWidget(minimap)
+  root.appendChild(mini.el)
+
+  const hpPlate = root.querySelector<HTMLElement>('.fh-hp')!
+  const hpFill = root.querySelector<HTMLElement>('.fh-hp .hp-fill')!
+  const hpText = root.querySelector<HTMLElement>('.fh-hp .hp-text')!
 
   const horizon = root.querySelector<HTMLElement>('.fh-horizon')!
   const ladder = root.querySelector<HTMLElement>('.fh-ladder')!
@@ -174,6 +218,10 @@ export function createFlightHud(): FlightHud {
   const bombsEl = root.querySelector<HTMLElement>('.fh-bombs')!
   const bombCount = root.querySelector<HTMLElement>('.fh-bomb-count')!
   const bombFall = root.querySelector<HTMLElement>('.fh-bomb-fall')!
+  const mslEl = root.querySelector<HTMLElement>('.fh-msl')!
+  const mslStatus = root.querySelector<HTMLElement>('.fh-msl-status')!
+  const mslAmmo = root.querySelector<HTMLElement>('.fh-msl-ammo')!
+  const cmBanner = root.querySelector<HTMLElement>('.fh-cm-banner')!
   const scopeEl = root.querySelector<HTMLElement>('.fh-scope')!
   const scopeFall = root.querySelector<HTMLElement>('.fh-scope-fall')!
   const scopeFrame = root.querySelector<HTMLElement>('.fh-scope-frame')!
@@ -199,9 +247,13 @@ export function createFlightHud(): FlightHud {
   let lastFall = ''
   let lastOnTarget: boolean | null = null
   let lastScope: boolean | null = null
+  let lastHp = -1
+  let lastMsl = ''
+  let lastMslAmmo = -1
+  let lastCm = false
 
   return {
-    update(tm, guns, bombs) {
+    update(tm, guns, bombs, tactical, missiles, countermeasures) {
       // Artificial horizon: roll the whole horizon against bank, slide the
       // ladder against pitch. Bank is "right wing down positive", and the
       // instrument rolls opposite the aircraft, hence the negation.
@@ -287,27 +339,80 @@ export function createFlightHud(): FlightHud {
 
       if (!guns) {
         if (!gunsEl.hidden) gunsEl.hidden = true
-        return
-      }
-      if (gunsEl.hidden) gunsEl.hidden = false
+      } else {
+        if (gunsEl.hidden) gunsEl.hidden = false
 
-      if (guns.ammo !== lastAmmo) {
-        lastAmmo = guns.ammo
-        gunAmmo.textContent = String(guns.ammo)
-        gunAmmo.classList.toggle('is-low', guns.ammo === 0)
+        if (guns.ammo !== lastAmmo) {
+          lastAmmo = guns.ammo
+          gunAmmo.textContent = String(guns.ammo)
+          gunAmmo.classList.toggle('is-low', guns.ammo === 0)
+        }
+
+        const heatPct = Math.round(guns.heat * 100)
+        if (heatPct !== lastHeat) {
+          lastHeat = heatPct
+          heatFill.style.width = `${heatPct}%`
+          heatFill.classList.toggle('is-hot', guns.heat >= 1)
+        }
+
+        if (guns.firing !== lastFiring) {
+          lastFiring = guns.firing
+          reticle.classList.toggle('is-firing', guns.firing)
+        }
       }
 
-      const heatPct = Math.round(guns.heat * 100)
-      if (heatPct !== lastHeat) {
-        lastHeat = heatPct
-        heatFill.style.width = `${heatPct}%`
-        heatFill.classList.toggle('is-hot', guns.heat >= 1)
+      if (!missiles) {
+        if (!mslEl.hidden) mslEl.hidden = true
+      } else {
+        if (mslEl.hidden) mslEl.hidden = false
+        const label =
+          missiles.phase === 'hard'
+            ? 'LOCKED'
+            : missiles.phase === 'acquiring'
+              ? 'ACQ…'
+              : missiles.phase === 'soft'
+                ? 'TRACK'
+                : '—'
+        if (label !== lastMsl) {
+          lastMsl = label
+          mslStatus.textContent = label
+          mslEl.dataset.phase = missiles.phase
+        }
+        const ammo = missiles.ammo
+        if (ammo != null) {
+          mslAmmo.hidden = false
+          if (ammo !== lastMslAmmo) {
+            lastMslAmmo = ammo
+            mslAmmo.textContent = `×${ammo}`
+          }
+        } else {
+          mslAmmo.hidden = true
+        }
       }
 
-      if (guns.firing !== lastFiring) {
-        lastFiring = guns.firing
-        reticle.classList.toggle('is-firing', guns.firing)
+      const releasing = !!countermeasures?.releasing
+      if (releasing !== lastCm) {
+        lastCm = releasing
+        cmBanner.hidden = !releasing
       }
+
+      if (!tactical) return
+      const hpPct = Math.max(0, Math.min(1, tactical.maxHp > 0 ? tactical.hp / tactical.maxHp : 0))
+      hpFill.style.transform = `scaleX(${hpPct})`
+      hpPlate.classList.toggle('is-critical', hpPct <= 0.25)
+      hpPlate.classList.toggle('is-low', hpPct > 0.25 && hpPct <= 0.5)
+      const hp = Math.round(tactical.hp)
+      if (hp !== lastHp) {
+        lastHp = hp
+        hpText.textContent = String(hp)
+      }
+      mini.update({
+        posX: tactical.posX,
+        posZ: tactical.posZ,
+        headingDeg: tactical.headingDeg,
+        foes: tactical.foes,
+        allies: tactical.allies,
+      })
     },
     setVisible(visible) {
       root.style.display = visible ? '' : 'none'

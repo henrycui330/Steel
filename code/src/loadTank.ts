@@ -25,10 +25,42 @@ function enableShadows(root: THREE.Object3D): void {
 }
 
 /**
+ * Sketchfab packs ship flat lavender normal maps. On big roof plates
+ * (what you see from above) that wash reads as pink / purple — T-72 Ural,
+ * Pz-III, and the same export style on the other chassis.
+ * Drop those maps, kill specular-tint from KHR_materials_specular, and
+ * hide interior shells so a missing roof plate can't show the wrong color.
+ */
+function sanitizeImportedLook(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    const n = obj.name.toLowerCase()
+    if (/interior|internal/.test(n)) obj.visible = false
+    if (!(obj instanceof THREE.Mesh) || !obj.material) return
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+    for (const m of mats) {
+      if (!m) continue
+      const mat = m as THREE.MeshStandardMaterial
+      const matName = (mat.name || '').toLowerCase()
+      const keepNormal = /track|tread|wheel|tire/.test(matName) || /track|tread|wheel|tire/.test(n)
+      if (mat.normalMap && !keepNormal) {
+        mat.normalMap = null
+      }
+      if ('specularIntensity' in mat) {
+        ;(mat as THREE.MeshPhysicalMaterial).specularIntensity = 0
+        ;(mat as THREE.MeshPhysicalMaterial).specularColor?.setRGB(1, 1, 1)
+      }
+      if (mat.metalness >= 1 && !mat.metalnessMap) mat.metalness = 0.08
+      mat.needsUpdate = true
+    }
+  })
+}
+
+/**
  * After yaw/pitch reparenting, stale bounds make meshes pop in/out while rotating.
  * Also harden depth state to reduce z-fight flicker on armor plates.
  */
 function hardenMeshRendering(root: THREE.Object3D): void {
+  sanitizeImportedLook(root)
   root.updateMatrixWorld(true)
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return
@@ -298,6 +330,66 @@ function prepareT90(root: THREE.Object3D): boolean {
   body.name = 'Hull'
   peeled.name = 'Turret'
   console.info(`[Steel] T-90 Donovian: runtime peel at y≥${yCut.toFixed(2)}`)
+  return true
+}
+
+/**
+ * ZSU-23-4 Shilka — named hull / turret / mount + quad weapon*.
+ * Guns authored on +X → −90° Y so nose matches game +Z.
+ * Fingerprint: weapon3 + weapon4 (avoids Abrams / T-72 turret+weapon).
+ */
+function prepareShilka(root: THREE.Object3D): boolean {
+  const hull = root.getObjectByName('hull')
+  const turret = root.getObjectByName('turret')
+  const mount = root.getObjectByName('mount')
+  if (!hull || !turret || !mount) return false
+  if (!root.getObjectByName('weapon3') || !root.getObjectByName('weapon4')) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  // Elevation cradle holds all four 23mm tubes.
+  mount.name = 'Barrel'
+  console.info('[Steel] ZSU-23-4 Shilka: Hull/Turret + mount as Barrel (−90° Y)')
+  return true
+}
+
+function preparePantsir(root: THREE.Object3D): boolean {
+  const body = root.getObjectByName('Imported_$body')
+  const weapon = root.getObjectByName('Imported_$weapon0')
+  const guns = root.getObjectByName('Imported_$weapon0_0')
+  if (!body || !weapon || !guns) return false
+
+  body.name = 'Hull'
+  weapon.name = 'Turret'
+  guns.name = 'Barrel'
+
+  // Cab / wheels ride with the hull; radar + missile tubes elevate with the guns.
+  for (const n of [
+    'Imported_$hatch0',
+    'Imported_$canopy0',
+    'Imported_$canopy1',
+    'Imported_$canopy2',
+    'Imported_$canopy3',
+    'Imported_$canopy4',
+    'Imported_$wheel0',
+    'Imported_$wheel1',
+    'Imported_$wheel2',
+    'Imported_$wheel3',
+    'Imported_$wheel4',
+    'Imported_$wheel5',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part) body.attach(part)
+  }
+  const radar = root.getObjectByName('Imported_$weapon0_1')
+  const missiles = root.getObjectByName('Imported_Missile')
+  if (radar) guns.attach(radar)
+  if (missiles) guns.attach(missiles)
+
+  console.info('[Steel] Pantsir-S2: Hull/Turret/Barrel (guns+SAM elevate)')
   return true
 }
 
@@ -998,6 +1090,8 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareLeopard1(model) ||
       preparePz3(model) ||
       prepareT90(model) ||
+      prepareShilka(model) ||
+      preparePantsir(model) ||
       prepareT72(model) ||
       prepareT55(model) ||
       prepareT44(model) ||

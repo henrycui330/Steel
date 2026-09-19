@@ -12,10 +12,17 @@ PzH 2000
     M26 Pershing
     M42 Duster
     M1 Abrams
+    P-51 Mustang
+    F-16A Fighting Falcon
+    B-17G Flying Fortress
 Soviet:
  T-34
  T-44-100
  T-55
- T-72 Ural
- T-90
- Yak-9
+    ZSU-23-4 Shilka
+    Pantsir-S2
+    T-72 Ural
+    T-90
+    Yak-9
+    MiG-15
+    MiG-21MF

@@ -17,10 +17,17 @@ export type TankId =
   | 't34'
   | 't44'
   | 't55'
+  | 'shilka'
+  | 'pantsir'
   | 't72'
   | 't90'
   | 'corsair'
   | 'yak9'
+  | 'p51'
+  | 'f16'
+  | 'b17'
+  | 'mig15'
+  | 'mig21'
 
 export type DriveProfile = {
   maxSpeed: number
@@ -88,6 +95,10 @@ export type TankOption = {
    */
   aircraft?: boolean
   /**
+   * Jet — no prop SFX, no spinning parts, no gear animation.
+   */
+  jet?: boolean
+  /**
    * Yaw (radians) to bake into podium / raw GLB so nose faces camera-forward.
    * Flight load path applies the same via `loadAircraft`.
    */
@@ -97,6 +108,10 @@ export type TankOption = {
    * `aimPitchMinDeg` / `aimPitchMaxDeg` (defaults −5° / +85°).
    */
   antiAir?: boolean
+  /**
+   * Pantsir-style SAM: M fires seekers at the hard-locked target (off-boresight OK).
+   */
+  samMissiles?: boolean
   /** Override gun depression (degrees). Used with `antiAir` or SPG. */
   aimPitchMinDeg?: number
   /** Override gun elevation (degrees). */
@@ -229,6 +244,34 @@ const DUSTER_DRIVE: DriveProfile = {
   turnRate: 2.75,
   turnInPlace: 1.35,
   tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** ZSU-23-4 Shilka — tracked SPAAG (quad 23mm, radar turret). */
+const SHILKA_DRIVE: DriveProfile = {
+  maxSpeed: 14.5,
+  maxReverse: 5.5,
+  accel: 10,
+  reverseAccel: 7,
+  brakeDecel: 22,
+  coastDrag: 5.6,
+  turnRate: 2.2,
+  turnInPlace: 1.05,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.011,
+}
+
+/** Pantsir-S2 — wheeled SPAAG/SAM (fast road sprint). */
+const PANTSIR_DRIVE: DriveProfile = {
+  maxSpeed: 20,
+  maxReverse: 8,
+  accel: 12,
+  reverseAccel: 8,
+  brakeDecel: 28,
+  coastDrag: 5.2,
+  turnRate: 2.4,
+  turnInPlace: 1.15,
+  tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
 }
 
@@ -720,6 +763,65 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'shilka',
+    name: 'ZSU-23-4 Shilka',
+    role: 'SPAAG · quad 23mm',
+    blurb: 'Radar turret · AZP-23 shredder · soft vs tanks, lethal vs air',
+    url: assetUrl('models/zsu_shilka.glb?v=1'),
+    reloadSec: 0.22,
+    maxHp: 620,
+    targetWidth: 2.95,
+    vintageCrew: false,
+    nation: 'soviet',
+    antiAir: true,
+    aimPitchMinDeg: -4,
+    aimPitchMaxDeg: 85,
+    rigidRig: false,
+    drive: SHILKA_DRIVE,
+    armor: armorKit({ front: 15, side: 10, rear: 10, turret: 12 }),
+    gun: {
+      aphePen: 38,
+      apheDmg: 85,
+      hePen: 8,
+      heDmg: 55,
+      heBlast: 90,
+      traverseRadPerSec: 9.5,
+      elevateRadPerSec: 8.0,
+      apLabel: 'AP-T 23mm',
+      heLabel: 'HEI-T 23mm',
+    },
+  },
+  {
+    id: 'pantsir',
+    name: 'Pantsir-S2',
+    role: 'SPAAG / SAM · 30mm + missiles',
+    blurb: 'Radar lock · off-boresight SAMs · shreds aircraft',
+    url: assetUrl('models/pantsir_s2.glb?v=1'),
+    reloadSec: 0.18,
+    maxHp: 720,
+    targetWidth: 3.0,
+    vintageCrew: false,
+    nation: 'soviet',
+    antiAir: true,
+    samMissiles: true,
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 85,
+    rigidRig: false,
+    drive: PANTSIR_DRIVE,
+    armor: armorKit({ front: 20, side: 14, rear: 12, turret: 18 }),
+    gun: {
+      aphePen: 42,
+      apheDmg: 95,
+      hePen: 10,
+      heDmg: 60,
+      heBlast: 95,
+      traverseRadPerSec: 9.0,
+      elevateRadPerSec: 7.5,
+      apLabel: 'AP 30mm',
+      heLabel: 'HEI 30mm',
+    },
+  },
+  {
     id: 't72',
     name: 'T-72 Ural',
     role: 'Cold-war MBT · 125mm',
@@ -774,7 +876,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'F4U-1A Corsair',
     role: 'Fighter-bomber · air',
     blurb: 'Bent-wing carrier fighter · six .50 cals · owns the sky',
-    url: assetUrl('models/f4u_corsair.glb?v=1'),
+    url: assetUrl('models/f4u_corsair.glb?v=5'),
     reloadSec: 0.12,
     maxHp: 520,
     // Wingspan, not track gauge — the air rig scales from this.
@@ -799,11 +901,90 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'p51',
+    name: 'P-51 Mustang',
+    role: 'Fighter · air',
+    blurb: 'Long-range escort · six .50s · queen of the piston fighters',
+    url: assetUrl('models/p51_mustang.glb?v=1'),
+    reloadSec: 0.11,
+    maxHp: 540,
+    targetWidth: 11.3,
+    vintageCrew: true,
+    nation: 'usa',
+    aircraft: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 16, side: 12, rear: 10, turret: 14 }),
+    gun: {
+      aphePen: 28,
+      apheDmg: 58,
+      hePen: 8,
+      heDmg: 32,
+      heBlast: 42,
+      traverseRadPerSec: 2.5,
+      elevateRadPerSec: 2.1,
+      apLabel: 'AP .50',
+      heLabel: 'API .50',
+    },
+  },
+  {
+    id: 'f16',
+    name: 'F-16A Fighting Falcon',
+    role: 'Jet fighter · air',
+    blurb: 'Block 15 · VIPER · light multirole',
+    url: assetUrl('models/f16a.glb?v=2'),
+    reloadSec: 0.07,
+    maxHp: 580,
+    targetWidth: 9.96,
+    vintageCrew: false,
+    nation: 'usa',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 16, side: 12, rear: 10, turret: 14 }),
+    gun: {
+      aphePen: 34,
+      apheDmg: 65,
+      hePen: 12,
+      heDmg: 40,
+      heBlast: 50,
+      traverseRadPerSec: 2.8,
+      elevateRadPerSec: 2.4,
+      apLabel: 'AP 20mm',
+      heLabel: 'HEI 20mm',
+    },
+  },
+  {
+    id: 'b17',
+    name: 'B-17G Flying Fortress',
+    role: 'Heavy bomber · air',
+    blurb: 'Four-engine fortress · .50 cal defensive · tough as nails',
+    url: assetUrl('models/b17.glb?v=1'),
+    reloadSec: 0.16,
+    maxHp: 1400,
+    targetWidth: 31.6,
+    vintageCrew: true,
+    nation: 'usa',
+    aircraft: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 22, side: 18, rear: 14, turret: 16 }),
+    gun: {
+      aphePen: 30,
+      apheDmg: 62,
+      hePen: 10,
+      heDmg: 36,
+      heBlast: 48,
+      traverseRadPerSec: 1.8,
+      elevateRadPerSec: 1.6,
+      apLabel: 'AP .50',
+      heLabel: 'API .50',
+    },
+  },
+  {
     id: 'yak9',
     name: 'Yak-9',
     role: 'Fighter · air',
     blurb: 'Soviet interceptor · 20mm ShVAK · light and mean',
-    url: assetUrl('models/yak9.glb?v=1'),
+    url: assetUrl('models/yak9.glb?v=6'),
     reloadSec: 0.14,
     maxHp: 480,
     targetWidth: 9.74,
@@ -823,6 +1004,60 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 2.2,
       apLabel: 'AP 20mm',
       heLabel: 'HE 20mm',
+    },
+  },
+  {
+    id: 'mig15',
+    name: 'MiG-15',
+    role: 'Jet fighter · air',
+    blurb: 'Early Soviet jet · swept wing · NR-23 cannon',
+    url: assetUrl('models/mig15.glb?v=1'),
+    reloadSec: 0.09,
+    maxHp: 560,
+    targetWidth: 10.08,
+    vintageCrew: false,
+    nation: 'soviet',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 18, side: 14, rear: 12, turret: 16 }),
+    gun: {
+      aphePen: 42,
+      apheDmg: 88,
+      hePen: 14,
+      heDmg: 48,
+      heBlast: 58,
+      traverseRadPerSec: 2.7,
+      elevateRadPerSec: 2.3,
+      apLabel: 'AP 23mm',
+      heLabel: 'HE 23mm',
+    },
+  },
+  {
+    id: 'mig21',
+    name: 'MiG-21MF',
+    role: 'Jet fighter · air',
+    blurb: 'Fishbed · delta wing · GSh-23 · Mach-capable interceptor',
+    url: assetUrl('models/mig21.glb?v=1'),
+    reloadSec: 0.08,
+    maxHp: 600,
+    targetWidth: 7.15,
+    vintageCrew: false,
+    nation: 'soviet',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 18, side: 14, rear: 12, turret: 16 }),
+    gun: {
+      aphePen: 44,
+      apheDmg: 92,
+      hePen: 14,
+      heDmg: 50,
+      heBlast: 60,
+      traverseRadPerSec: 2.9,
+      elevateRadPerSec: 2.5,
+      apLabel: 'AP 23mm',
+      heLabel: 'HE 23mm',
     },
   },
 ]

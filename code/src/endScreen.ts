@@ -1,5 +1,6 @@
 import { nationByTeam, nationFlagSrc, type TeamId } from './nations'
 import { formatKd, type ScoreRow } from './scoreboard'
+import type { WalletReward } from './wallet'
 
 export type MatchEndKind = 'win' | 'lose'
 
@@ -12,6 +13,8 @@ export type MatchEndOpts = {
   leaderboard?: ScoreRow[]
   /** True when a 3D podium renders behind: skip HTML cards, stay see-through. */
   podium3d?: boolean
+  /** Currency granted this match (wins only). */
+  reward?: WalletReward | null
 }
 
 function escapeHtml(s: string): string {
@@ -20,6 +23,16 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+function rewardHtml(reward: WalletReward | null | undefined): string {
+  if (!reward || (reward.silver <= 0 && reward.gold <= 0)) return ''
+  return `
+    <p class="match-end-reward">
+      <span class="wallet-chip wallet-silver"><i></i>+${reward.silver} Silver</span>
+      <span class="wallet-chip wallet-gold"><i></i>+${reward.gold} Gold</span>
+      <span class="reward-totals">${reward.totals.silver} Ag · ${reward.totals.gold} Au</span>
+    </p>`
 }
 
 function podiumHtml(rows: ScoreRow[]): string {
@@ -128,6 +141,7 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
       <p class="match-end-brand">Steel</p>
       <h1 class="match-end-title">${escapeHtml(title)}</h1>
       <p class="match-end-sub">${escapeHtml(sub)}</p>
+      ${rewardHtml(opts.reward)}
     </div>
     <div class="stage-bottom">
       ${tableHtml(rows)}
@@ -140,6 +154,7 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
       <p class="match-end-brand">Steel</p>
       <h1 class="match-end-title">${escapeHtml(title)}</h1>
       <p class="match-end-sub">${escapeHtml(sub)}</p>
+      ${rewardHtml(opts.reward)}
       ${podiumHtml(rows)}
       ${tableHtml(rows)}
       <button type="button" class="deploy-btn match-end-btn">Main menu</button>

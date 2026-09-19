@@ -10,6 +10,12 @@ function dieselIdleUrl(): string {
 function propIdleUrl(): string {
   return fixPublicUrl(assetUrl('sfx/prop-idle.mp3'))
 }
+function ejectSirenUrl(): string {
+  return fixPublicUrl(assetUrl('sfx/eject-siren.mp3'))
+}
+function lowAltAlarmUrl(): string {
+  return fixPublicUrl(assetUrl('sfx/low-alt-alarm.mp3'))
+}
 
 const PEAK_VOLUME = 0.9
 /** Full volume before fade starts (seconds). */
@@ -161,6 +167,86 @@ export function createPropEngine(): EngineLoop {
   })
 }
 
+export type ConditionAlarm = {
+  /** Begin under a user gesture so later setActive works. */
+  start: () => void
+  /** Hard stop — match end. */
+  stop: () => void
+  /**
+   * While `on`, loop the clip. When `off`, pause + rewind immediately
+   * (condition over — no need to finish the full file).
+   */
+  setActive: (on: boolean) => void
+}
+
+function createConditionAlarm(opts: {
+  url: string
+  label: string
+  volume: number
+}): ConditionAlarm {
+  const el = new Audio(opts.url)
+  el.preload = 'auto'
+  el.loop = true
+  el.volume = 0
+  let armed = false
+  let active = false
+
+  function apply(): void {
+    if (!armed) return
+    if (!active) {
+      el.volume = 0
+      if (!el.paused) el.pause()
+      el.currentTime = 0
+      return
+    }
+    el.volume = opts.volume
+    if (el.paused) {
+      void el.play().catch((err) => {
+        console.warn(`[Steel] ${opts.label} alarm SFX blocked`, err)
+      })
+    }
+  }
+
+  return {
+    start() {
+      armed = true
+      apply()
+    },
+    stop() {
+      armed = false
+      active = false
+      el.pause()
+      el.currentTime = 0
+      el.volume = 0
+    },
+    setActive(on) {
+      if (active === on) return
+      active = on
+      apply()
+      if (on) console.info(`[Steel] ${opts.label} alarm ON`)
+      else console.info(`[Steel] ${opts.label} alarm OFF`)
+    },
+  }
+}
+
+/** Ejection seat siren — active only while the eject cinematic runs. */
+export function createEjectSiren(): ConditionAlarm {
+  return createConditionAlarm({
+    url: ejectSirenUrl(),
+    label: 'Eject',
+    volume: 0.42,
+  })
+}
+
+/** Low-altitude buzzer — active while AGL is below the warning band. */
+export function createLowAltAlarm(): ConditionAlarm {
+  return createConditionAlarm({
+    url: lowAltAlarmUrl(),
+    label: 'Low-alt',
+    volume: 0.38,
+  })
+}
+
 /** Call once after user gesture (Deploy) so later plays are allowed. */
 export function unlockAudio(): void {
   const a = getShared()
@@ -177,7 +263,12 @@ export function unlockAudio(): void {
     })
 
   // Prime engine loops under the same gesture so Chrome allows them later.
-  for (const url of [dieselIdleUrl(), propIdleUrl()]) {
+  for (const url of [
+    dieselIdleUrl(),
+    propIdleUrl(),
+    ejectSirenUrl(),
+    lowAltAlarmUrl(),
+  ]) {
     const probe = new Audio(url)
     probe.volume = 0
     void probe

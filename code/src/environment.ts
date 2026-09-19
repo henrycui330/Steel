@@ -73,15 +73,15 @@ export function createEnvironment(
     lights.sun.color.setHex(0xe8eef6)
     lights.sun.intensity = raining || foggy ? 0.45 : 0.95
   } else {
-    // summer day
+    // summer day — near-neutral daylight (was peach/amber and made albedos look red)
     renderer.setClearColor(raining || foggy ? 0x7a8580 : 0x87a0c0, 1)
-    lights.ambient.color.setHex(0xfff0d8)
+    lights.ambient.color.setHex(0xd8dde2)
     lights.ambient.intensity = raining ? 0.4 : 0.55
-    lights.hemi.color.setHex(0xffe8c8)
-    lights.hemi.groundColor.setHex(0x6a5a40)
+    lights.hemi.color.setHex(0xd0d8e0)
+    lights.hemi.groundColor.setHex(0x5e6458)
     lights.hemi.intensity = 0.4
-    lights.sun.color.setHex(0xffe2a8)
-    lights.sun.intensity = raining || foggy ? 0.55 : 1.15
+    lights.sun.color.setHex(0xf2f0e8)
+    lights.sun.intensity = raining || foggy ? 0.55 : 1.1
   }
 
   // --- Fog / visibility ---

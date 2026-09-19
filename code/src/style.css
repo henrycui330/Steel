@@ -562,8 +562,8 @@ canvas {
 }
 
 #hud.is-aiming .xhair-mouse {
-  width: 220px;
-  height: 220px;
+  width: 18px;
+  height: 18px;
 }
 
 #hud.is-aiming .hud-sight {
@@ -793,30 +793,49 @@ canvas {
   background: #8aa0b8;
 }
 
-#hud.is-assist .xhair-mouse .xhair-img {
-  filter: brightness(0) saturate(100%) invert(78%) sepia(28%) saturate(700%)
-    hue-rotate(5deg) brightness(1.05);
+#hud.is-assist .xhair-mouse .xhair-dot {
+  border-color: #e0c070;
 }
 
 .xhair {
   position: absolute;
   left: 0;
   top: 0;
-  width: 168px;
-  height: 168px;
+  width: 18px;
+  height: 18px;
   opacity: 0;
   will-change: transform, opacity;
+  pointer-events: none;
 }
 
-.xhair-mouse .xhair-img {
+.xhair-dot {
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  /* Black plate → transparent over the scene */
-  mix-blend-mode: screen;
-  pointer-events: none;
-  user-select: none;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  margin: 3px;
+  border-radius: 50%;
+}
+
+/* Mouse aim — hollow ring. */
+.xhair-mouse .xhair-dot {
+  border: 2px solid #f2e6c4;
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75);
+}
+
+/* Gun aim — filled dot, where the turret is actually pointed. */
+.xhair-barrel .xhair-dot {
+  width: 8px;
+  height: 8px;
+  margin: 5px;
+  background: #7dff9a;
+  box-shadow: 0 0 6px rgba(80, 255, 140, 0.85);
+}
+
+.xhair-barrel.is-synced .xhair-dot {
+  background: #f2e6c4;
+  box-shadow: 0 0 4px rgba(242, 230, 196, 0.7);
 }
 
 .xhair-barrel[hidden] {
@@ -1582,6 +1601,27 @@ canvas {
   font-size: 0.95rem;
 }
 
+.match-end-reward {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  justify-content: center;
+  align-items: center;
+  margin: 0 0 1rem;
+}
+
+.match-end-reward .reward-totals {
+  width: 100%;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.match-end.has-stage .match-end-reward {
+  margin-top: 0.35rem;
+}
+
 .match-end-btn {
   width: 100%;
   margin-top: 1rem;
@@ -1994,6 +2034,49 @@ canvas {
   font-weight: 700;
 }
 
+.home-wallet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.85rem;
+  justify-content: center;
+  margin: -0.55rem 0 1.15rem;
+  font-size: 0.88rem;
+  letter-spacing: 0.04em;
+}
+
+.wallet-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.28rem 0.65rem;
+  border: 1px solid rgba(180, 190, 170, 0.28);
+  background: rgba(8, 10, 8, 0.45);
+  color: rgba(220, 228, 210, 0.9);
+}
+
+.wallet-chip i {
+  display: block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+}
+
+.wallet-chip b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: #e8eee0;
+}
+
+.wallet-silver i {
+  background: linear-gradient(145deg, #d8dde4, #8a929c);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.wallet-gold i {
+  background: linear-gradient(145deg, #f0d078, #b8862a);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
 .home-btn-logout {
   margin-top: 0.35rem;
   opacity: 0.85;
@@ -2188,6 +2271,160 @@ canvas {
 
 body.arty-map-open #hud .xhair {
   opacity: 0.15;
+}
+
+/* ——— Night vision goggles ——— */
+#nvg-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+#nvg-overlay.is-on {
+  opacity: 1;
+}
+
+#nvg-overlay .nvg-phosphor {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 75% 70% at 50% 45%,
+    rgba(40, 255, 90, 0.12) 0%,
+    rgba(10, 80, 30, 0.28) 55%,
+    rgba(0, 20, 8, 0.55) 100%
+  );
+  mix-blend-mode: color;
+}
+
+#nvg-overlay .nvg-scan {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0,
+    transparent 2px,
+    rgba(0, 0, 0, 0.12) 2px,
+    rgba(0, 0, 0, 0.12) 3px
+  );
+  opacity: 0.55;
+}
+
+#nvg-overlay .nvg-vignette {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 58% 52% at 50% 48%,
+    transparent 40%,
+    rgba(0, 0, 0, 0.72) 100%
+  );
+  box-shadow: inset 0 0 80px 24px rgba(0, 40, 12, 0.65);
+}
+
+#nvg-overlay .nvg-badge {
+  position: absolute;
+  top: 1.1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.2rem 0.65rem;
+  border: 1px solid rgba(120, 255, 160, 0.55);
+  background: rgba(0, 24, 10, 0.55);
+  color: #8dffb0;
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+body.nvg-on canvas {
+  filter: contrast(1.15) saturate(0.55) brightness(1.08);
+}
+
+/* ——— Match opening flyover ——— */
+#match-opening {
+  position: fixed;
+  inset: 0;
+  z-index: 25;
+  pointer-events: none;
+  color: #eef1ea;
+}
+
+#match-opening.is-done {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+#match-opening .mo-letterbox {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 9vh;
+  background: #050708;
+}
+
+#match-opening .mo-top {
+  top: 0;
+}
+
+#match-opening .mo-bot {
+  bottom: 0;
+}
+
+#match-opening .mo-slate {
+  position: absolute;
+  left: 50%;
+  bottom: 14vh;
+  transform: translateX(-50%) translateY(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 0.45s ease, transform 0.45s ease;
+  text-align: center;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.75);
+}
+
+#match-opening .mo-slate.is-on {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#match-opening .mo-flag {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  margin-bottom: 0.2rem;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.55));
+}
+
+#match-opening .mo-title {
+  margin: 0;
+  font-size: clamp(1.35rem, 3.5vw, 2rem);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#match-opening .mo-sub {
+  margin: 0;
+  font-size: 0.85rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.72;
+}
+
+#match-opening .mo-skip {
+  position: absolute;
+  right: 1.25rem;
+  bottom: 10.5vh;
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.45;
 }
 
 

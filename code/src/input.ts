@@ -16,6 +16,7 @@ let ammoSelectQueued: AmmoId | null = null
 let weaponSelectQueued: WeaponId | null = null
 let zoomDeltaQueued = 0
 let artilleryMapToggleQueued = false
+let nvgToggleQueued = false
 
 function isDown(code: string): boolean {
   return keys.has(code)
@@ -60,6 +61,12 @@ export type FlightInput = {
   skipCinematic: boolean
   /** Edge-triggered: punch out (Y). */
   eject: boolean
+  /** Edge-triggered: retract / drop landing gear (G). */
+  toggleGear: boolean
+  /** Edge-triggered: F-16 / SAM missile fire (M). */
+  fireMissile: boolean
+  /** Hold/press Q: dump chaff + flare. */
+  dropChaff: boolean
   /** No stick input recently — flight model auto-levels. */
   handsOff: boolean
 }
@@ -79,6 +86,8 @@ let bombQueued = false
 let sightQueued = false
 let skipCineQueued = false
 let ejectQueued = false
+let gearQueued = false
+let missileQueued = false
 
 export function bindFlightInput(): void {
   if (flightBound) return
@@ -91,6 +100,9 @@ export function bindFlightInput(): void {
     if (e.code === 'KeyV') sightQueued = true
     if (e.code === 'KeyC') skipCineQueued = true
     if (e.code === 'KeyY') ejectQueued = true
+    if (e.code === 'KeyG') gearQueued = true
+    if (e.code === 'KeyM') missileQueued = true
+    if (e.code === 'KeyN') nvgToggleQueued = true
   })
   window.addEventListener('pointermove', (e) => {
     if (!document.pointerLockElement) return
@@ -120,10 +132,14 @@ export function getFlightInput(dt: number): FlightInput {
   const toggleSight = sightQueued
   const skipCinematic = skipCineQueued
   const eject = ejectQueued
+  const toggleGear = gearQueued
+  const fireMissile = missileQueued
   bombQueued = false
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false
+  gearQueued = false
+  missileQueued = false
 
   return {
     pitch: stickPitch,
@@ -136,6 +152,9 @@ export function getFlightInput(dt: number): FlightInput {
     toggleSight,
     skipCinematic,
     eject,
+    toggleGear,
+    fireMissile,
+    dropChaff: isDown('KeyQ'),
     handsOff,
   }
 }
@@ -149,6 +168,18 @@ export function resetFlightInput(): void {
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false
+  gearQueued = false
+  missileQueued = false
+}
+
+/** Hold P to acquire / keep a hard lock (F-16 + SPAAG). */
+export function isLockHold(): boolean {
+  return isDown('KeyP')
+}
+
+/** Hold M to fire Pantsir SAMs (edge handled inside samMissiles). */
+export function isSamFire(): boolean {
+  return isDown('KeyM')
 }
 
 export function consumeCameraToggle(): boolean {
@@ -192,6 +223,13 @@ export function consumeArtilleryMapToggle(): boolean {
   return true
 }
 
+/** Edge-triggered night-vision goggles (N). */
+export function consumeNvgToggle(): boolean {
+  if (!nvgToggleQueued) return false
+  nvgToggleQueued = false
+  return true
+}
+
 export function bindDriveInput(): void {
   window.addEventListener('keydown', (e) => {
     // Don’t steal keys while the HTML menu is up (scroll / forms).
@@ -222,6 +260,9 @@ export function bindDriveInput(): void {
     }
     if (e.code === 'KeyU' && !e.repeat) {
       artilleryMapToggleQueued = true
+    }
+    if (e.code === 'KeyN' && !e.repeat) {
+      nvgToggleQueued = true
     }
     keys.add(e.code)
   })
@@ -254,5 +295,6 @@ export function bindDriveInput(): void {
     weaponSelectQueued = null
     zoomDeltaQueued = 0
     artilleryMapToggleQueued = false
+    nvgToggleQueued = false
   })
 }

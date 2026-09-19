@@ -34,6 +34,12 @@ const AI_FIRE_RANGE = 90
 const AI_FIRE_COS = Math.cos((18 * Math.PI) / 180)
 const AI_TRAVERSE = 4.2
 const AI_ELEVATE = 2.2
+/** SPAAG — track high, shoot farther, don't hug the target. */
+const AA_FIRE_RANGE = 340
+const AA_HOLD = 90
+const AA_FIRE_COS = Math.cos((12 * Math.PI) / 180)
+const AA_TRAVERSE = 7.5
+const AA_ELEVATE = 6.5
 const TANK_R = 1.8
 const SHELL_LIFE = 5
 const PITCH_MIN = (-12 * Math.PI) / 180
@@ -182,12 +188,19 @@ function pushApart(a: THREE.Vector3, b: THREE.Vector3, minDist: number): void {
   b.z -= nz * push
 }
 
+function isAirRoot(root: THREE.Object3D): boolean {
+  return root.userData.air === true
+}
+
 function pickHostile(
   from: THREE.Vector3,
   hostiles: readonly AiHostile[],
+  preferAir = false,
 ): AiHostile | null {
   let best: AiHostile | null = null
   let bestD = Infinity
+  let bestAir: AiHostile | null = null
+  let bestAirD = Infinity
   for (const h of hostiles) {
     if (!h.alive) continue
     const d = Math.hypot(h.root.position.x - from.x, h.root.position.z - from.z)
@@ -195,8 +208,12 @@ function pickHostile(
       bestD = d
       best = h
     }
+    if (preferAir && isAirRoot(h.root) && d < AA_FIRE_RANGE && d < bestAirD) {
+      bestAirD = d
+      bestAir = h
+    }
   }
-  return best
+  return bestAir ?? best
 }
 
 /** Spawn a Pz-III AI (enemy or friendly team). */
@@ -226,16 +243,24 @@ export async function spawnAiPz3Enemy(
     label,
     onDestroyed: (r) => {
       opts.onDeath?.(r)
-      if (persistMesh) {
-        r.visible = false
-        return
-      }
-      spawnDestroyedWreck(scene, r, smoke)
+      spawnDestroyedWreck(scene, r, smoke, persistMesh)
     },
   })
 
   const wheels = collectWheels(root)
   const option = chassis
+  const aa = option.antiAir === true
+  const pitchMin = aa
+    ? THREE.MathUtils.degToRad(option.aimPitchMinDeg ?? -5)
+    : PITCH_MIN
+  const pitchMax = aa
+    ? THREE.MathUtils.degToRad(option.aimPitchMaxDeg ?? 85)
+    : PITCH_MAX
+  const fireRange = aa ? AA_FIRE_RANGE : AI_FIRE_RANGE
+  const fireCos = aa ? AA_FIRE_COS : AI_FIRE_COS
+  const traverse = aa ? AA_TRAVERSE : AI_TRAVERSE
+  const elevate = aa ? AA_ELEVATE : AI_ELEVATE
+  const reloadSec = aa ? option.reloadSec : AI_RELOAD
   const shellGeo = new THREE.SphereGeometry(SHELL_RADIUS, 8, 8)
   const shells: EnemyShell[] = []
 
@@ -400,11 +425,12 @@ export async function spawnAiPz3Enemy(
       }
 
       const immobilized = combat.isImmobilized()
-      const target = pickHostile(root.position, hostiles)
+      const target = pickHostile(root.position, hostiles, aa)
+      const targetAir = Boolean(target && isAirRoot(target.root))
       const hillDist = objective
         ? Math.hypot(root.position.x - objective.x, root.position.z - objective.z)
         : 0
-      const goHill = Boolean(objective && hillDist > objective.radius * 0.55)
+      const goHill = Boolean(objective && hillDist > objective.radius * 0.55 && !targetAir)
 
       if (!target && !goHill) {
         speed = Math.max(0, speed - 10 * dt)
@@ -414,7 +440,12 @@ export async function spawnAiPz3Enemy(
       }
 
       const tpos = target?.root.position
-      const fightClose = Boolean(target && tpos && Math.hypot(tpos.x - root.position.x, tpos.z - root.position.z) < AI_ENGAGE)
+      const fightClose = Boolean(
+        target &&
+          tpos &&
+          !targetAir &&
+          Math.hypot(tpos.x - root.position.x, tpos.z - root.position.z) < AI_ENGAGE,
+      )
       const moveToHill = goHill && !fightClose
       const aimX = moveToHill ? objective!.x : tpos?.x ?? objective?.x ?? 0
       const aimZ = moveToHill ? objective!.z : tpos?.z ?? objective?.z ?? 0
@@ -440,7 +471,7 @@ export async function spawnAiPz3Enemy(
       let rel = desiredYaw - root.rotation.y
       while (rel > Math.PI) rel -= Math.PI * 2
       while (rel < -Math.PI) rel += Math.PI * 2
-      turret.rotation.y = yawToward(turret.rotation.y, rel, AI_TRAVERSE * dt)
+      turret.rotation.y = yawToward(turret.rotation.y, rel, traverse * dt)
 
       muzzle.updateMatrixWorld(true)
       muzzle.getWorldPosition(_muzzlePos)
@@ -452,10 +483,10 @@ export async function spawnAiPz3Enemy(
       const worldPitch =
         elevationToHit(horiz, deltaY) ??
         THREE.MathUtils.clamp(Math.atan2(deltaY, horiz), PITCH_MIN, PITCH_MAX)
-      const clampedWorld = THREE.MathUtils.clamp(worldPitch, PITCH_MIN, PITCH_MAX)
+      const clampedWorld = THREE.MathUtils.clamp(worldPitch, pitchMin, pitchMax)
       const hullPitch = root.rotation.x
       const targetPivotPitch = -clampedWorld - hullPitch
-      const pitchStep = AI_ELEVATE * dt
+      const pitchStep = elevate * dt
       const pd = targetPivotPitch - barrel.rotation.x
       barrel.rotation.x += Math.abs(pd) <= pitchStep ? pd : Math.sign(pd) * pitchStep
 
@@ -509,7 +540,11 @@ export async function spawnAiPz3Enemy(
         let throttle = 0
         if (ahead && left && right) throttle = -0.4
         else if (avoiding) throttle = 0.7
-        else if (dist > AI_ENGAGE && facingOk) throttle = 1
+        else if (aa && targetAir) {
+          // Hold a ring — don't drive under the plane.
+          if (dist > AA_HOLD + 40 && facingOk) throttle = 0.65
+          else if (dist < AA_HOLD * 0.55) throttle = -0.35
+        } else if (dist > AI_ENGAGE && facingOk) throttle = 1
         else if (dist < AI_TOO_CLOSE) throttle = -0.55
 
         root.rotation.y = yawToward(
@@ -566,20 +601,24 @@ export async function spawnAiPz3Enemy(
       barrel.getWorldQuaternion(_muzzleQuat)
       _gunFwd.set(0, 0, 1).applyQuaternion(_muzzleQuat).normalize()
       const toAimX = _aimPoint.x - _muzzlePos.x
+      const toAimY = _aimPoint.y - _muzzlePos.y
       const toAimZ = _aimPoint.z - _muzzlePos.z
+      const toAimLen3 = Math.hypot(toAimX, toAimY, toAimZ) || 1
       const toAimLen = Math.hypot(toAimX, toAimZ) || 1
-      const gunDot = (_gunFwd.x * toAimX + _gunFwd.z * toAimZ) / toAimLen
+      const gunDot = aa
+        ? (_gunFwd.x * toAimX + _gunFwd.y * toAimY + _gunFwd.z * toAimZ) / toAimLen3
+        : (_gunFwd.x * toAimX + _gunFwd.z * toAimZ) / toAimLen
 
       if (
         reloadLeft <= 0 &&
         target &&
-        dist < AI_FIRE_RANGE &&
-        dist > 10 &&
-        gunDot >= AI_FIRE_COS &&
+        dist < fireRange &&
+        dist > 12 &&
+        gunDot >= fireCos &&
         target.alive
       ) {
         spawnShell()
-        reloadLeft = AI_RELOAD
+        reloadLeft = reloadSec
       }
 
       leakAcc += dt

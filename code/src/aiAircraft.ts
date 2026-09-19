@@ -74,7 +74,7 @@ export type AiAircraftSpawnOptions = AiSpawnOptions & {
 }
 
 function emptyStick(partial: Partial<FlightInput> = {}): FlightInput {
-  return {
+  const base: FlightInput = {
     pitch: 0,
     roll: 0,
     rudder: 0,
@@ -85,9 +85,12 @@ function emptyStick(partial: Partial<FlightInput> = {}): FlightInput {
     toggleSight: false,
     skipCinematic: false,
     eject: false,
+    toggleGear: false,
+    fireMissile: false,
+    dropChaff: false,
     handsOff: true,
-    ...partial,
   }
+  return { ...base, ...partial, toggleGear: partial.toggleGear ?? base.toggleGear }
 }
 
 /**
@@ -115,6 +118,7 @@ export async function spawnAiCorsair(
   const air = await loadPlayerAircraft(chassis.id)
   const { root } = air
   root.name = team === 'friendly' ? 'aiAircraftFriendly' : 'aiAircraftEnemy'
+  root.userData.air = true
   const gy = sampleGround(position.x, position.z)
   root.position.set(position.x, gy + spawnAlt, position.z)
   root.rotation.order = 'YXZ'
@@ -176,11 +180,24 @@ export async function spawnAiCorsair(
   function steer(dt: number, ctx: AiUpdateContext): FlightInput {
     const tm = flight.telemetry()
     const agl = tm.agl
-    const throttleUp = tm.throttle < 0.5 || agl < PULLUP_AGL
-    const throttleDown = tm.throttle > 0.75 && agl > CRUISE_AGL + 40
+    // Keep energy — climbing while slow is how they stall and never notice.
+    const lowEnergy = tm.stalled || tm.speed < 48 || (tm.pitch > 16 && tm.speed < 62)
+    const throttleUp = lowEnergy || tm.throttle < 0.62 || agl < PULLUP_AGL
+    const throttleDown = !lowEnergy && tm.throttle > 0.78 && agl > CRUISE_AGL + 40
 
     const target = pickHostile3d(root.position, ctx.hostiles)
     _nose.copy(flight.noseDir())
+
+    if (lowEnergy) {
+      // Nose down to the horizon, wings level, full throttle — then resume the path.
+      const unload = tm.pitch > 4 ? -0.7 : tm.pitch > -2 ? -0.2 : 0
+      return emptyStick({
+        pitch: unload,
+        roll: THREE.MathUtils.clamp(-tm.bank / 28, -0.65, 0.65),
+        throttleUp: true,
+        handsOff: false,
+      })
+    }
 
     // Emergency: ignore combat, climb out.
     if (agl < MIN_AGL) {
@@ -245,8 +262,10 @@ export async function spawnAiCorsair(
     // Altitude first; only a mild look-at pitch when safely above the floor.
     let pitch = altitudePitch(agl, wantAgl)
     if (agl > PULLUP_AGL + 15) {
-      pitch = THREE.MathUtils.clamp(pitch + _to.y * 0.35, -0.28, 1)
+      pitch = THREE.MathUtils.clamp(pitch + _to.y * 0.35, -0.28, 0.55)
     }
+    // Don't pull past the energy you have.
+    if (tm.speed < 70) pitch = Math.min(pitch, 0.35)
     if (passTimer > 0) {
       // Climb-out after a pass — no diving.
       pitch = Math.max(pitch, 0.45)

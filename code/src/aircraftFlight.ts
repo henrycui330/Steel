@@ -57,6 +57,12 @@ const TURNBACK_MAX = 2.2
 /** Fraction of top speed lost at the outer edge of the band. */
 const EDGE_SPEED_BLEED = 0.4
 
+/** Deadstick after shot-down: gravity pull while airspeed bleeds. */
+const FLAMEOUT_GRAVITY = 38
+const FLAMEOUT_DRAG = 0.55
+const FLAMEOUT_TUMBLE = 1.35
+const FLAMEOUT_NOSE_HEAVY = 0.55
+
 const AXIS_X = new THREE.Vector3(1, 0, 0)
 const AXIS_Y = new THREE.Vector3(0, 1, 0)
 const AXIS_Z = new THREE.Vector3(0, 0, 1)
@@ -80,6 +86,8 @@ export type FlightTelemetry = {
   /** In the turn-back band near the arena edge. */
   nearEdge: boolean
   crashed: boolean
+  /** Shot-down deadstick — engine out, tumbling toward the deck. */
+  flameout: boolean
 }
 
 export type AircraftFlight = {
@@ -95,6 +103,12 @@ export type AircraftFlight = {
   reset: (pos: THREE.Vector3, yaw: number, throttle01?: number) => void
   /** Stop the aircraft immediately (eject / external kill). Does not fire onCrash. */
   forceCrash: () => void
+  /**
+   * Shot down: cut the engine and keep integrating as a burning deadstick
+   * until terrain contact fires `onCrash`. No-op if already crashed / flameout.
+   */
+  beginFlameout: () => void
+  isFlameout: () => boolean
 }
 
 export type FlightOptions = {
@@ -122,6 +136,9 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
   let nearCeiling = false
   let nearEdge = false
   let crashed = false
+  let flameout = false
+  /** Stable tumble axis while flaming out (picked once on beginFlameout). */
+  const flameTumble = new THREE.Vector3(0.55, 0.25, 0.8).normalize()
 
   const velocity = new THREE.Vector3()
   const nose = new THREE.Vector3()
@@ -173,7 +190,57 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       nearCeiling,
       nearEdge,
       crashed,
+      flameout,
     }
+  }
+
+  function hitGround(impactSpeed: number): void {
+    const groundY = heightAt(root.position.x, root.position.z)
+    root.position.y = groundY + CRASH_AGL
+    crashed = true
+    flameout = false
+    velocity.set(0, 0, 0)
+    sinkRate = 0
+    onCrash?.({ speed: impactSpeed, agl: CRASH_AGL })
+  }
+
+  /** Engine-out tumbling dive — no stick, no thrust. */
+  function updateFlameout(dt: number): FlightTelemetry {
+    readAxes()
+    throttle = 0
+    stalled = true
+    nearCeiling = false
+    nearEdge = false
+
+    // Bleed airspeed; gravity owns the vertical.
+    speed = Math.max(0, speed * Math.exp(-FLAMEOUT_DRAG * dt))
+    sinkRate -= FLAMEOUT_GRAVITY * dt
+
+    // Nose tends to drop; random-ish tumble so it doesn't fall like a brick.
+    rotateBody(AXIS_X, FLAMEOUT_NOSE_HEAVY * dt)
+    spin.setFromAxisAngle(flameTumble, FLAMEOUT_TUMBLE * dt)
+    root.quaternion.premultiply(spin)
+    root.quaternion.normalize()
+
+    readAxes()
+    velocity.copy(nose).multiplyScalar(speed)
+    velocity.y += sinkRate
+
+    root.position.addScaledVector(velocity, dt)
+
+    if (bounds) {
+      root.position.x = THREE.MathUtils.clamp(root.position.x, -bounds.x, bounds.x)
+      root.position.z = THREE.MathUtils.clamp(root.position.z, -bounds.z, bounds.z)
+    }
+
+    const groundY = heightAt(root.position.x, root.position.z)
+    const agl = root.position.y - groundY
+    if (agl <= CRASH_AGL) {
+      const impact = Math.hypot(velocity.x, velocity.y, velocity.z)
+      hitGround(Math.max(speed, impact))
+    }
+
+    return telemetry()
   }
 
   /** How deep into the edge band the aircraft is: 0 inside, 1 at the wall. */
@@ -206,6 +273,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
   function update(dt: number, input: FlightInput): FlightTelemetry {
     // Wreckage does not fly. Everything below assumes a live aircraft.
     if (crashed) return telemetry()
+    if (flameout) return updateFlameout(dt)
 
     // ——— Throttle ———
     if (input.throttleUp) throttle += THROTTLE_RATE * dt
@@ -310,10 +378,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     const groundY = heightAt(root.position.x, root.position.z)
     const agl = root.position.y - groundY
     if (agl <= CRASH_AGL) {
-      root.position.y = groundY + CRASH_AGL
-      crashed = true
-      velocity.set(0, 0, 0)
-      onCrash?.({ speed, agl })
+      hitGround(speed)
     }
 
     const tm = telemetry()
@@ -331,6 +396,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     },
     reset(pos, yaw, throttle01 = 0.55) {
       crashed = false
+      flameout = false
       stalled = false
       nearCeiling = false
       nearEdge = false
@@ -346,7 +412,27 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     forceCrash() {
       if (crashed) return
       crashed = true
+      flameout = false
       velocity.set(0, 0, 0)
+      sinkRate = 0
     },
+    beginFlameout() {
+      if (crashed || flameout) return
+      flameout = true
+      throttle = 0
+      stalled = true
+      // Keep residual airspeed + vertical rate so the dive continues from now.
+      readAxes()
+      if (velocity.lengthSq() < 1) {
+        velocity.copy(nose).multiplyScalar(speed)
+      }
+      sinkRate = Math.min(sinkRate, -6)
+      // Pick a tumble bias from current attitude so each kill looks different.
+      flameTumble
+        .set(0.35 + Math.random() * 0.5, 0.15 + Math.random() * 0.35, 0.55 + Math.random() * 0.45)
+        .normalize()
+      console.info('[Steel] Flight flame-out — engine dead, diving')
+    },
+    isFlameout: () => flameout,
   }
 }

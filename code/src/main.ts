@@ -2,7 +2,14 @@ import './style.css'
 import * as THREE from 'three'
 import { spawnAiPz3Enemy, playerAsHostile, type AiEnemy } from './aiEnemy'
 import { spawnAiCorsair, isAircraftTankId } from './aiAircraft'
-import { unlockAudio, createDieselEngine, createPropEngine } from './audio'
+import {
+  unlockAudio,
+  createDieselEngine,
+  createPropEngine,
+  createEjectSiren,
+  createLowAltAlarm,
+  type EngineLoop,
+} from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
 import { bindMouseAim, getAimDirection, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
 import { type CameraMode, adjustAimZoom, updatePlayerCamera } from './camera'
@@ -20,21 +27,31 @@ import {
   consumeWeaponSelect,
   consumeCameraToggle,
   consumeZoomDelta,
+  consumeNvgToggle,
   getDriveInput,
   bindFlightInput,
   getFlightInput,
   resetFlightInput,
+  isLockHold,
+  isSamFire,
 } from './input'
+import { createLockOn, type LockPhase } from './lockOn'
+import { createLockOnHud } from './lockOnHud'
+import { aimAaAtLockedTarget, clearAaAimTracking } from './aaAutoAim'
+import { createMissileLockStub, noteMissileLockChange } from './missileStub'
+import { createSamMissiles } from './samMissiles'
+import { createCountermeasures, readPublishedDecoys } from './countermeasures'
 import { createArtilleryController, type ArtilleryController } from './artillery'
 import { loadPlayerTank } from './loadTank'
 import { loadPlayerAircraft, type AircraftHandle } from './loadAircraft'
 import { createAircraftFlight } from './aircraftFlight'
 import { createAircraftChaseCamera } from './aircraftCamera'
-import { createFlightHud } from './flightHud'
+import { createFlightHud, type MissileHudState } from './flightHud'
 import { createAircraftGuns } from './aircraftGuns'
 import { createAircraftBombs } from './aircraftBombs'
-import { createImpactCinematic, BOMB_SHOT, KILL_SHOT } from './impactCinematic'
+import { createImpactCinematic, KILL_SHOT } from './impactCinematic'
 import { createEjectCinematic } from './ejectCinematic'
+import { createEjectAlert } from './ejectAlert'
 import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
 import { onGltfProgress, preloadUrls } from './loadGltf'
@@ -60,7 +77,10 @@ import { collectWheels, updateWheels } from './wheels'
 import { collectTracks, updateTracks } from './tracks'
 import { spawnDestroyedWreck, updateWrecks } from './wreck'
 import { createEnvironment } from './environment'
+import { createNvg } from './nvg'
+import { createMatchOpening } from './openingCinematic'
 import { showMatchEnd } from './endScreen'
+import { grantMatchWin } from './wallet'
 import { createPodium3d, type Podium3d, type PodiumPlace } from './podium3d'
 import { createMatchScoreboard, type ScoreRow } from './scoreboard'
 import { getSession } from './auth'
@@ -76,6 +96,8 @@ const AIR_SPAWN_ALT = 140
 const AIR_CEILING = 460
 /** Aircraft turn back this far inside the tank arena walls. */
 const AIR_WALL_INSET = 12
+/** Low-alt buzzer while AGL is at or below this (metres). */
+const LOW_ALT_WARN_M = 55
 /** Ceiling on a single simulated step, so the bomb cam's fast-forward can't
  *  hand the flight model or AI a step big enough to go unstable. */
 const MAX_SIM_DT = 0.07
@@ -241,6 +263,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
     { ambient, hemi, sun },
     { timeOfDay, season, weather },
   )
+  const nvg = createNvg({
+    night: timeOfDay === 'night',
+    scene,
+    renderer,
+    lights: { ambient, hemi, sun },
+  })
+  if (timeOfDay === 'night') {
+    console.info('[Steel] Night mission — press N for NVG')
+  }
 
   const loading = document.createElement('div')
   loading.id = 'loading-overlay'
@@ -332,16 +363,29 @@ async function startMission(sel: MenuSelection): Promise<void> {
   // returns before any tank drive/aim/fire setup is built, so tanks can't
   // regress from air work.
   if (isAir) {
-    const air = airHandleEarly ?? (await loadPlayerAircraft(tankId))
+    if (!airHandleEarly) {
+      throw new Error(`[Steel] Failed to load aircraft ${tankId} — check network / Pages assets`)
+    }
+    const air = airHandleEarly
     const base = mapSpawns[team][spawnIndex] ?? mapSpawns[team][0]!
     air.root.position.set(base.x, sampleY(base.x, base.z) + AIR_SPAWN_ALT, base.z)
     air.root.rotation.y = Math.atan2(-base.x, -base.z)
+    air.root.userData.air = true
     scene.add(air.root)
 
     // Plane never captures the hill — only ground units do. In KOTH a crash
     // or eject respawns; in Skirmish either one ends the match.
     let airCrashed = false
     let airDeadFor = 0
+    // Jets: no prop SFX (static airframe — no spin / gear motion either).
+    const silentProp: EngineLoop = {
+      start() {},
+      stop() {},
+      setIntensity() {},
+    }
+    const propEngine = option.jet ? silentProp : createPropEngine()
+    const ejectSiren = createEjectSiren()
+    const lowAltAlarm = createLowAltAlarm()
     const flight = createAircraftFlight({
       root: air.root,
       heightAt: sampleY,
@@ -359,8 +403,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (airCrashed || airEnded) return
       airCrashed = true
       airDeadFor = 0
-      bombCam.cancel()
       ejectCam.cancel()
+      ejectAlert.cancel()
+      ejectSiren.setActive(false)
+      lowAltAlarm.setActive(false)
+      propEngine.setIntensity(0)
       airBoard.noteDeath(air.root)
       if (reason === 'eject') {
         console.info(`[Steel] Corsair ejected at ${speed.toFixed(0)} m/s`)
@@ -382,33 +429,69 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     let ejectSpeed = 0
+    const ejectExitVel = new THREE.Vector3()
+    const ejectAlert = createEjectAlert()
     const ejectCam = createEjectCinematic({
       scene,
       heightAt: sampleY,
       onShow: (showing) => flightHud.setVisible(!showing),
       onDone: () => {
+        ejectSiren.setActive(false)
         bailOut('eject', ejectSpeed)
+      },
+      onAirframeFx: (origin, grounded) => {
+        if (!smokeEarly) return
+        smokeEarly.wreckBurn(origin)
+        if (!grounded && Math.random() < 0.1) smokeEarly.wreckFire(origin)
+        if (grounded && Math.random() < 0.2) smokeEarly.wreckFire(origin)
       },
     })
 
-    function startEject(): void {
-      if (airCrashed || airEnded || ejectCam.active()) return
-      bombCam.cancel()
-      ejectSpeed = flight.telemetry().speed
+    /** Y pressed — banner + siren, seat fires after the arm delay. */
+    function armEject(): void {
+      if (
+        airCrashed ||
+        airEnded ||
+        flight.isFlameout() ||
+        ejectCam.active() ||
+        ejectAlert.active()
+      ) {
+        return
+      }
+      if (!ejectAlert.arm()) return
+      lowAltAlarm.setActive(false)
+      ejectSiren.setActive(true)
+    }
+
+    /** Seat fires after arm countdown. */
+    function commitEject(): void {
+      if (airCrashed || airEnded || flight.isFlameout() || ejectCam.active()) {
+        ejectAlert.cancel()
+        ejectSiren.setActive(false)
+        return
+      }
+      const tm = flight.telemetry()
+      ejectSpeed = tm.speed
+      // Capture velocity BEFORE forceCrash zeros it (old bug → hover-drop).
+      ejectExitVel.copy(flight.velocity)
+      if (ejectExitVel.lengthSq() < 4) {
+        const nose = flight.noseDir()
+        ejectExitVel.copy(nose).multiplyScalar(Math.max(40, tm.speed))
+        ejectExitVel.y -= 6
+      }
       flight.forceCrash()
+      propEngine.setIntensity(0)
+      lowAltAlarm.setActive(false)
+      ejectSiren.setActive(true)
       ejectCam.begin({
         aircraft: air.root,
-        velocity: flight.velocity,
+        velocity: ejectExitVel,
       })
       console.info(`[Steel] Eject seat — ${ejectSpeed.toFixed(0)} m/s`)
     }
     bindFlightInput()
     resetFlightInput()
-    lockPointer(renderer.domElement)
-
-    const propEngine = createPropEngine()
-    propEngine.start()
-    propEngine.setIntensity(0.35)
+    // Pointer lock waits until match opening finishes (click = skip).
 
     stopProgress()
     loading.remove()
@@ -424,7 +507,78 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
     chase.reset()
 
-    const flightHud = createFlightHud()
+    const flightHud = createFlightHud({
+      mapSizeX: mapOpt.sizeX,
+      mapSizeZ: mapOpt.sizeZ,
+      theme: 'forest',
+      towns:
+        FOREST_TOWNS.length > 0
+          ? FOREST_TOWNS.map((t) => ({
+              x: t.x,
+              z: t.z,
+              name: t.name,
+              radius: t.radius,
+            }))
+          : undefined,
+      paths: mapPaths,
+      spawns: [
+        ...mapOpt.spawns.red.map((p) => ({ x: p.x, z: p.z, team: 'red' as const })),
+        ...mapOpt.spawns.blue.map((p) => ({ x: p.x, z: p.z, team: 'blue' as const })),
+      ],
+      hill: isKoth ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS } : undefined,
+    })
+    // L1/L3 lock-on: F-16 radar + real AAMs.
+    const airLock = option.jet ? createLockOn() : null
+    const airLockHud = option.jet ? createLockOnHud() : null
+    airLockHud?.setVisible(false)
+    let airMissilePhase: LockPhase = 'idle'
+    const _lockOrigin = new THREE.Vector3()
+    const _lockLook = new THREE.Vector3()
+
+    const countermeasures = createCountermeasures({
+      scene,
+      getPosition: (out) => {
+        air.root.getWorldPosition(out)
+      },
+      getVelocity: (out) => {
+        out.copy(flight.velocity)
+      },
+    })
+
+    const airAam =
+      airLock != null
+        ? createSamMissiles({
+            scene,
+            getLaunchOrigin: (out) => {
+              // Rail off the wing root — slightly below so it clears the belly.
+              air.root.getWorldPosition(out)
+              _lockLook.set(-1.8, -0.35, 0.8).applyQuaternion(air.root.quaternion)
+              out.add(_lockLook)
+            },
+            getLaunchDir: (out) => {
+              out.set(0, 0, 1).applyQuaternion(air.root.quaternion).normalize()
+            },
+            // Soft diamond or hard lock — both feed the seeker.
+            getLockedTarget: () => airLock.getTrackTarget(),
+            getHostiles: () => airEnemies,
+            getDecoys: () => countermeasures.getDecoys(),
+            heightAt: sampleY,
+            onKill: (victim) => {
+              airBoard.noteKill(air.root)
+              console.info(`[Steel] F-16 AAM destroyed ${victim.name || 'target'}`)
+            },
+            maxAmmo: 6,
+            reloadSec: 1.4,
+            speed: 175,
+            damage: 520,
+            color: 0xffe8a0,
+            logTag: 'AAM',
+            airLaunch: true,
+            meshScale: 1.35,
+          })
+        : null
+    // Keep stub API for lock-phase logging only.
+    const airMissile = airLock ? createMissileLockStub(airLock) : null
 
     let airKoth = createKothState()
     const airHillRing = isKoth ? createHillRing(scene) : null
@@ -474,14 +628,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
       altitudeSpan: 7,
       label: 'Player',
       onDestroyed: () => {
-        if (airCrashed || airEnded) return
-        const spd = flight.telemetry().speed
-        flight.forceCrash()
-        bailOut('crash', spd)
-        console.info('[Steel] Player Corsair shot down')
+        if (airCrashed || airEnded || flight.isFlameout()) return
+        // Don't freeze mid-air — flame-out dive until the deck (onCrash → bailOut).
+        flight.beginFlameout()
+        propEngine.setIntensity(0)
+        console.info('[Steel] Player aircraft shot down — engine flame-out')
       },
     })
     const airPlayerHostile = playerAsHostile(airPlayerCombat)
+    const _flameEng = new THREE.Vector3()
+    const _flameNose = new THREE.Vector3()
+    const _mapNose = new THREE.Vector3()
 
     const airJobs: Array<Promise<void>> = []
     const airFlightBounds = { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET }
@@ -538,6 +695,37 @@ async function startMission(sel: MenuSelection): Promise<void> {
       `[Steel] Air mission — ${airEnemies.length} hostile / ${airFriendlies.length} friendly AI`,
     )
 
+    flightHud.setVisible(false)
+    const airMatchOpening = createMatchOpening({
+      units: [
+        { root: air.root, team, aircraft: true },
+        ...airFriendlies.map((u) => ({
+          root: u.root,
+          team,
+          aircraft: !!u.aircraft,
+        })),
+        ...airEnemies.map((u) => ({
+          root: u.root,
+          team: airOpposite,
+          aircraft: !!u.aircraft,
+        })),
+      ],
+      spawns: { red: mapSpawns.red, blue: mapSpawns.blue },
+      heightAt: sampleY,
+      mapHalfZ: mapOpt.sizeZ / 2,
+      playerRoot: air.root,
+      onDone: () => {
+        flightHud.setVisible(true)
+        airLockHud?.setVisible(true)
+        lockPointer(renderer.domElement)
+        chase.reset()
+        propEngine.start()
+        propEngine.setIntensity(0.35)
+        ejectSiren.start()
+        lowAltAlarm.start()
+      },
+    })
+
     const guns = createAircraftGuns({
       scene,
       root: air.root,
@@ -545,6 +733,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
       heightAt: sampleY,
       bounds: playable,
       velocity: flight.velocity,
+      ...(option.jet
+        ? {
+            stations: [[0, -0.15, air.nose.position.z]] as const,
+            noMirrorStations: true,
+          }
+        : {}),
     })
     guns.setOnKill((victim) => {
       airBoard.noteKill(air.root)
@@ -563,19 +757,6 @@ async function startMission(sel: MenuSelection): Promise<void> {
       console.info(`[Steel] Corsair bomb destroyed ${victim.name || 'target'}`)
     })
 
-    // Release cinematic: time dilates and the camera rides the bomb down.
-    // One at a time — a second bomb dropped mid-shot keeps the current one.
-    const bombCam = createImpactCinematic({
-      heightAt: sampleY,
-      profile: BOMB_SHOT,
-      onShow: (showing) => flightHud.setVisible(!showing),
-    })
-    bombs.setOnRelease((b) => {
-      if (airEnded || bombCam.active() || b.flightTime <= 0) return
-      bombCam.begin(b)
-      console.info(`[Steel] Bomb cam — ${b.flightTime.toFixed(1)}s fall`)
-    })
-
     // Bombsight scope renders the target area as a second, narrow-FOV pass.
     // Off by default so the extra draw call is opt-in.
     let scopeOn = false
@@ -583,9 +764,6 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const scopeLook = new THREE.Vector3()
 
     let airEnded = false
-    let deferredAirEnd:
-      | { kind: 'win' | 'lose'; title: string; sub: string; endTeam?: TeamId }
-      | null = null
 
     function presentAirMatchEnd(
       kind: 'win' | 'lose',
@@ -593,14 +771,25 @@ async function startMission(sel: MenuSelection): Promise<void> {
       sub: string,
       endTeam: TeamId = team,
     ): void {
+      airMatchOpening.dispose()
+      nvg.dispose()
       propEngine.stop()
-      bombCam.cancel()
+      ejectSiren.stop()
+      lowAltAlarm.stop()
       ejectCam.cancel()
+      ejectAlert.dispose()
       document.exitPointerLock?.()
       flightHud.setVisible(false)
       flightHud.setRespawn(null)
+      airLock?.reset()
+      airMissile?.reset()
+      airAam?.dispose()
+      countermeasures.dispose()
+      airLockHud?.setVisible(false)
+      airLockHud?.dispose()
       // Death is recorded in onCrash / eject (and KOTH can crash more than once).
       const rows = airBoard.ranked()
+      const reward = kind === 'win' ? grantMatchWin('air-victory') : null
       showMatchEnd({
         kind,
         team: endTeam,
@@ -608,14 +797,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
         sub,
         leaderboard: rows,
         podium3d: true,
+        reward,
       })
       void startVictoryStage(rows, kind === 'win', endTeam)
     }
 
-    /**
-     * Same end path as tanks: HTML board + 3D podium. A win that lands mid
-     * bomb-cam waits for the shot so the kill isn't covered by the stage.
-     */
+    /** Same end path as tanks: HTML board + 3D podium. */
     function finishAirMatch(
       kind: 'win' | 'lose',
       title: string,
@@ -624,10 +811,6 @@ async function startMission(sel: MenuSelection): Promise<void> {
     ): void {
       if (airEnded) return
       airEnded = true
-      if (kind === 'win' && bombCam.active()) {
-        deferredAirEnd = { kind, title, sub, endTeam }
-        return
-      }
       presentAirMatchEnd(kind, title, sub, endTeam)
     }
 
@@ -688,45 +871,92 @@ async function startMission(sel: MenuSelection): Promise<void> {
         renderer.render(podiumStage.scene, podiumStage.camera)
         return
       }
-      // The bomb cinematic dilates sim time. Clamped again after scaling so a
-      // fast-forward frame can't hand the flight model a destabilising step.
-      const dt = bombCam.active()
-        ? Math.min(realDt * bombCam.timeScale(), MAX_SIM_DT)
-        : realDt
+      if (airMatchOpening.active()) {
+        airMatchOpening.update(realDt, camera)
+        renderer.render(scene, camera)
+        return
+      }
+      // Sim step — no bomb cinematic time dilation.
+      const dt = realDt
 
       const raw = getFlightInput(dt)
-      if (raw.skipCinematic) bombCam.cancel()
-      if (raw.eject && !airCrashed && !airEnded && !ejectCam.active()) {
-        startEject()
+      if (consumeNvgToggle()) nvg.toggle()
+      if (
+        raw.eject &&
+        !airCrashed &&
+        !airEnded &&
+        !flight.isFlameout() &&
+        !ejectCam.active() &&
+        !ejectAlert.active()
+      ) {
+        armEject()
       }
-      // The shot takes the camera off the aircraft, so hand the stick to the
-      // auto-leveller for the duration — bombing runs start in a dive, and
-      // flying blind into the deck isn't the player's mistake. C takes over.
+      if (
+        raw.toggleGear &&
+        air.landingGear &&
+        !airCrashed &&
+        !airEnded &&
+        !ejectCam.active()
+      ) {
+        air.landingGear.toggle()
+      }
+      countermeasures.update(
+        dt,
+        !airCrashed && !airEnded && !ejectCam.active() && raw.dropChaff,
+      )
+      air.landingGear?.update(realDt)
+      if (ejectAlert.active()) {
+        if (airCrashed || airEnded || flight.isFlameout()) {
+          ejectAlert.cancel()
+          ejectSiren.setActive(false)
+        } else if (ejectAlert.update(realDt)) {
+          commitEject()
+        }
+      }
+      // Flame-out ignores stick entirely (handled inside the flight model).
       const input =
-        bombCam.active() || ejectCam.active()
+        ejectCam.active() || flight.isFlameout()
           ? { ...raw, pitch: 0, roll: 0, rudder: 0, handsOff: true, fire: false, dropBomb: false }
           : raw
       const tm = flight.update(dt, input)
-      if (!tm.crashed) air.spinProp(dt, tm.throttle)
-      if (tm.crashed) bombCam.cancel()
-      // Prop idle: throttle + airspeed; silent while crashed / match over.
-      if (airEnded || airCrashed || ejectCam.active()) {
+      if (!tm.crashed && !tm.flameout) air.spinProp(dt, tm.throttle)
+      else if (tm.flameout) air.spinProp(dt, 0)
+      // Prop idle: throttle + airspeed; silent while crashed / flame-out / match over.
+      if (airEnded || airCrashed || tm.flameout || ejectCam.active()) {
         propEngine.setIntensity(0)
       } else {
         const thr = tm.throttle
         const spd = Math.min(1, tm.speed / 100)
         propEngine.setIntensity(0.25 + thr * 0.45 + spd * 0.3)
       }
+      // Low-alt buzzer while close to the deck (stops as soon as you climb out).
+      lowAltAlarm.setActive(
+        !airEnded &&
+          !airCrashed &&
+          !tm.flameout &&
+          !ejectCam.active() &&
+          !ejectAlert.active() &&
+          tm.agl <= LOW_ALT_WARN_M,
+      )
+      // Engine fire while flaming out — trail from just aft of the spinner.
+      if (tm.flameout && smokeEarly) {
+        _flameNose.set(0, 0, 1).applyQuaternion(air.root.quaternion)
+        _flameEng.copy(air.root.position).addScaledVector(_flameNose, -2.2)
+        _flameEng.y += 0.4
+        smokeEarly.wreckBurn(_flameEng)
+        if (Math.random() < 0.08) smokeEarly.wreckFire(_flameEng)
+      }
       // Chase cam keeps real dt so it isn't sluggish, and yields to the bomb
       // cam — it re-acquires by lerping back from wherever the shot ended.
-      if (!bombCam.active() && !ejectCam.active() && !airCrashed) {
+      // Stay on the airframe during flame-out so you watch the dive in.
+      if (!ejectCam.active() && !airCrashed) {
         chase.update(realDt, tm)
       }
       ejectCam.update(realDt, camera)
 
       if (!airEnded) {
         const neighbors = airEnemies.concat(airFriendlies).map((a) => a.root)
-        const playerLive = airPlayerCombat.alive && !airCrashed
+        const playerLive = airPlayerCombat.alive && !airCrashed && !tm.flameout
         for (const unit of airEnemies) {
           unit.update(dt, {
             hostiles: playerLive ? [airPlayerHostile, ...airFriendlies] : airFriendlies,
@@ -748,7 +978,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           })
         }
 
-        if (!airCrashed && !ejectCam.active()) {
+        if (!airCrashed && !tm.flameout && !ejectCam.active()) {
           guns.update(dt, input.fire, airEnemies, camera)
           if (input.toggleSight) {
             scopeOn = !scopeOn
@@ -793,14 +1023,60 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
 
       updateWrecks(dt, smokeEarly ?? undefined)
-      bombCam.update(realDt, camera)
-      if (deferredAirEnd && !bombCam.active()) {
-        const end = deferredAirEnd
-        deferredAirEnd = null
-        presentAirMatchEnd(end.kind, end.title, end.sub, end.endTeam)
-      }
+      smokeEarly?.update(dt, camera)
 
       const pred = bombs.prediction()
+      _mapNose.set(0, 0, 1).applyQuaternion(air.root.quaternion)
+      let mapHeading = THREE.MathUtils.radToDeg(Math.atan2(_mapNose.x, _mapNose.z))
+      if (mapHeading < 0) mapHeading += 360
+
+      let mslHud: MissileHudState | null = null
+      if (airLock && airLockHud) {
+        const lockUi =
+          !airEnded &&
+          !airCrashed &&
+          !ejectCam.active() &&
+          !airMatchOpening.active()
+        airLockHud.setVisible(lockUi)
+        if (lockUi) {
+          air.root.getWorldPosition(_lockOrigin)
+          // Nose-forward cone (chase cam sits behind — camera look was flaky).
+          _lockLook.set(0, 0, 1).applyQuaternion(air.root.quaternion).normalize()
+          const lockFrame = airLock.update({
+            dt,
+            origin: _lockOrigin,
+            lookDir: _lockLook,
+            camera,
+            foes: airEnemies.map((u) => ({
+              root: u.root,
+              alive: u.alive,
+              aircraft: !!u.aircraft,
+            })),
+            holdLock: isLockHold(),
+          })
+          airLockHud.apply(lockFrame)
+          mslHud = {
+            phase: lockFrame.phase,
+            ammo: airAam?.ammo(),
+          }
+          if (airMissile) {
+            airMissilePhase = noteMissileLockChange(airMissile, airMissilePhase)
+          }
+        } else {
+          airLock.reset()
+          airLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
+          mslHud = airAam ? { phase: 'idle', ammo: airAam.ammo() } : { phase: 'idle' }
+        }
+      }
+
+      // After lock update so soft/hard track is current; hold M like Pantsir.
+      if (airAam) {
+        airAam.update(
+          dt,
+          !airCrashed && !airEnded && !ejectCam.active() && (raw.fireMissile || isSamFire()),
+        )
+      }
+
       flightHud.update(
         tm,
         { ammo: guns.ammo(), heat: guns.heat(), firing: guns.firing() },
@@ -810,13 +1086,28 @@ async function startMission(sel: MenuSelection): Promise<void> {
           onTarget: pred.valid && pred.lethal,
           scopeOn,
         },
+        {
+          hp: airPlayerCombat.hp,
+          maxHp: option.maxHp,
+          posX: air.root.position.x,
+          posZ: air.root.position.z,
+          headingDeg: mapHeading,
+          foes: airEnemies
+            .filter((u) => u.alive)
+            .map((u) => ({ x: u.root.position.x, z: u.root.position.z })),
+          allies: airFriendlies
+            .filter((u) => u.alive)
+            .map((u) => ({ x: u.root.position.x, z: u.root.position.z })),
+        },
+        mslHud,
+        { releasing: countermeasures.bannerActive() },
       )
 
       renderer.render(scene, camera)
 
       // ——— Bombsight pass ———
       const showScope =
-        scopeOn && pred.valid && !tm.crashed && !bombCam.active() && !airCrashed
+        scopeOn && pred.valid && !tm.crashed && !airCrashed
       if (showScope) {
         // Look from the aircraft down the release solution, so the scope frames
         // exactly where a bomb dropped now would land.
@@ -890,7 +1181,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const board = createMatchScoreboard()
   let aiSeq = 0
   try {
-    const playerHandle = playerHandleEarly ?? (await loadPlayerTank(tankId))
+    if (!playerHandleEarly) {
+      throw new Error(`[Steel] Failed to load tank ${tankId} — check network / Pages assets`)
+    }
+    const playerHandle = playerHandleEarly
 
     if (allyAiTanks.length > 0 || foeAiTanks.length > 0) {
       try {
@@ -1016,11 +1310,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       onDestroyed: (r) => {
         board.noteDeath(r)
         console.info('[Steel] Player destroyed')
-        if (isKoth) {
-          r.visible = false
-          return
-        }
-        spawnDestroyedWreck(scene, r, smoke)
+        spawnDestroyedWreck(scene, r, smoke, isKoth)
       },
     })
     const playerName = getSession()?.username?.trim() || 'Commander'
@@ -1076,6 +1366,34 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
     hud.setVisible(true)
 
+    // L1 lock-on: Duster / Shilka (auto-aim in L2).
+    const groundLock = option.antiAir ? createLockOn() : null
+    const groundLockHud = option.antiAir ? createLockOnHud() : null
+    groundLockHud?.setVisible(false)
+    const _gLockOrigin = new THREE.Vector3()
+    const _gLockLook = new THREE.Vector3()
+    const sam =
+      option.samMissiles && groundLock
+        ? createSamMissiles({
+            scene,
+            getLaunchOrigin: (out) => {
+              muzzle.getWorldPosition(out)
+              out.y += 0.6
+            },
+            getLaunchDir: (out) => {
+              getAimDirection(out)
+            },
+            getLockedTarget: () => groundLock.getLockedTarget(),
+            getHostiles: () => enemies,
+            getDecoys: () => readPublishedDecoys(),
+            heightAt: sampleY,
+            onKill: (victim) => {
+              board.noteKill(tank)
+              console.info(`[Steel] Pantsir SAM destroyed ${victim.name || 'target'}`)
+            },
+          })
+        : null
+
     const arty: ArtilleryController | null = option.artillery
       ? createArtilleryController({
           arenaSizeX: mapOpt.sizeX,
@@ -1092,7 +1410,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const killCam = createImpactCinematic({
       heightAt: sampleY,
       profile: KILL_SHOT,
-      onShow: (showing) => hud.setVisible(!showing),
+      onShow: (showing) => {
+        hud.setVisible(!showing)
+        groundLockHud?.setVisible(!showing)
+      },
     })
     fire.setOnLethalShot((shot) => {
       if (matchOver || killCam.active()) return
@@ -1116,14 +1437,39 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const _muzzleWorld = new THREE.Vector3()
     const _fwd = new THREE.Vector3()
 
-    updatePlayerCamera(cameraMode, camera, tank, turretMount, 1, aiming, muzzle)
+    const dieselEngine = createDieselEngine()
+
     stopProgress()
     loading.remove()
-    lockPointer(renderer.domElement)
 
-    const dieselEngine = createDieselEngine()
-    dieselEngine.start()
-    dieselEngine.setIntensity(0.2)
+    hud.setVisible(false)
+    const matchOpening = createMatchOpening({
+      units: [
+        { root: tank, team, aircraft: false },
+        ...friendlies.map((u) => ({
+          root: u.root,
+          team,
+          aircraft: !!u.aircraft,
+        })),
+        ...enemies.map((u) => ({
+          root: u.root,
+          team: opposite,
+          aircraft: !!u.aircraft,
+        })),
+      ],
+      spawns: { red: mapSpawns.red, blue: mapSpawns.blue },
+      heightAt: sampleY,
+      mapHalfZ: mapOpt.sizeZ / 2,
+      playerRoot: tank,
+      onDone: () => {
+        hud.setVisible(true)
+        groundLockHud?.setVisible(true)
+        lockPointer(renderer.domElement)
+        dieselEngine.start()
+        dieselEngine.setIntensity(0.2)
+        updatePlayerCamera(cameraMode, camera, tank, turretMount, 1, aiming, muzzle)
+      },
+    })
 
     if (isKoth) {
       hud.setKoth({
@@ -1195,11 +1541,18 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
     function finishMatch(end: MatchEndSpec): void {
       matchOver = true
+      matchOpening.dispose()
+      nvg.dispose()
       dieselEngine.stop()
       document.exitPointerLock()
       hud.setVisible(false)
+      groundLock?.reset()
+      groundLockHud?.setVisible(false)
+      groundLockHud?.dispose()
+      sam?.dispose()
       const rows = board.ranked()
-      showMatchEnd({ ...end, leaderboard: rows, podium3d: true })
+      const reward = end.kind === 'win' ? grantMatchWin('tank-victory') : null
+      showMatchEnd({ ...end, leaderboard: rows, podium3d: true, reward })
       void startVictoryStage(rows, end.kind === 'win', end.team)
     }
 
@@ -1245,6 +1598,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     function updateTank(dt: number): AimFrame {
       const alive = playerCombat.alive && !matchOver
       const { forward, turn, brake, fire: wantsFire } = getDriveInput()
+      if (consumeNvgToggle()) nvg.toggle()
 
       if (consumeCameraToggle()) {
         cameraMode = cameraMode === 'turret' ? 'chase' : 'turret'
@@ -1344,6 +1698,44 @@ async function startMission(sel: MenuSelection): Promise<void> {
         }
       }
 
+      // L2: SPAAG hard-lock drives aim (before turret catch-up).
+      if (groundLock && groundLockHud && alive && !matchOver && !killCam.active()) {
+        muzzle.getWorldPosition(_gLockOrigin)
+        getAimDirection(_gLockLook)
+        const lockFrame = groundLock.update({
+          dt,
+          origin: _gLockOrigin,
+          lookDir: _gLockLook,
+          camera,
+          foes: enemies.map((u) => ({
+            root: u.root,
+            alive: u.alive,
+            aircraft: !!u.aircraft,
+          })),
+          holdLock: isLockHold(),
+        })
+        groundLockHud.setVisible(true)
+        groundLockHud.apply(lockFrame)
+        const lockedRoot = groundLock.getLockedTarget()
+        if (lockFrame.phase === 'hard' && lockedRoot) {
+          const foe = enemies.find((e) => e.root === lockedRoot)
+          aimAaAtLockedTarget({
+            hull: tank,
+            muzzle,
+            target: lockedRoot,
+            dt,
+            aircraft: !!foe?.aircraft,
+          })
+        } else {
+          clearAaAimTracking(lockedRoot)
+        }
+      } else if (groundLock && groundLockHud) {
+        groundLock.reset()
+        clearAaAimTracking()
+        groundLockHud.setVisible(false)
+        groundLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
+      }
+
       const aim = updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
 
       const useMg = fire.getWeapon() === 'mg'
@@ -1357,6 +1749,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
         camera,
         mapColliders,
       )
+      if (sam) {
+        sam.update(dt, alive && !matchOver && isSamFire())
+      }
       if (fired) {
         if (!useMg) punchShotRecoil()
         activeMuzzle.updateMatrixWorld(true)
@@ -1437,6 +1832,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         renderer.render(podiumStage.scene, podiumStage.camera)
         return
       }
+      if (matchOpening.active()) {
+        matchOpening.update(realDt, camera)
+        renderer.render(scene, camera)
+        return
+      }
       // C skips the kill cam rather than toggling camera mode — consuming the
       // key here keeps it away from updateTank for this frame.
       if (killCam.active() && consumeCameraToggle()) killCam.cancel()
@@ -1463,7 +1863,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
         fire: fire.getHudState(),
         tracksDisableLeft: playerCombat.getTracksDisableLeft(),
         envStatus: env.getDriveMods().status,
-        artilleryStatus: arty?.getHud().status,
+        artilleryStatus: sam
+          ? `SAM ${sam.ammo()} · P lock · M fire`
+          : arty?.getHud().status,
         headingRad: tank.rotation.y,
         speedU: drive.getSpeed(),
         rangeM: aim.rangeM,
@@ -1476,6 +1878,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           .filter((a) => a.alive)
           .map((a) => ({ x: a.root.position.x, z: a.root.position.z })),
       })
+
       renderer.render(scene, camera)
     }
 

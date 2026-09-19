@@ -26,6 +26,7 @@ import {
   type AuthMode,
   type AuthUser,
 } from './auth'
+import { getWallet } from './wallet'
 
 import {
   NATIONS,
@@ -202,11 +203,16 @@ function showHome(
   clearRoot(root)
   root.classList.add('menu-screen-home')
   const mode = getSession()?.mode ?? 'offline'
+  const wallet = getWallet()
   root.innerHTML = `
     <div class="menu-panel menu-panel-home">
       <p class="menu-brand">Steel</p>
       <p class="menu-tagline">Armor · grit · dust</p>
       <p class="auth-userline">Signed in as <strong>${escapeHtml(user.username)}</strong> · ${mode}</p>
+      <p class="home-wallet" aria-label="Currency">
+        <span class="wallet-chip wallet-silver"><i></i><b>${wallet.silver}</b> Silver</span>
+        <span class="wallet-chip wallet-gold"><i></i><b>${wallet.gold}</b> Gold</span>
+      </p>
       <div class="home-actions">
         <button type="button" class="home-btn home-btn-play" data-go="play">Play</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>

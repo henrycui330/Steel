@@ -6,13 +6,6 @@ export type WreckFx = {
   wreckBurn: (origin: THREE.Vector3) => void
 }
 
-type FlyingTurret = {
-  mesh: THREE.Object3D
-  vel: THREE.Vector3
-  spin: THREE.Vector3
-  life: number
-}
-
 type BurningWreck = {
   root: THREE.Object3D
   age: number
@@ -21,21 +14,26 @@ type BurningWreck = {
   nextEmit: number
 }
 
-const flying: FlyingTurret[] = []
 const burning: BurningWreck[] = []
 
 const _turretNames = ['Turret', 'turret', 'turretYawPivot']
 
 /**
- * Char the tank, fling the turret, leave a lasting burning wreck (no instant despawn).
+ * Char the tank and leave it where it died. `keepOriginal` clones first so a
+ * respawning vehicle can hide its live mesh without the wreck vanishing with it.
  */
 export function spawnDestroyedWreck(
   scene: THREE.Scene,
   root: THREE.Object3D,
   fx?: WreckFx | null,
+  keepOriginal = false,
 ): void {
-  const origin = root.position.clone()
-  origin.y = 1.2
+  const subject = keepOriginal ? cloneWreck(scene, root) : root
+  if (keepOriginal) root.visible = false
+
+  const origin = new THREE.Vector3()
+  subject.getWorldPosition(origin)
+  origin.y += 1.4
 
   fx?.wreckPlume(origin)
   fx?.wreckFire(origin)
@@ -48,69 +46,44 @@ export function spawnDestroyedWreck(
     emissiveIntensity: 0.35,
   })
 
-  root.traverse((obj) => {
-    if (obj instanceof THREE.Mesh) {
-      obj.material = charcoal
-    }
+  subject.traverse((obj) => {
+    if (obj instanceof THREE.Mesh) obj.material = charcoal
   })
 
+  // Knock the turret, but keep it on the hull. Detaching it used to drop the
+  // mesh to y=0.4, which is under the terrain — the tank looked like it vanished.
   let turret: THREE.Object3D | null = null
   for (const n of _turretNames) {
-    const hit = root.getObjectByName(n)
+    const hit = subject.getObjectByName(n)
     if (hit) {
       turret = hit
       break
     }
   }
-
-  if (turret && turret.parent) {
-    const worldPos = new THREE.Vector3()
-    const worldQuat = new THREE.Quaternion()
-    turret.getWorldPosition(worldPos)
-    turret.getWorldQuaternion(worldQuat)
-    turret.parent.remove(turret)
-    scene.add(turret)
-    turret.position.copy(worldPos)
-    turret.quaternion.copy(worldQuat)
-    flying.push({
-      mesh: turret,
-      vel: new THREE.Vector3(
-        (Math.random() - 0.5) * 6,
-        8 + Math.random() * 5,
-        (Math.random() - 0.5) * 6,
-      ),
-      spin: new THREE.Vector3(
-        (Math.random() - 0.5) * 8,
-        (Math.random() - 0.5) * 8,
-        (Math.random() - 0.5) * 8,
-      ),
-      life: 4,
-    })
+  if (turret) {
+    turret.rotation.x += 0.35 + Math.random() * 0.45
+    turret.rotation.z += (Math.random() - 0.5) * 0.4
+    turret.position.y += 0.12
   }
+  subject.rotation.z += (Math.random() - 0.5) * 0.12
 
-  burning.push({ root, age: 0, origin, nextEmit: 0.15 })
+  burning.push({ root: subject, age: 0, origin, nextEmit: 0.15 })
   console.info('[Steel] Wreck left burning')
 }
 
-export function updateWrecks(dt: number, fx?: WreckFx | null): void {
-  for (let i = flying.length - 1; i >= 0; i--) {
-    const f = flying[i]
-    f.life -= dt
-    f.vel.y -= 18 * dt
-    f.mesh.position.addScaledVector(f.vel, dt)
-    f.mesh.rotation.x += f.spin.x * dt
-    f.mesh.rotation.y += f.spin.y * dt
-    f.mesh.rotation.z += f.spin.z * dt
-    if (f.mesh.position.y < 0.4) {
-      f.mesh.position.y = 0.4
-      f.vel.set(0, 0, 0)
-      f.spin.multiplyScalar(0.9)
-    }
-    if (f.life <= 0) {
-      flying.splice(i, 1)
-    }
-  }
+function cloneWreck(scene: THREE.Scene, root: THREE.Object3D): THREE.Object3D {
+  const clone = root.clone(true)
+  clone.name = `${root.name || 'tank'}-wreck`
+  clone.visible = true
+  clone.traverse((obj) => {
+    obj.visible = obj === clone ? true : obj.visible
+    obj.userData = { wreck: true }
+  })
+  scene.add(clone)
+  return clone
+}
 
+export function updateWrecks(dt: number, fx?: WreckFx | null): void {
   for (const b of burning) {
     b.age += dt
     b.nextEmit -= dt

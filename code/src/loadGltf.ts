@@ -5,11 +5,13 @@ import { fixPublicUrl } from './assetUrl'
 
 const gltfCache = new Map<string, Promise<GLTF>>()
 const textureCache = new Map<string, Promise<THREE.Texture>>()
-const ASSET_CACHE = 'steel-assets-v1'
-const FETCH_TIMEOUT_MS = 90_000
-const PARSE_TIMEOUT_MS = 90_000
+const ASSET_CACHE = 'steel-assets-v2'
+const FETCH_TIMEOUT_MS = 45_000
+const PARSE_TIMEOUT_MS = 45_000
 const MAX_INFLIGHT = 4
 const GLB_MAGIC = 'glTF'
+/** Fewer retries — Pages 404/HTML fail fast instead of looking “stuck”. */
+const DEFAULT_RETRIES = 2
 
 let sharedLoader: GLTFLoader | null = null
 let inflight = 0
@@ -155,9 +157,15 @@ async function fetchBuffer(url: string, reload: boolean): Promise<ArrayBuffer> {
   if (!reload) {
     const cached = await cacheMatch(url)
     if (cached && cached.byteLength > 0) {
-      bytes += cached.byteLength
-      emit(url.split('/').pop() ?? url)
-      return cached
+      try {
+        assertGlbMagic(cached, url)
+        bytes += cached.byteLength
+        emit(url.split('/').pop() ?? url)
+        return cached
+      } catch {
+        // Drop SPA/HTML accidentally cached as a “model”.
+        await cacheDelete(url)
+      }
     }
   }
 
@@ -169,7 +177,8 @@ async function fetchBuffer(url: string, reload: boolean): Promise<ArrayBuffer> {
     try {
       res = await fetch(fixPublicUrl(url), {
         signal: ctrl.signal,
-        cache: reload ? 'reload' : 'force-cache',
+        // Avoid sticky force-cache of GitHub Pages HTML error bodies.
+        cache: reload ? 'reload' : 'default',
         credentials: 'same-origin',
       })
     } finally {
@@ -178,7 +187,12 @@ async function fetchBuffer(url: string, reload: boolean): Promise<ArrayBuffer> {
     if (!res.ok) {
       throw new Error(`[Steel] HTTP ${res.status} ${url}`)
     }
+    const ctype = (res.headers.get('content-type') || '').toLowerCase()
+    if (ctype.includes('text/html')) {
+      throw new Error(`[Steel] HTTP 404 (HTML) ${url}`)
+    }
     const data = await res.arrayBuffer()
+    assertGlbMagic(data, url)
     bytes += data.byteLength
     emit(url.split('/').pop() ?? url)
     await cachePut(url, data)
@@ -205,7 +219,6 @@ function parseGltf(data: ArrayBuffer, url: string): Promise<GLTF> {
 async function fetchGltfOnce(url: string, attempt: number): Promise<GLTF> {
   const label = url.split('/').pop() ?? url
   const data = await fetchBuffer(url, attempt > 0)
-  assertGlbMagic(data, url)
   return withTimeout(parseGltf(data, url), PARSE_TIMEOUT_MS, `parse ${label}`)
 }
 
@@ -243,7 +256,7 @@ async function loadGltfUncached(url: string, retries: number): Promise<GLTF> {
 }
 
 /** Shared GLB fetch with retries. Same URL is only downloaded once. */
-export function loadGltfCached(url: string, retries = 4): Promise<GLTF> {
+export function loadGltfCached(url: string, retries = DEFAULT_RETRIES): Promise<GLTF> {
   let pending = gltfCache.get(url)
   if (!pending) {
     pending = loadGltfUncached(url, retries)

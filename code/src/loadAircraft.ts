@@ -1,10 +1,16 @@
 import * as THREE from 'three'
 import { assetUrl } from './assetUrl'
 import { cloneGltfScene } from './loadGltf'
+import { createLandingGear, type LandingGear } from './landingGear'
 import { tankOptionById, type TankId } from './tankCatalog'
 
-const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=1')
-const YAK9_URL = assetUrl('models/yak9.glb?v=1')
+const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=5')
+const YAK9_URL = assetUrl('models/yak9.glb?v=6')
+const P51_URL = assetUrl('models/p51_mustang.glb?v=1')
+const F16_URL = assetUrl('models/f16a.glb?v=2')
+const B17_URL = assetUrl('models/b17.glb?v=1')
+const MIG15_URL = assetUrl('models/mig15.glb?v=1')
+const MIG21_URL = assetUrl('models/mig21.glb?v=1')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -28,6 +34,8 @@ export type AircraftHandle = {
   lengthM: number
   /** Advance the propeller. `throttle01` 0–1. */
   spinProp: (dt: number, throttle01: number) => void
+  /** Yak (and future packs with gear nodes). Null on Corsair until swapped. */
+  landingGear: LandingGear | null
 }
 
 type AircraftRigOpts = {
@@ -38,10 +46,14 @@ type AircraftRigOpts = {
   targetWingspan: number
   /**
    * Extra yaw baked into the inner model so the nose faces game **+Z**.
-   * Yak-9 export has nose on +X → −π/2.
+   * Older Yak pack needed −π/2; FG-1D Corsair + current Yak are already +Z.
    */
   noseYaw?: number
   propNames?: string[]
+  /** Jets have no propeller — skip spin heuristic. */
+  noProp?: boolean
+  /** Skip landing-gear carve / animation. */
+  noGear?: boolean
 }
 
 function findNode(root: THREE.Object3D, names: string[]): THREE.Object3D | null {
@@ -56,6 +68,70 @@ function findNode(root: THREE.Object3D, names: string[]): THREE.Object3D | null 
     if (lower.includes(obj.name.toLowerCase())) found = obj
   })
   return found
+}
+
+/**
+ * Sketchfab / WT packs often leave metallicFactor at the glTF default (1.0)
+ * with noisy metalness maps → painted fuselage reads as chrome / grey.
+ * Keep albedo + roughness; kill metalness so paint shows.
+ */
+function sanitizeAircraftMaterials(root: THREE.Object3D): void {
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.material) return
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+    for (const m of mats) {
+      if (!(m instanceof THREE.MeshStandardMaterial) && !(m instanceof THREE.MeshPhysicalMaterial)) {
+        continue
+      }
+      const mat = m as THREE.MeshStandardMaterial
+      mat.metalnessMap = null
+      mat.metalness = 0.06
+      if (mat.roughness < 0.35) mat.roughness = 0.55
+      if ('specularIntensity' in mat) {
+        ;(mat as THREE.MeshPhysicalMaterial).specularIntensity = 0
+        ;(mat as THREE.MeshPhysicalMaterial).specularColor?.setRGB(1, 1, 1)
+      }
+      mat.needsUpdate = true
+    }
+  })
+}
+
+function findPropeller(model: THREE.Object3D, names: string[]): THREE.Object3D | null {
+  const named = findNode(model, names)
+  if (named) return named
+
+  // Flattened Sketchfab packs: only accept disc-like meshes (two wide axes,
+  // one thin). Otherwise we spin nacelles / turrets (B-17 Object_38 lesson).
+  model.updateMatrixWorld(true)
+  const air = new THREE.Box3().setFromObject(model)
+  const airSize = air.getSize(new THREE.Vector3())
+  const maxDim = Math.max(airSize.x, airSize.y, airSize.z, 0.001)
+  let best: THREE.Mesh | null = null
+  let bestScore = -Infinity
+  const c = new THREE.Vector3()
+  const s = new THREE.Vector3()
+  const b = new THREE.Box3()
+  model.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
+    b.setFromObject(obj)
+    b.getSize(s)
+    b.getCenter(c)
+    const dims = [s.x, s.y, s.z].sort((a, b) => a - b)
+    const longest = dims[2]!
+    const mid = dims[1]!
+    const thin = dims[0]!
+    if (longest > maxDim * 0.28) return
+    if (longest < maxDim * 0.02) return
+    // Disc: thin normal, roughly circular face.
+    if (thin / longest > 0.32) return
+    if (mid / longest < 0.55) return
+    const score = c.z * 2 - longest
+    if (score > bestScore) {
+      bestScore = score
+      best = obj
+    }
+  })
+  return best
 }
 
 /**
@@ -109,7 +185,8 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
   model.updateMatrixWorld(true)
   const raw = new THREE.Box3().setFromObject(model)
   const rawSize = raw.getSize(new THREE.Vector3())
-  const span = Math.max(rawSize.x, 0.001)
+  // Wingspan = wider horizontal axis (some packs are nose-along-X).
+  const span = Math.max(rawSize.x, rawSize.z, 0.001)
   const scale = opts.targetWingspan / span
   model.scale.multiplyScalar(scale)
 
@@ -131,6 +208,15 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     obj.geometry?.computeBoundingSphere()
   })
 
+  sanitizeAircraftMaterials(model)
+
+  // Drop Sketchfab cameras / lights that hitch a ride in the GLB.
+  const strip: THREE.Object3D[] = []
+  model.traverse((obj) => {
+    if (/^Camera$/i.test(obj.name) || obj.type === 'PerspectiveCamera') strip.push(obj)
+  })
+  for (const obj of strip) obj.parent?.remove(obj)
+
   const root = new THREE.Group()
   root.name = opts.name
   root.rotation.order = 'YXZ'
@@ -148,8 +234,8 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     'Propellor',
     'Yak-9_Propellor',
   ]
-  const propeller = findNode(model, propNames)
-  if (!propeller) {
+  const propeller = opts.noProp ? null : findPropeller(model, propNames)
+  if (!propeller && !opts.noProp) {
     console.warn(`[Steel] ${opts.name} propeller node not found — prop will not spin`)
   }
 
@@ -160,6 +246,8 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     )
   }
 
+  const landingGear = opts.noGear ? null : createLandingGear(model)
+
   return {
     root,
     model,
@@ -168,6 +256,7 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     nose,
     wingspan: size.x,
     lengthM: size.z,
+    landingGear,
     spinProp(dt, throttle01) {
       if (!propeller) return
       const rps = PROP_IDLE_RPS + THREE.MathUtils.clamp(throttle01, 0, 1) * PROP_MAX_RPS
@@ -176,17 +265,27 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
   }
 }
 
-/** F4U-1A — export already Y-up with nose on +Z. */
+/** F4U-1A Corsair — original pack (nose +Z). No separate gear nodes. */
 export async function loadCorsair(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: CORSAIR_URL,
     name: 'corsair',
     targetWingspan: 12.5,
-    propNames: ['ProBlades', 'Prop_Blades', 'Propeller'],
+    propNames: ['ProBlades', 'Prop_Blades', 'Propeller', 'Propellor'],
   })
 }
 
-/** Yak-9 — Sketchfab pack has nose on +X; bake −90° yaw to game +Z. */
+/** P-51 Mustang — nose already +Z; spin `propeler` blades. */
+export async function loadP51Mustang(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: P51_URL,
+    name: 'p51',
+    targetWingspan: 11.3,
+    propNames: ['propeler', 'PROPELER', 'Propeller', 'Propellor'],
+  })
+}
+
+/** Yak-9 — original pack; nose on +X → bake −90°; named Gear_L/R/B. */
 export async function loadYak9(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: YAK9_URL,
@@ -197,10 +296,59 @@ export async function loadYak9(): Promise<AircraftHandle> {
   })
 }
 
+/** F-16A Block 15 — jet; static airframe (no prop / gear motion). */
+export async function loadF16(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: F16_URL,
+    name: 'f16',
+    targetWingspan: 9.96,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/** B-17G — nose +Z; props fused into nacelle meshes (no separate blades). */
+export async function loadB17(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: B17_URL,
+    name: 'b17',
+    targetWingspan: 31.6,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/** MiG-15 — early Soviet jet; static airframe (no prop / gear motion). */
+export async function loadMig15(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: MIG15_URL,
+    name: 'mig15',
+    targetWingspan: 10.08,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/** MiG-21MF Fishbed — Soviet jet; SpecGloss→metalrough; no prop/gear. */
+export async function loadMig21(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: MIG21_URL,
+    name: 'mig21',
+    targetWingspan: 7.15,
+    noProp: true,
+    noGear: true,
+  })
+}
+
 /** Load the aircraft chosen on the menu / AI slot. */
 export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   const opt = tankOptionById(id)
   if (!opt.aircraft) throw new Error(`Not an aircraft: ${id}`)
   if (id === 'yak9') return loadYak9()
+  if (id === 'p51') return loadP51Mustang()
+  if (id === 'f16') return loadF16()
+  if (id === 'b17') return loadB17()
+  if (id === 'mig15') return loadMig15()
+  if (id === 'mig21') return loadMig21()
   return loadCorsair()
 }
