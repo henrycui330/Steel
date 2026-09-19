@@ -28,6 +28,13 @@ export type MatchScoreboard = {
   noteDeath: (victimRoot: { uuid: string }) => void
   noteKillById: (id: string) => void
   noteDeathById: (id: string) => void
+  /** Current kill count for the registered player row (0 if none). */
+  playerKills: () => number
+  /**
+   * Fires when the *player* is credited a kill (destruction callback → noteKill).
+   * Returns unsubscribe.
+   */
+  onPlayerKill: (fn: (kills: number) => void) => () => void
   /** Sorted leaderboard: kills desc, deaths asc, player first on ties. */
   ranked: () => ScoreRow[]
 }
@@ -36,11 +43,15 @@ export type MatchScoreboard = {
 export function createMatchScoreboard(): MatchScoreboard {
   const byId = new Map<string, ScoreRow>()
   const rootToId = new Map<string, string>()
+  const playerKillFns = new Set<(kills: number) => void>()
 
   function bumpKill(id: string): void {
     const row = byId.get(id)
     if (!row) return
     row.kills += 1
+    if (row.isPlayer) {
+      for (const fn of playerKillFns) fn(row.kills)
+    }
   }
 
   function bumpDeath(id: string): void {
@@ -76,6 +87,18 @@ export function createMatchScoreboard(): MatchScoreboard {
     },
     noteDeathById(id) {
       bumpDeath(id)
+    },
+    playerKills() {
+      for (const row of byId.values()) {
+        if (row.isPlayer) return row.kills
+      }
+      return 0
+    },
+    onPlayerKill(fn) {
+      playerKillFns.add(fn)
+      return () => {
+        playerKillFns.delete(fn)
+      }
     },
     ranked() {
       return [...byId.values()].sort((a, b) => {

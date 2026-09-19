@@ -83,6 +83,7 @@ import { showMatchEnd } from './endScreen'
 import { grantMatchWin } from './wallet'
 import { createPodium3d, type Podium3d, type PodiumPlace } from './podium3d'
 import { createMatchScoreboard, type ScoreRow } from './scoreboard'
+import { createKillIndicator } from './killIndicator'
 import { getSession } from './auth'
 
 /** Expose for threejs-devtools-mcp bridge helpers / run_js. */
@@ -431,10 +432,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
     let ejectSpeed = 0
     const ejectExitVel = new THREE.Vector3()
     const ejectAlert = createEjectAlert()
+    /** Assigned after scoreboard register — eject cam toggles it. */
+    let killInd: ReturnType<typeof createKillIndicator> | null = null
     const ejectCam = createEjectCinematic({
       scene,
       heightAt: sampleY,
-      onShow: (showing) => flightHud.setVisible(!showing),
+      onShow: (showing) => {
+        flightHud.setVisible(!showing)
+        killInd?.setVisible(!showing)
+      },
       onDone: () => {
         ejectSiren.setActive(false)
         bailOut('eject', ejectSpeed)
@@ -620,6 +626,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       isPlayer: true,
       root: air.root,
     })
+    killInd = createKillIndicator()
+    const unsubAirKill = airBoard.onPlayerKill((n) => killInd!.noteKill(n))
+    killInd.setKills(0)
+    killInd.setVisible(false)
 
     const airPlayerCombat = createCombatant(air.root, {
       maxHp: option.maxHp,
@@ -716,6 +726,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       playerRoot: air.root,
       onDone: () => {
         flightHud.setVisible(true)
+        killInd?.setVisible(true)
         airLockHud?.setVisible(true)
         lockPointer(renderer.domElement)
         chase.reset()
@@ -781,6 +792,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       document.exitPointerLock?.()
       flightHud.setVisible(false)
       flightHud.setRespawn(null)
+      killInd?.setVisible(false)
+      unsubAirKill()
+      killInd?.dispose()
+      killInd = null
       airLock?.reset()
       airMissile?.reset()
       airAam?.dispose()
@@ -1324,6 +1339,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: tank,
     })
     fire.setOnKill(() => board.noteKill(tank))
+    const killInd = createKillIndicator()
+    const unsubKill = board.onPlayerKill((n) => killInd.noteKill(n))
+    killInd.setKills(0)
+    killInd.setVisible(false)
     const playerHostile = playerAsHostile(playerCombat)
 
     const drive = createDriveController(option.drive)
@@ -1412,6 +1431,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       profile: KILL_SHOT,
       onShow: (showing) => {
         hud.setVisible(!showing)
+        killInd.setVisible(!showing)
         groundLockHud?.setVisible(!showing)
       },
     })
@@ -1463,6 +1483,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       playerRoot: tank,
       onDone: () => {
         hud.setVisible(true)
+        killInd.setVisible(true)
         groundLockHud?.setVisible(true)
         lockPointer(renderer.domElement)
         dieselEngine.start()
@@ -1546,6 +1567,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
       dieselEngine.stop()
       document.exitPointerLock()
       hud.setVisible(false)
+      killInd.setVisible(false)
+      unsubKill()
+      killInd.dispose()
       groundLock?.reset()
       groundLockHud?.setVisible(false)
       groundLockHud?.dispose()

@@ -1,0 +1,77 @@
+.kill-ind {
+  position: fixed;
+  right: 1.25rem;
+  top: 22%;
+  z-index: 45;
+  pointer-events: none;
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  text-align: right;
+  color: #e8ece6;
+  text-shadow: 0 1px 0 #000, 0 0 10px rgba(0, 0, 0, 0.55);
+}
+
+.kill-ind-count {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.1rem;
+  padding: 0.35rem 0.55rem;
+  background: rgba(8, 12, 10, 0.45);
+  border: 1px solid rgba(180, 200, 170, 0.35);
+}
+
+.kill-ind-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.22em;
+  opacity: 0.75;
+}
+
+.kill-ind-num {
+  font-size: 1.65rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  min-width: 1.5ch;
+}
+
+.kill-ind.is-scored .kill-ind-num {
+  color: #ffd36a;
+}
+
+.kill-ind-flash {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.65rem);
+  font-size: 1.55rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: #ff4a3a;
+  text-shadow:
+    0 0 12px rgba(255, 50, 40, 0.75),
+    0 1px 0 #200;
+  border: 2px solid rgba(255, 70, 55, 0.9);
+  background: rgba(30, 0, 0, 0.55);
+  padding: 0.3rem 0.85rem;
+}
+
+.kill-ind-flash.is-pop {
+  animation: kill-ind-pop 1.35s ease-out both;
+}
+
+@keyframes kill-ind-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.85);
+  }
+  12% {
+    opacity: 1;
+    transform: translateY(0) scale(1.08);
+  }
+  35% {
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-10px) scale(1);
+  }
+}
