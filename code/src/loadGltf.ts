@@ -294,11 +294,12 @@ export function loadTextureCached(url: string): Promise<THREE.Texture> {
   if (!pending) {
     pending = (async () => {
       const ctrl = new AbortController()
-      const t = window.setTimeout(() => ctrl.abort(), 20_000)
+      // Textures are tiny — don't abort while big GLBs saturate the pipe.
+      const t = window.setTimeout(() => ctrl.abort('texture-timeout'), 60_000)
       try {
         const res = await fetch(fixPublicUrl(url), {
           signal: ctrl.signal,
-          cache: 'force-cache',
+          cache: 'default',
           credentials: 'same-origin',
         })
         if (!res.ok) throw new Error(`[Steel] HTTP ${res.status} ${url}`)

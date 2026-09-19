@@ -66,7 +66,7 @@ type MatchDraft = {
 }
 
 const AI_SLOT_MAX = 3
-const DEFAULT_AI_TANK: TankId = 'pz3'
+const DEFAULT_AI_TANK: TankId = 'tiger'
 const SVG_SIZE = 320
 
 function warmupMatchAssets(tankIds: readonly TankId[] = []): void {

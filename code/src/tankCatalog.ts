@@ -437,7 +437,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Pz-III L',
     role: 'Flanking blitz',
     blurb: 'Fast · agile · quick reload · made for flank and encircle',
-    url: assetUrl('models/pz3.glb?v=4'),
+    url: assetUrl('models/pz3.glb?v=5'),
     reloadSec: 4,
     maxHp: 680,
     targetWidth: 2.7,

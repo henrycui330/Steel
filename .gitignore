@@ -20,11 +20,9 @@ dist/
 .vscode/
 .cursor/
 
-# Oversized for GitHub without Git LFS (>100MB hard limit)
-# Keep these on disk locally; add via git-lfs later if needed.
-pz3.glb
+# Oversized source dumps for GitHub without Git LFS (>100MB hard limit).
+# Playable pz3 is compressed at code/public/models/pz3.glb (allowed).
 panzer_3l_low-poly.glb
-**/pz3.glb
 **/panzer_3l_low-poly.glb
 
 # Misc local clutter
