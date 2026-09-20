@@ -12,7 +12,7 @@ import {
   type EngineLoop,
 } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
-import { bindMouseAim, getAimDirection, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
+import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
 import { type CameraMode, adjustAimZoom, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
@@ -59,7 +59,7 @@ import { onGltfProgress, preloadUrls } from './loadGltf'
 import { showMainMenu, type MenuSelection, type TeamId } from './menu'
 import { nationByTeam } from './nations'
 import { getMpSession } from './net/mpSession'
-import type { MpTankPose } from './net/mpProtocol'
+import type { MpInput, MpTankPose } from './net/mpProtocol'
 import {
   createHillRing,
   createKothState,
@@ -1354,10 +1354,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
     scene.add(tank)
     resetAim(tank.rotation.y)
 
-    /** Remote human tank (MP2 ghosts). */
+    /** Remote human tank (MP2/MP3 — host sims both). */
     let remoteTank: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
+    let remoteDrive: ReturnType<typeof createDriveController> | null = null
+    let guestInput: MpInput = { f: 0, u: 0, b: false, fire: false, ay: 0, ap: 0 }
+    let guestInputAge = 999
     if (mp && remoteHandleEarly) {
       remoteTank = remoteHandleEarly
+      const remoteOpt = tankOptionById(mp.remoteTankId)
+      remoteDrive = createDriveController(remoteOpt.drive)
+      remoteDrive.setGroundY(mapGroundY)
+      remoteDrive.setHeightAt(heightAt ?? null)
       const remoteSpawn = spawnAt(opposite, 1)
       const remoteYaw = Math.atan2(-remoteSpawn.x, -remoteSpawn.z)
       remoteTank.root.name = 'mpRemote'
@@ -1403,9 +1410,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     let mpSnapAcc = 0
+    let mpInputAcc = 0
     if (mpSess && !mpSess.isHost) {
       mpSess.client.onSnap((tanks) => {
         mpSess.lastSnap = tanks
+      })
+    }
+    if (mpSess?.isHost) {
+      mpSess.client.onInput((input) => {
+        guestInput = input
+        guestInputAge = 0
       })
     }
 
@@ -1536,6 +1550,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
     let aiming = false
     let matchOver = false
     let playerDeadFor = 0
+    if (mpSess) {
+      mpSess.client.onPeerLeft((message) => {
+        console.warn('[Steel] MP peer left during match:', message)
+        if (document.getElementById('mp-peer-left')) return
+        const banner = document.createElement('div')
+        banner.id = 'mp-peer-left'
+        banner.style.cssText =
+          'position:fixed;inset:0;z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);color:#e8e4d8;font:600 1.2rem system-ui,sans-serif;gap:1rem;text-align:center;padding:1.5rem'
+        banner.innerHTML = `<p>${message}</p><button type="button" style="padding:0.6rem 1.2rem;cursor:pointer">Back to menu</button>`
+        document.body.appendChild(banner)
+        banner.querySelector('button')?.addEventListener('click', () => window.location.reload())
+        matchOver = true
+      })
+    }
     let koth = createKothState()
     const hillRing = isKoth ? createHillRing(scene) : null
     if (hillRing) {
@@ -1790,6 +1818,54 @@ async function startMission(sel: MenuSelection): Promise<void> {
         playerCombat.tickMobility(dt)
         env.update(dt, camera, 0, option.vintageCrew)
         arty?.update(0)
+      }
+
+      // Host sims the guest tank from latest input (MP3).
+      if (mp && mpSess?.isHost && remoteTank && remoteDrive && !matchOver) {
+        guestInputAge += dt
+        const stale = guestInputAge > 0.45
+        const gFwd = stale ? 0 : guestInput.f
+        const gTurn = stale ? 0 : guestInput.u
+        const gBrake = stale ? true : guestInput.b
+        const mods = env.getDriveMods()
+        remoteDrive.setMobilityMul(mods.mobilityMul)
+        remoteDrive.setSlip(mods.slip)
+        remoteDrive.update(
+          dt,
+          { forward: gFwd, turn: gTurn, brake: gBrake },
+          remoteTank.root,
+          (pos) => {
+            const blocked =
+              resolvePropCollisions(pos, TANK_RADIUS, mapColliders) ||
+              clampToArena(pos, playable, TANK_RADIUS)
+            if (blocked) remoteDrive!.killSpeed()
+          },
+        )
+        if (!stale) {
+          remoteTank.turret.rotation.y = guestInput.ay
+          if (remoteTank.barrel.userData.gunForward === 'x') {
+            remoteTank.barrel.rotation.z = guestInput.ap
+          } else {
+            remoteTank.barrel.rotation.x = guestInput.ap
+          }
+        }
+      }
+
+      // Guest sends controls; still renders from host snaps.
+      if (mpGuest && mpSess) {
+        mpInputAcc += dt
+        if (mpInputAcc >= 0.05) {
+          mpInputAcc = 0
+          mpSess.client.send({
+            t: 'input',
+            f: forward,
+            u: turn,
+            b: brake,
+            fire: wantsFire,
+            ay: getAimYaw(),
+            ap: getAimPitch(),
+          })
+        }
       }
 
       if (arty?.isMapOpen()) {

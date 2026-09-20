@@ -200,6 +200,19 @@ export class SteelRoom implements DurableObject {
       this.broadcast(message, ws)
       return
     }
+
+    if (data.t === 'input' && !seat.host) {
+      // Guest controls → host only
+      for (const [ows, oseat] of this.seats) {
+        if (!oseat.host) continue
+        try {
+          ows.send(message)
+        } catch {
+          /* ignore */
+        }
+      }
+      return
+    }
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, _clean: boolean): Promise<void> {
@@ -209,6 +222,17 @@ export class SteelRoom implements DurableObject {
       console.info(
         `[SteelRoom] leave user=${seat.username} code=${code} reason=${reason || '-'} n=${this.seats.size}`,
       )
+      const leftMsg = JSON.stringify({
+        t: 'peerLeft',
+        message: seat.host ? 'Host left the match.' : 'Opponent left the match.',
+      })
+      for (const [ows] of this.seats) {
+        try {
+          ows.send(leftMsg)
+        } catch {
+          /* ignore */
+        }
+      }
       if (seat.host && this.seats.size > 0) {
         const next = this.seats.entries().next().value as [WebSocket, Seat] | undefined
         if (next) {

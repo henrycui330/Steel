@@ -2,6 +2,7 @@ import { getSession, getSteelApiBase } from '../auth'
 import {
   parseMpServerMsg,
   type MpClientMsg,
+  type MpInput,
   type MpMatchPlayer,
   type MpPlayer,
   type MpServerMsg,
@@ -28,6 +29,8 @@ export type MpStartPayload = {
 type LobbyListener = (state: MpLobbyState) => void
 type StartListener = (match: MpStartPayload) => void
 type SnapListener = (tanks: MpTankPose[]) => void
+type InputListener = (input: MpInput) => void
+type PeerLeftListener = (message: string) => void
 
 function httpToWsBase(apiBase: string): string {
   if (apiBase.startsWith('/')) {
@@ -77,6 +80,8 @@ export type MpClient = {
   subscribe: (fn: LobbyListener) => () => void
   onStart: (fn: StartListener) => () => void
   onSnap: (fn: SnapListener) => () => void
+  onInput: (fn: InputListener) => () => void
+  onPeerLeft: (fn: PeerLeftListener) => () => void
   connect: (code: string) => void
   send: (msg: MpClientMsg) => void
   disconnect: () => void
@@ -95,6 +100,8 @@ export function createMpClient(): MpClient {
   const listeners = new Set<LobbyListener>()
   const startListeners = new Set<StartListener>()
   const snapListeners = new Set<SnapListener>()
+  const inputListeners = new Set<InputListener>()
+  const peerLeftListeners = new Set<PeerLeftListener>()
 
   function setState(patch: Partial<MpLobbyState>): void {
     state = { ...state, ...patch }
@@ -133,6 +140,16 @@ export function createMpClient(): MpClient {
       for (const fn of snapListeners) fn(msg.tanks)
       return
     }
+    if (msg.t === 'input') {
+      const { t: _t, ...input } = msg
+      for (const fn of inputListeners) fn(input)
+      return
+    }
+    if (msg.t === 'peerLeft') {
+      console.warn('[Steel] MP peerLeft', msg.message)
+      for (const fn of peerLeftListeners) fn(msg.message)
+      return
+    }
     if (msg.t === 'error') {
       setState({ error: msg.message })
       console.warn('[Steel] MP error', msg.message)
@@ -155,6 +172,14 @@ export function createMpClient(): MpClient {
     onSnap(fn) {
       snapListeners.add(fn)
       return () => snapListeners.delete(fn)
+    },
+    onInput(fn) {
+      inputListeners.add(fn)
+      return () => inputListeners.delete(fn)
+    },
+    onPeerLeft(fn) {
+      peerLeftListeners.add(fn)
+      return () => peerLeftListeners.delete(fn)
     },
     connect(codeRaw) {
       const code = normalizeRoomCode(codeRaw)
