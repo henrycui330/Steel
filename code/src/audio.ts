@@ -16,6 +16,9 @@ function ejectSirenUrl(): string {
 function lowAltAlarmUrl(): string {
   return fixPublicUrl(assetUrl('sfx/low-alt-alarm.mp3'))
 }
+function stallAlarmUrl(): string {
+  return fixPublicUrl(assetUrl('sfx/stall-alarm.mp3'))
+}
 
 const PEAK_VOLUME = 0.9
 /** Full volume before fade starts (seconds). */
@@ -247,6 +250,15 @@ export function createLowAltAlarm(): ConditionAlarm {
   })
 }
 
+/** Stall warning — high-pitch buzz while airspeed is below stall. */
+export function createStallAlarm(): ConditionAlarm {
+  return createConditionAlarm({
+    url: stallAlarmUrl(),
+    label: 'Stall',
+    volume: 0.4,
+  })
+}
+
 /** Call once after user gesture (Deploy) so later plays are allowed. */
 export function unlockAudio(): void {
   const a = getShared()
@@ -268,6 +280,7 @@ export function unlockAudio(): void {
     propIdleUrl(),
     ejectSirenUrl(),
     lowAltAlarmUrl(),
+    stallAlarmUrl(),
   ]) {
     const probe = new Audio(url)
     probe.volume = 0

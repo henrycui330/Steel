@@ -15,6 +15,9 @@ type BurningWreck = {
 }
 
 const burning: BurningWreck[] = []
+/** Stop emitting after this; then drop from the update list. */
+const BURN_SEC = 22
+const MAX_BURNING = 14
 
 const _turretNames = ['Turret', 'turret', 'turretYawPivot']
 
@@ -68,6 +71,9 @@ export function spawnDestroyedWreck(
   subject.rotation.z += (Math.random() - 0.5) * 0.12
 
   burning.push({ root: subject, age: 0, origin, nextEmit: 0.15 })
+  while (burning.length > MAX_BURNING) {
+    burning.shift()
+  }
   console.info('[Steel] Wreck left burning')
 }
 
@@ -84,13 +90,18 @@ function cloneWreck(scene: THREE.Scene, root: THREE.Object3D): THREE.Object3D {
 }
 
 export function updateWrecks(dt: number, fx?: WreckFx | null): void {
-  for (const b of burning) {
+  for (let i = burning.length - 1; i >= 0; i--) {
+    const b = burning[i]!
     b.age += dt
+    if (b.age >= BURN_SEC) {
+      burning.splice(i, 1)
+      continue
+    }
     b.nextEmit -= dt
-    // Sparse cheap burn — was ~0.35 * wreckFire(16 puffs) every frame → lag
-    if (b.age < 75 && fx && b.nextEmit <= 0) {
+    // Sparse cheap burn — was per-frame wreckFire → lag
+    if (fx && b.nextEmit <= 0) {
       fx.wreckBurn(b.origin)
-      b.nextEmit = 0.28 + Math.random() * 0.22
+      b.nextEmit = 0.45 + Math.random() * 0.35
     }
   }
 }

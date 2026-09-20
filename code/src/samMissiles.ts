@@ -28,9 +28,11 @@ const SPOOF_RANGE = 95
 const SPOOF_DOT = 0.15
 
 /** Trail puff every this many metres of flight. */
-const TRAIL_SPACING = 2.2
-const TRAIL_LIFE = 2.8
-const TRAIL_BURST = 3
+const TRAIL_SPACING = 7.5
+const TRAIL_LIFE = 1.55
+const TRAIL_BURST = 1
+/** Hard cap — dense trails were spawning hundreds of meshes mid-match. */
+const MAX_TRAIL = 40
 
 export type SamMissiles = {
   update: (dt: number, wantsFire: boolean) => void
@@ -160,6 +162,11 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   }
 
   function emitTrail(m: LiveMissile, hot: boolean): void {
+    while (trail.length >= MAX_TRAIL) {
+      killTrail(trail[0]!)
+      trail.shift()
+    }
+
     _fwd.copy(m.vel)
     if (_fwd.lengthSq() < 1e-8) _fwd.set(0, 0, -1)
     else _fwd.normalize()
@@ -169,31 +176,32 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     else _side.normalize()
 
     for (let i = 0; i < TRAIL_BURST; i++) {
+      if (trail.length >= MAX_TRAIL) break
       const matInst = (hot ? trailHotMat : trailMatBase).clone()
       const mesh = new THREE.Mesh(trailGeo, matInst)
       const aft = 0.8 + Math.random() * 1.4 + i * 0.35
-      const spray = (Math.random() - 0.5) * 1.6
-      const lift = (Math.random() - 0.35) * 0.9
+      const spray = (Math.random() - 0.5) * 1.2
+      const lift = (Math.random() - 0.35) * 0.7
       mesh.position
         .copy(m.mesh.position)
         .addScaledVector(_back, aft)
         .addScaledVector(_side, spray)
       mesh.position.y += lift
-      const s = (hot ? 0.55 : 0.9) + Math.random() * 0.85
+      const s = (hot ? 0.55 : 0.9) + Math.random() * 0.7
       mesh.scale.setScalar(s * meshScale)
-      mesh.frustumCulled = false
+      mesh.frustumCulled = true
       scene.add(mesh)
 
       const drift = _back
         .clone()
-        .multiplyScalar(2 + Math.random() * 5)
-        .addScaledVector(_side, (Math.random() - 0.5) * 3)
-      drift.y += 0.5 + Math.random() * 2.2
+        .multiplyScalar(2 + Math.random() * 4)
+        .addScaledVector(_side, (Math.random() - 0.5) * 2.5)
+      drift.y += 0.4 + Math.random() * 1.6
 
       trail.push({
         mesh,
         age: 0,
-        life: TRAIL_LIFE * (0.7 + Math.random() * 0.5),
+        life: TRAIL_LIFE * (0.75 + Math.random() * 0.35),
         drift,
       })
     }
@@ -319,9 +327,8 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   function killMissile(m: LiveMissile): void {
     if (m.dead) return
     m.dead = true
-    // Exhaust burst on death / burnout.
+    // One exhaust puff on death — avoid a 6-puff burst every burnout.
     emitTrail(m, true)
-    emitTrail(m, false)
     scene.remove(m.mesh)
     m.mesh.geometry.dispose()
     ;(m.mesh.material as THREE.Material).dispose()

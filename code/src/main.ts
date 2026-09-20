@@ -8,6 +8,7 @@ import {
   createPropEngine,
   createEjectSiren,
   createLowAltAlarm,
+  createStallAlarm,
   type EngineLoop,
 } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
@@ -98,7 +99,7 @@ const AIR_CEILING = 460
 /** Aircraft turn back this far inside the tank arena walls. */
 const AIR_WALL_INSET = 12
 /** Low-alt buzzer while AGL is at or below this (metres). */
-const LOW_ALT_WARN_M = 55
+const LOW_ALT_WARN_M = 25
 /** Ceiling on a single simulated step, so the bomb cam's fast-forward can't
  *  hand the flight model or AI a step big enough to go unstable. */
 const MAX_SIM_DT = 0.07
@@ -387,6 +388,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const propEngine = option.jet ? silentProp : createPropEngine()
     const ejectSiren = createEjectSiren()
     const lowAltAlarm = createLowAltAlarm()
+    const stallAlarm = createStallAlarm()
     const flight = createAircraftFlight({
       root: air.root,
       heightAt: sampleY,
@@ -408,6 +410,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       ejectAlert.cancel()
       ejectSiren.setActive(false)
       lowAltAlarm.setActive(false)
+      stallAlarm.setActive(false)
       propEngine.setIntensity(0)
       airBoard.noteDeath(air.root)
       if (reason === 'eject') {
@@ -466,6 +469,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
       if (!ejectAlert.arm()) return
       lowAltAlarm.setActive(false)
+      stallAlarm.setActive(false)
       ejectSiren.setActive(true)
     }
 
@@ -488,6 +492,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       flight.forceCrash()
       propEngine.setIntensity(0)
       lowAltAlarm.setActive(false)
+      stallAlarm.setActive(false)
       ejectSiren.setActive(true)
       ejectCam.begin({
         aircraft: air.root,
@@ -734,6 +739,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         propEngine.setIntensity(0.35)
         ejectSiren.start()
         lowAltAlarm.start()
+        stallAlarm.start()
       },
     })
 
@@ -787,6 +793,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       propEngine.stop()
       ejectSiren.stop()
       lowAltAlarm.stop()
+      stallAlarm.stop()
       ejectCam.cancel()
       ejectAlert.dispose()
       document.exitPointerLock?.()
@@ -952,6 +959,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
           !ejectCam.active() &&
           !ejectAlert.active() &&
           tm.agl <= LOW_ALT_WARN_M,
+      )
+      // Stall warning — high-pitch buzz while below stall speed.
+      stallAlarm.setActive(
+        !airEnded &&
+          !airCrashed &&
+          !tm.flameout &&
+          !ejectCam.active() &&
+          !ejectAlert.active() &&
+          tm.stalled,
       )
       // Engine fire while flaming out — trail from just aft of the spinner.
       if (tm.flameout && smokeEarly) {

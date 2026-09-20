@@ -75,7 +75,7 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
       hot?: boolean
     },
   ): void {
-    if (puffs.length >= 90) return
+    if (puffs.length >= 64) return
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       color: opts.color,
@@ -293,6 +293,7 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
     },
 
     wreckBurn(origin) {
+      // One puff most ticks — second puff was doubling mid-match particle load.
       spawn(
         origin.clone().add(
           new THREE.Vector3((Math.random() - 0.5) * 0.8, 0.5 + Math.random() * 0.4, (Math.random() - 0.5) * 0.8),
@@ -300,26 +301,13 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
         new THREE.Vector3((Math.random() - 0.5) * 0.4, 1.6 + Math.random() * 1.8, (Math.random() - 0.5) * 0.4),
         {
           size: 0.55 + Math.random() * 0.45,
-          life: 0.5 + Math.random() * 0.35,
+          life: 0.45 + Math.random() * 0.3,
           grow: 2.4,
           opacity: 0.7,
           color: Math.random() > 0.5 ? 0xff6622 : 0xffaa33,
           hot: true,
         },
       )
-      if (Math.random() < 0.45) {
-        spawn(
-          origin.clone().add(new THREE.Vector3(0, 1, 0)),
-          new THREE.Vector3((Math.random() - 0.5) * 0.6, 1.4 + Math.random(), (Math.random() - 0.5) * 0.6),
-          {
-            size: 1 + Math.random() * 0.6,
-            life: 1.2 + Math.random() * 0.6,
-            grow: 1.6,
-            opacity: 0.32,
-            color: 0x3a3834,
-          },
-        )
-      }
     },
 
     update(dt, camera) {
