@@ -202,14 +202,19 @@ export class SteelRoom implements DurableObject {
     }
 
     if (data.t === 'input' && !seat.host) {
-      // Guest controls → host only
+      // Guest controls → host only (also log for debug).
+      let delivered = 0
       for (const [ows, oseat] of this.seats) {
         if (!oseat.host) continue
         try {
           ows.send(message)
+          delivered++
         } catch {
           /* ignore */
         }
+      }
+      if (delivered === 0) {
+        console.warn('[SteelRoom] input dropped — no host seat')
       }
       return
     }

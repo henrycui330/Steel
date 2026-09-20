@@ -1411,15 +1411,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
     let mpSnapAcc = 0
     let mpInputAcc = 0
+    let mpInputLogAcc = 0
     if (mpSess && !mpSess.isHost) {
       mpSess.client.onSnap((tanks) => {
         mpSess.lastSnap = tanks
       })
     }
     if (mpSess?.isHost) {
+      let hostInputLogAcc = 0
       mpSess.client.onInput((input) => {
         guestInput = input
         guestInputAge = 0
+        hostInputLogAcc += 0.05
+        if (hostInputLogAcc >= 2 && Math.abs(input.f) + Math.abs(input.u) > 0) {
+          hostInputLogAcc = 0
+          console.info(`[Steel] MP host got guest input f=${input.f} u=${input.u}`)
+        }
       })
     }
 
@@ -1585,6 +1592,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const matchOpening = createMatchOpening({
       units: [
         { root: tank, team, aircraft: false },
+        ...(remoteTank
+          ? [{ root: remoteTank.root, team: opposite, aircraft: false as const }]
+          : []),
         ...friendlies.map((u) => ({
           root: u.root,
           team,
@@ -1610,6 +1620,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         updatePlayerCamera(cameraMode, camera, tank, turretMount, 1, aiming, muzzle)
       },
     })
+    // MP: skip parade so both clients start sending/receiving input immediately.
+    if (mp) {
+      console.info('[Steel] MP — skip match opening')
+      matchOpening.skip()
+    }
 
     if (isKoth) {
       hud.setKoth({
@@ -1744,11 +1759,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (consumeNvgToggle()) nvg.toggle()
 
       const mpGuest = !!(mp && mpSess && !mpSess.isHost)
-      if (mpGuest && mpSess.lastSnap) {
+      // Guest: only snap the *host* tank. Own hull is driven locally (prediction)
+      // so WASD always works even if a snap packet is late.
+      if (mpGuest && mpSess.lastSnap && remoteTank && mp) {
         for (const pose of mpSess.lastSnap) {
-          if (mp && pose.id === mp.myUserId) {
-            applyTankPose(tank, turret, barrel, pose)
-          } else if (remoteTank && mp && pose.id === mp.remoteUserId) {
+          if (pose.id === mp.remoteUserId) {
             applyTankPose(remoteTank.root, remoteTank.turret, remoteTank.barrel, pose)
           }
         }
@@ -1777,7 +1792,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (weaponPick) fire.setWeapon(weaponPick)
       if (arty && consumeArtilleryMapToggle()) arty.toggleMap()
 
-      if (alive && !mpGuest) {
+      // Host + guest both drive their *local* player tank.
+      if (alive) {
         playerCombat.tickMobility(dt)
         const immobilized = playerCombat.isImmobilized()
         env.update(dt, camera, drive.getSpeed(), option.vintageCrew)
@@ -1820,7 +1836,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         arty?.update(0)
       }
 
-      // Host sims the guest tank from latest input (MP3).
+      // Host also sims the guest tank from networked input (authoritative ghost).
       if (mp && mpSess?.isHost && remoteTank && remoteDrive && !matchOver) {
         guestInputAge += dt
         const stale = guestInputAge > 0.45
@@ -1851,20 +1867,28 @@ async function startMission(sel: MenuSelection): Promise<void> {
         }
       }
 
-      // Guest sends controls; still renders from host snaps.
+      // Guest → host control packets.
       if (mpGuest && mpSess) {
         mpInputAcc += dt
         if (mpInputAcc >= 0.05) {
           mpInputAcc = 0
-          mpSess.client.send({
-            t: 'input',
+          const pkt = {
+            t: 'input' as const,
             f: forward,
             u: turn,
             b: brake,
             fire: wantsFire,
             ay: getAimYaw(),
             ap: getAimPitch(),
-          })
+          }
+          mpSess.client.send(pkt)
+          mpInputLogAcc += 0.05
+          if (mpInputLogAcc >= 2 && Math.abs(forward) + Math.abs(turn) > 0) {
+            mpInputLogAcc = 0
+            console.info(
+              `[Steel] MP guest input f=${forward} u=${turn} (host should move your ghost)`,
+            )
+          }
         }
       }
 
@@ -1938,16 +1962,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         groundLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
       }
 
-      const aim: AimFrame = mpGuest
-        ? {
-            fireYaw: tank.rotation.y + turret.rotation.y,
-            firePitch: barrel.userData.gunForward === 'x' ? barrel.rotation.z : barrel.rotation.x,
-            mouseHit: tank.position.clone(),
-            barrelHit: tank.position.clone(),
-            gunSynced: true,
-            rangeM: null,
-          }
-        : updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
+      const aim: AimFrame = updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
 
       const useMg = fire.getWeapon() === 'mg'
       const activeMuzzle = useMg ? mgMuzzle : muzzle
