@@ -58,6 +58,8 @@ import { loadMap, mapOptionById } from './maps/mapCatalog'
 import { onGltfProgress, preloadUrls } from './loadGltf'
 import { showMainMenu, type MenuSelection, type TeamId } from './menu'
 import { nationByTeam } from './nations'
+import { getMpSession } from './net/mpSession'
+import type { MpTankPose } from './net/mpProtocol'
 import {
   createHillRing,
   createKothState,
@@ -242,9 +244,13 @@ async function startVictoryStage(
 window.addEventListener('resize', onResize)
 
 async function startMission(sel: MenuSelection): Promise<void> {
-  const { mapId, tankId, team, spawnIndex, redAi, blueAi, timeOfDay, season, weather, gameMode } =
+  const { mapId, tankId, team, spawnIndex, redAi, blueAi, timeOfDay, season, weather, gameMode, mp } =
     sel
   const isKoth = gameMode === 'koth'
+  const mpSess = mp ? getMpSession() : null
+  if (mp && !mpSess) {
+    console.warn('[Steel] MP selection without session — continuing as solo')
+  }
   unlockAudio()
   const mapOpt = mapOptionById(mapId)
   const option = tankOptionById(tankId)
@@ -290,6 +296,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   void preloadUrls([
     ...FOREST_PROP_URLS,
     option.url,
+    ...(mp ? [tankOptionById(mp.remoteTankId).url] : []),
     ...redAi.map((id) => tankOptionById(id).url),
     ...blueAi.map((id) => tankOptionById(id).url),
   ])
@@ -299,32 +306,45 @@ async function startMission(sel: MenuSelection): Promise<void> {
   let mapPaths: Array<{ points: Array<{ x: number; z: number }> }> | undefined
   let mapSpawns = mapOpt.spawns
   let playerHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
+  let remoteHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
   let airHandleEarly: AircraftHandle | null = null
   let smokeEarly: Awaited<ReturnType<typeof createSmokeSystem>> | null = null
   const isAir = option.aircraft === true
   try {
-    const [mapRes, smokeRes, playerRes] = await Promise.allSettled([
+    const loads: Promise<unknown>[] = [
       loadMap(mapId, scene, ground),
       createSmokeSystem(scene),
       isAir ? loadPlayerAircraft(tankId) : loadPlayerTank(tankId),
-    ])
+    ]
+    if (mp && !isAir) loads.push(loadPlayerTank(mp.remoteTankId))
+    const settled = await Promise.allSettled(loads)
+    const mapRes = settled[0]!
+    const smokeRes = settled[1]!
+    const playerRes = settled[2]!
+    const remoteRes = mp && !isAir ? settled[3] : undefined
     if (mapRes.status === 'fulfilled') {
-      mapColliders = mapRes.value.colliders
-      mapGroundY = mapRes.value.groundY
-      heightAt = mapRes.value.heightAt
-      mapPaths = mapRes.value.paths
-      if (mapRes.value.spawns) mapSpawns = mapRes.value.spawns
+      const v = mapRes.value as Awaited<ReturnType<typeof loadMap>>
+      mapColliders = v.colliders
+      mapGroundY = v.groundY
+      heightAt = v.heightAt
+      mapPaths = v.paths
+      if (v.spawns) mapSpawns = v.spawns
     } else {
       console.warn('[Steel] Map load failed', mapRes.reason)
       mapColliders = []
     }
-    if (smokeRes.status === 'fulfilled') smokeEarly = smokeRes.value
+    if (smokeRes.status === 'fulfilled') smokeEarly = smokeRes.value as Awaited<ReturnType<typeof createSmokeSystem>>
     else console.warn('[Steel] Smoke load failed', smokeRes.reason)
     if (playerRes.status === 'fulfilled') {
       if (isAir) airHandleEarly = playerRes.value as AircraftHandle
       else playerHandleEarly = playerRes.value as Awaited<ReturnType<typeof loadPlayerTank>>
     } else {
       console.warn('[Steel] Player vehicle load failed', playerRes.reason)
+    }
+    if (remoteRes?.status === 'fulfilled') {
+      remoteHandleEarly = remoteRes.value as Awaited<ReturnType<typeof loadPlayerTank>>
+    } else if (remoteRes?.status === 'rejected') {
+      console.warn('[Steel] Remote tank load failed', remoteRes.reason)
     }
   } catch (err) {
     console.warn('[Steel] Map / tank / smoke load failed', err)
@@ -1334,6 +1354,61 @@ async function startMission(sel: MenuSelection): Promise<void> {
     scene.add(tank)
     resetAim(tank.rotation.y)
 
+    /** Remote human tank (MP2 ghosts). */
+    let remoteTank: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
+    if (mp && remoteHandleEarly) {
+      remoteTank = remoteHandleEarly
+      const remoteSpawn = spawnAt(opposite, 1)
+      const remoteYaw = Math.atan2(-remoteSpawn.x, -remoteSpawn.z)
+      remoteTank.root.name = 'mpRemote'
+      remoteTank.root.position.copy(remoteSpawn)
+      remoteTank.root.rotation.order = 'YXZ'
+      remoteTank.root.rotation.y = remoteYaw
+      scene.add(remoteTank.root)
+      console.info(
+        `[Steel] MP remote tank ${mp.remoteTankId} at (${remoteSpawn.x.toFixed(0)}, ${remoteSpawn.z.toFixed(0)})`,
+      )
+    }
+
+    function poseFromTank(
+      id: string,
+      root: THREE.Object3D,
+      tur: THREE.Object3D,
+      bar: THREE.Object3D,
+    ): MpTankPose {
+      const barrelAng = bar.userData.gunForward === 'x' ? bar.rotation.z : bar.rotation.x
+      return {
+        id,
+        x: root.position.x,
+        y: root.position.y,
+        z: root.position.z,
+        yaw: root.rotation.y,
+        turret: tur.rotation.y,
+        barrel: barrelAng,
+      }
+    }
+
+    function applyTankPose(
+      root: THREE.Object3D,
+      tur: THREE.Object3D,
+      bar: THREE.Object3D,
+      pose: MpTankPose,
+    ): void {
+      root.position.set(pose.x, pose.y, pose.z)
+      root.rotation.order = 'YXZ'
+      root.rotation.y = pose.yaw
+      tur.rotation.y = pose.turret
+      if (bar.userData.gunForward === 'x') bar.rotation.z = pose.barrel
+      else bar.rotation.x = pose.barrel
+    }
+
+    let mpSnapAcc = 0
+    if (mpSess && !mpSess.isHost) {
+      mpSess.client.onSnap((tanks) => {
+        mpSess.lastSnap = tanks
+      })
+    }
+
     const playerCombat = createCombatant(tank, {
       maxHp: option.maxHp,
       armor: option.armor,
@@ -1640,6 +1715,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
       const { forward, turn, brake, fire: wantsFire } = getDriveInput()
       if (consumeNvgToggle()) nvg.toggle()
 
+      const mpGuest = !!(mp && mpSess && !mpSess.isHost)
+      if (mpGuest && mpSess.lastSnap) {
+        for (const pose of mpSess.lastSnap) {
+          if (mp && pose.id === mp.myUserId) {
+            applyTankPose(tank, turret, barrel, pose)
+          } else if (remoteTank && mp && pose.id === mp.remoteUserId) {
+            applyTankPose(remoteTank.root, remoteTank.turret, remoteTank.barrel, pose)
+          }
+        }
+      }
+
       if (consumeCameraToggle()) {
         cameraMode = cameraMode === 'turret' ? 'chase' : 'turret'
         console.info(`[Steel] Camera → ${cameraMode}`)
@@ -1663,7 +1749,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (weaponPick) fire.setWeapon(weaponPick)
       if (arty && consumeArtilleryMapToggle()) arty.toggleMap()
 
-      if (alive) {
+      if (alive && !mpGuest) {
         playerCombat.tickMobility(dt)
         const immobilized = playerCombat.isImmobilized()
         env.update(dt, camera, drive.getSpeed(), option.vintageCrew)
@@ -1776,11 +1862,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
         groundLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
       }
 
-      const aim = updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
+      const aim: AimFrame = mpGuest
+        ? {
+            fireYaw: tank.rotation.y + turret.rotation.y,
+            firePitch: barrel.userData.gunForward === 'x' ? barrel.rotation.z : barrel.rotation.x,
+            mouseHit: tank.position.clone(),
+            barrelHit: tank.position.clone(),
+            gunSynced: true,
+            rangeM: null,
+          }
+        : updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
 
       const useMg = fire.getWeapon() === 'mg'
       const activeMuzzle = useMg ? mgMuzzle : muzzle
-      const canFire = !arty || arty.isDeployed()
+      const canFire = (!arty || arty.isDeployed()) && !mpGuest
       const fired = fire.update(
         dt,
         alive && wantsFire && canFire,
@@ -1859,6 +1954,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
         })
       }
       checkMatchEnd()
+
+      if (mp && mpSess?.isHost && remoteTank) {
+        mpSnapAcc += dt
+        if (mpSnapAcc >= 0.05) {
+          mpSnapAcc = 0
+          mpSess.client.send({
+            t: 'snap',
+            tanks: [
+              poseFromTank(mp.myUserId, tank, turret, barrel),
+              poseFromTank(mp.remoteUserId, remoteTank.root, remoteTank.turret, remoteTank.barrel),
+            ],
+          })
+        }
+      }
 
       return aim
     }

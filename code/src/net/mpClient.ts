@@ -1,16 +1,33 @@
 import { getSession, getSteelApiBase } from '../auth'
-import { parseMpServerMsg, type MpClientMsg, type MpPlayer, type MpServerMsg } from './mpProtocol'
+import {
+  parseMpServerMsg,
+  type MpClientMsg,
+  type MpMatchPlayer,
+  type MpPlayer,
+  type MpServerMsg,
+  type MpTankPose,
+} from './mpProtocol'
 
 export type MpLobbyState = {
   code: string
   you: MpPlayer | null
   players: MpPlayer[]
   max: number
-  status: 'idle' | 'connecting' | 'open' | 'closed' | 'error'
+  status: 'idle' | 'connecting' | 'open' | 'closed' | 'error' | 'starting'
   error: string
 }
 
+export type MpStartPayload = {
+  mapId: string
+  timeOfDay: string
+  season: string
+  weather: string
+  players: MpMatchPlayer[]
+}
+
 type LobbyListener = (state: MpLobbyState) => void
+type StartListener = (match: MpStartPayload) => void
+type SnapListener = (tanks: MpTankPose[]) => void
 
 function httpToWsBase(apiBase: string): string {
   if (apiBase.startsWith('/')) {
@@ -20,15 +37,6 @@ function httpToWsBase(apiBase: string): string {
   const u = new URL(apiBase)
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
   return u.origin
-}
-
-function roomCode(): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-  const bytes = new Uint8Array(5)
-  crypto.getRandomValues(bytes)
-  let s = ''
-  for (let i = 0; i < 5; i++) s += alphabet[bytes[i]! % alphabet.length]!
-  return s
 }
 
 export async function createMpRoom(): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
@@ -67,6 +75,8 @@ export function normalizeRoomCode(raw: string): string {
 export type MpClient = {
   getState: () => MpLobbyState
   subscribe: (fn: LobbyListener) => () => void
+  onStart: (fn: StartListener) => () => void
+  onSnap: (fn: SnapListener) => () => void
   connect: (code: string) => void
   send: (msg: MpClientMsg) => void
   disconnect: () => void
@@ -83,6 +93,8 @@ export function createMpClient(): MpClient {
     error: '',
   }
   const listeners = new Set<LobbyListener>()
+  const startListeners = new Set<StartListener>()
+  const snapListeners = new Set<SnapListener>()
 
   function setState(patch: Partial<MpLobbyState>): void {
     state = { ...state, ...patch }
@@ -109,6 +121,18 @@ export function createMpClient(): MpClient {
       console.info(`[Steel] MP lobby n=${msg.players.length}`, msg.players.map((p) => p.username))
       return
     }
+    if (msg.t === 'start') {
+      setState({ status: 'starting', error: '' })
+      console.info(
+        `[Steel] MP start map=${msg.mapId} players=${msg.players.map((p) => `${p.username}:${p.tankId}`).join(' / ')}`,
+      )
+      for (const fn of startListeners) fn(msg)
+      return
+    }
+    if (msg.t === 'snap') {
+      for (const fn of snapListeners) fn(msg.tanks)
+      return
+    }
     if (msg.t === 'error') {
       setState({ error: msg.message })
       console.warn('[Steel] MP error', msg.message)
@@ -123,6 +147,14 @@ export function createMpClient(): MpClient {
       listeners.add(fn)
       fn(state)
       return () => listeners.delete(fn)
+    },
+    onStart(fn) {
+      startListeners.add(fn)
+      return () => startListeners.delete(fn)
+    },
+    onSnap(fn) {
+      snapListeners.add(fn)
+      return () => snapListeners.delete(fn)
     },
     connect(codeRaw) {
       const code = normalizeRoomCode(codeRaw)
@@ -170,6 +202,7 @@ export function createMpClient(): MpClient {
         ws = null
         const reason = ev.reason || `code ${ev.code}`
         console.info(`[Steel] MP closed ${reason}`)
+        if (state.status === 'starting') return
         setState({
           status: 'closed',
           error: ev.code === 1000 ? '' : `Disconnected (${reason})`,
@@ -205,9 +238,4 @@ export function createMpClient(): MpClient {
       setState({ status: 'idle', you: null, players: [], error: '' })
     },
   }
-}
-
-/** Suggest a local code when create API is unavailable (dev fallback — prefer createMpRoom). */
-export function suggestLocalRoomCode(): string {
-  return roomCode()
 }

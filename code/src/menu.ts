@@ -28,7 +28,7 @@ import {
 } from './auth'
 import { getWallet } from './wallet'
 import { createMpClient, createMpRoom, normalizeRoomCode, type MpLobbyState } from './net/mpClient'
-
+import { setMpSession } from './net/mpSession'
 import {
   NATIONS,
   nationByTeam,
@@ -54,6 +54,13 @@ export type MenuSelection = {
   season: Season
   weather: WeatherKind
   gameMode: GameModeId
+  /** Present when launching from Multiplayer lobby. */
+  mp?: {
+    isHost: boolean
+    remoteTankId: TankId
+    remoteUserId: string
+    myUserId: string
+  }
 }
 
 type MatchDraft = {
@@ -256,7 +263,17 @@ function showHome(
   })
 }
 
-/** MP1 — create/join room + live lobby list (no match start yet). */
+/** Ground tanks only for MP v1. */
+function mpTankOptionsHtml(selected: TankId): string {
+  return TANK_OPTIONS.filter((t) => !t.aircraft)
+    .map(
+      (t) =>
+        `<option value="${t.id}" ${t.id === selected ? 'selected' : ''}>${t.name}</option>`,
+    )
+    .join('')
+}
+
+/** MP1/MP2 — create/join room, pick tank, host Start → mission. */
 function showMpLobby(
   root: HTMLDivElement,
   resolve: (s: MenuSelection) => void,
@@ -268,6 +285,52 @@ function showMpLobby(
   const client = createMpClient()
   let joinCode = ''
   let busy = false
+  let myTank: TankId = 'tiger'
+  let started = false
+
+  const unsubStart = client.onStart((match) => {
+    if (started) return
+    started = true
+    const me = match.players.find((p) => p.id === (getSession()?.userId ?? user.id))
+    const other = match.players.find((p) => p.id !== me?.id)
+    if (!me || !other) {
+      console.error('[Steel] MP start missing players', match)
+      return
+    }
+    const tankId = (me.tankId as TankId) || 'tiger'
+    const remoteTankId = (other.tankId as TankId) || 'tiger'
+    setMpSession({
+      client,
+      isHost: !!me.host,
+      myUserId: me.id,
+      matchPlayers: match.players,
+      lastSnap: null,
+    })
+    unsub()
+    unsubStart()
+    document.getElementById('main-menu')?.remove()
+    console.info(
+      `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} vs ${remoteTankId} team=${me.team}`,
+    )
+    resolve({
+      mapId: (match.mapId as MapId) || 'forest',
+      tankId,
+      team: me.team,
+      spawnIndex: me.spawnIndex,
+      redAi: [],
+      blueAi: [],
+      timeOfDay: (match.timeOfDay as TimeOfDay) || 'day',
+      season: (match.season as Season) || 'summer',
+      weather: (match.weather as WeatherKind) || 'clear',
+      gameMode: 'skirmish',
+      mp: {
+        isHost: !!me.host,
+        remoteTankId,
+        remoteUserId: other.id,
+        myUserId: me.id,
+      },
+    })
+  })
 
   function playersHtml(state: MpLobbyState): string {
     if (state.players.length === 0) {
@@ -277,16 +340,30 @@ function showMpLobby(
       .map((p) => {
         const you = state.you?.id === p.id ? ' (you)' : ''
         const host = p.host ? ' · host' : ''
-        return `<li><strong>${escapeHtml(p.username)}</strong>${you}${host}</li>`
+        let tankLabel = ''
+        if (p.tankId) {
+          try {
+            tankLabel = ` · ${escapeHtml(tankOptionById(p.tankId as TankId).name)}`
+          } catch {
+            tankLabel = ` · ${escapeHtml(p.tankId)}`
+          }
+        }
+        return `<li><strong>${escapeHtml(p.username)}</strong>${you}${host}${tankLabel}</li>`
       })
       .join('')
   }
 
   function statusLine(state: MpLobbyState): string {
     if (state.status === 'connecting') return 'Connecting…'
+    if (state.status === 'starting') return 'Starting match…'
     if (state.status === 'open') {
       const n = state.players.length
-      const wait = n < state.max ? 'Waiting for opponent…' : 'Lobby full — match start comes in next step.'
+      const wait =
+        n < state.max
+          ? 'Waiting for opponent…'
+          : state.you?.host
+            ? 'Both here — press Start when ready.'
+            : 'Waiting for host to Start…'
       return `Room <strong>${escapeHtml(state.code)}</strong> · ${n}/${state.max} — ${wait}`
     }
     if (state.status === 'error') return escapeHtml(state.error || 'Error')
@@ -295,7 +372,9 @@ function showMpLobby(
   }
 
   function paint(state: MpLobbyState): void {
-    const inRoom = state.status === 'open' || state.status === 'connecting'
+    const inRoom = state.status === 'open' || state.status === 'connecting' || state.status === 'starting'
+    const canStart =
+      state.status === 'open' && !!state.you?.host && state.players.length >= state.max
     root.innerHTML = `
       <div class="menu-panel menu-panel-mp">
         <p class="menu-brand">Steel</p>
@@ -311,7 +390,11 @@ function showMpLobby(
             <button type="button" class="home-btn" data-act="join" ${busy ? 'disabled' : ''}>Join</button>
           </div>
         </div>
-        <div class="mp-actions" ${inRoom ? '' : 'hidden'}>
+        <div class="mp-actions" ${inRoom && state.status !== 'starting' ? '' : 'hidden'}>
+          <label class="auth-label">Your tank
+            <select class="auth-input mp-tank-select" data-tank>${mpTankOptionsHtml(myTank)}</select>
+          </label>
+          ${canStart ? '<button type="button" class="home-btn home-btn-play" data-act="start">Start match</button>' : ''}
           <button type="button" class="home-btn" data-act="leave">Leave room</button>
         </div>
         <button type="button" class="home-btn home-btn-back" data-act="back">Back</button>
@@ -321,6 +404,7 @@ function showMpLobby(
     root.querySelector('[data-act="back"]')?.addEventListener('click', () => {
       client.disconnect()
       unsub()
+      unsubStart()
       showHome(root, resolve, user)
     })
     root.querySelector('[data-act="leave"]')?.addEventListener('click', () => {
@@ -349,9 +433,25 @@ function showMpLobby(
     root.querySelector('[data-code]')?.addEventListener('input', (ev) => {
       joinCode = (ev.target as HTMLInputElement).value
     })
+    root.querySelector('[data-tank]')?.addEventListener('change', (ev) => {
+      myTank = (ev.target as HTMLSelectElement).value as TankId
+      client.send({ t: 'tank', tankId: myTank })
+    })
+    root.querySelector('[data-act="start"]')?.addEventListener('click', () => {
+      client.send({ t: 'tank', tankId: myTank })
+      client.send({ t: 'start' })
+    })
   }
 
-  const unsub = client.subscribe((state) => paint(state))
+  let tankAnnounced = false
+  const unsub = client.subscribe((state) => {
+    if (state.status === 'open' && !tankAnnounced) {
+      tankAnnounced = true
+      client.send({ t: 'tank', tankId: myTank })
+    }
+    if (state.status === 'idle' || state.status === 'closed') tankAnnounced = false
+    paint(state)
+  })
 }
 
 function escapeHtml(s: string): string {
