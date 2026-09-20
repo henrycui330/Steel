@@ -10,6 +10,14 @@ binding = "DB"
 database_name = "steel-auth"
 database_id = "a42cf737-8891-4a56-94c2-6ac23aa85349"
 
+[[durable_objects.bindings]]
+name = "STEEL_ROOM"
+class_name = "SteelRoom"
+
+[[migrations]]
+tag = "v1-mp-rooms"
+new_sqlite_classes = ["SteelRoom"]
+
 [vars]
 # Comma-separated browser origins allowed to call this API
 # Local Vite ports are also allowed via isLocalDevOrigin() in src/index.ts

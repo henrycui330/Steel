@@ -5,11 +5,11 @@ import {
   randomToken,
   verifyPassword,
 } from './crypto'
+import { SteelRoom, type RoomEnv } from './room'
 
-export interface Env {
-  DB: D1Database
-  ALLOWED_ORIGINS: string
-}
+export { SteelRoom }
+
+export interface Env extends RoomEnv {}
 
 type UserRow = {
   id: string
@@ -22,6 +22,7 @@ type UserRow = {
 }
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30
+const ROOM_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 /** Vite (and friends) may use :5173, :4173, :5174, etc. */
 function isLocalDevOrigin(origin: string): boolean {
@@ -124,6 +125,18 @@ async function createSession(env: Env, user: UserRow) {
   }
 }
 
+function makeRoomCode(): string {
+  const bytes = new Uint8Array(5)
+  crypto.getRandomValues(bytes)
+  let s = ''
+  for (let i = 0; i < 5; i++) s += ROOM_ALPHABET[bytes[i]! % ROOM_ALPHABET.length]!
+  return s
+}
+
+function normalizeRoomCode(raw: string): string {
+  return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6)
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === 'OPTIONS') {
@@ -135,7 +148,65 @@ export default {
 
     try {
       if (req.method === 'GET' && (path === '/' || path === '/health')) {
-        return json(req, env, { ok: true, service: 'steel-auth' })
+        return json(req, env, { ok: true, service: 'steel-auth', mp: true })
+      }
+
+      // —— Multiplayer ——
+      if (req.method === 'POST' && path === '/mp/rooms') {
+        const token = bearerToken(req)
+        if (!token) return json(req, env, { ok: false, error: 'Not signed in.' }, 401)
+        const user = await userFromToken(env, token)
+        if (!user) return json(req, env, { ok: false, error: 'Session expired.' }, 401)
+        if (!env.STEEL_ROOM) {
+          return json(req, env, { ok: false, error: 'Multiplayer not configured on Worker.' }, 503)
+        }
+        const code = makeRoomCode()
+        console.info(`[steel-auth] mp room create code=${code} by=${user.username}`)
+        return json(req, env, { ok: true, code })
+      }
+
+      if (req.method === 'GET' && path === '/mp/ws') {
+        const upgrade = req.headers.get('Upgrade')
+        if (upgrade !== 'websocket') {
+          return json(req, env, { ok: false, error: 'Expected WebSocket upgrade.' }, 426)
+        }
+        if (!env.STEEL_ROOM) {
+          return new Response('Multiplayer not configured', { status: 503 })
+        }
+
+        const room = normalizeRoomCode(url.searchParams.get('room') ?? '')
+        const token =
+          url.searchParams.get('token')?.trim() ||
+          bearerToken(req) ||
+          ''
+        if (room.length < 4) {
+          return new Response('Bad room code', { status: 400 })
+        }
+        if (!token) return new Response('Not signed in', { status: 401 })
+
+        const user = await userFromToken(env, token)
+        if (!user) return new Response('Session expired', { status: 401 })
+
+        const id = env.STEEL_ROOM.idFromName(room)
+        const stub = env.STEEL_ROOM.get(id)
+        const headers = new Headers(req.headers)
+        headers.set('X-Steel-User-Id', user.id)
+        headers.set('X-Steel-Username', user.username)
+        headers.set('X-Steel-Room', room)
+        // Preserve Upgrade so the DO can accept the WebSocket.
+        return stub.fetch(new Request(req, { headers }))
+      }
+
+      if (req.method === 'GET' && path.startsWith('/mp/rooms/')) {
+        const code = normalizeRoomCode(path.slice('/mp/rooms/'.length))
+        if (code.length < 4 || !env.STEEL_ROOM) {
+          return json(req, env, { ok: false, error: 'Not found.' }, 404)
+        }
+        const id = env.STEEL_ROOM.idFromName(code)
+        const stub = env.STEEL_ROOM.get(id)
+        const peek = await stub.fetch(new Request('https://room/peek'))
+        const body = await peek.json()
+        return json(req, env, body)
       }
 
       if (req.method === 'POST' && path === '/auth/register') {

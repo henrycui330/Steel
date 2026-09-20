@@ -27,6 +27,7 @@ import {
   type AuthUser,
 } from './auth'
 import { getWallet } from './wallet'
+import { createMpClient, createMpRoom, normalizeRoomCode, type MpLobbyState } from './net/mpClient'
 
 import {
   NATIONS,
@@ -204,6 +205,7 @@ function showHome(
   root.classList.add('menu-screen-home')
   const mode = getSession()?.mode ?? 'offline'
   const wallet = getWallet()
+  const onlineOk = mode === 'online' && !!getSteelApiBase()
   root.innerHTML = `
     <div class="menu-panel menu-panel-home">
       <p class="menu-brand">Steel</p>
@@ -215,15 +217,22 @@ function showHome(
       </p>
       <div class="home-actions">
         <button type="button" class="home-btn home-btn-play" data-go="play">Play</button>
+        <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" ${onlineOk ? '' : 'disabled title="Sign in Online with VITE_STEEL_API set"'}>Multiplayer</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>
         <button type="button" class="home-btn" data-go="settings">Settings</button>
         <button type="button" class="home-btn" data-go="credits">Credits</button>
         <button type="button" class="home-btn home-btn-logout" data-go="logout">Log out</button>
       </div>
+      ${onlineOk ? '' : '<p class="auth-mode-note">Multiplayer needs Online login + Worker API.</p>'}
     </div>
   `
   root.querySelector('[data-go="play"]')!.addEventListener('click', () => {
     showMatchSetup(root, resolve)
+  })
+  const mpBtn = root.querySelector('[data-go="mp"]') as HTMLButtonElement | null
+  mpBtn?.addEventListener('click', () => {
+    if (!onlineOk) return
+    showMpLobby(root, resolve, user)
   })
   root.querySelector('[data-go="customize"]')!.addEventListener('click', () => {
     showCustomize(root, resolve)
@@ -245,6 +254,104 @@ function showHome(
       showAuth(root, resolve)
     })()
   })
+}
+
+/** MP1 — create/join room + live lobby list (no match start yet). */
+function showMpLobby(
+  root: HTMLDivElement,
+  resolve: (s: MenuSelection) => void,
+  user: AuthUser,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-mp')
+
+  const client = createMpClient()
+  let joinCode = ''
+  let busy = false
+
+  function playersHtml(state: MpLobbyState): string {
+    if (state.players.length === 0) {
+      return '<li class="mp-empty">No one in the room yet.</li>'
+    }
+    return state.players
+      .map((p) => {
+        const you = state.you?.id === p.id ? ' (you)' : ''
+        const host = p.host ? ' · host' : ''
+        return `<li><strong>${escapeHtml(p.username)}</strong>${you}${host}</li>`
+      })
+      .join('')
+  }
+
+  function statusLine(state: MpLobbyState): string {
+    if (state.status === 'connecting') return 'Connecting…'
+    if (state.status === 'open') {
+      const n = state.players.length
+      const wait = n < state.max ? 'Waiting for opponent…' : 'Lobby full — match start comes in next step.'
+      return `Room <strong>${escapeHtml(state.code)}</strong> · ${n}/${state.max} — ${wait}`
+    }
+    if (state.status === 'error') return escapeHtml(state.error || 'Error')
+    if (state.status === 'closed') return state.error ? escapeHtml(state.error) : 'Disconnected.'
+    return 'Create a room or enter a code to join.'
+  }
+
+  function paint(state: MpLobbyState): void {
+    const inRoom = state.status === 'open' || state.status === 'connecting'
+    root.innerHTML = `
+      <div class="menu-panel menu-panel-mp">
+        <p class="menu-brand">Steel</p>
+        <p class="menu-tagline">Multiplayer lobby</p>
+        <p class="auth-userline">Signed in as <strong>${escapeHtml(user.username)}</strong></p>
+        <p class="mp-status" data-status>${statusLine(state)}</p>
+        <p class="auth-error" data-err>${state.error && state.status !== 'closed' ? escapeHtml(state.error) : ''}</p>
+        <ul class="mp-players" data-players>${playersHtml(state)}</ul>
+        <div class="mp-actions" ${inRoom ? 'hidden' : ''}>
+          <button type="button" class="home-btn home-btn-play" data-act="create" ${busy ? 'disabled' : ''}>Create room</button>
+          <div class="mp-join-row">
+            <input class="auth-input mp-code-input" data-code type="text" maxlength="6" placeholder="Room code" value="${escapeHtml(joinCode)}" ${busy ? 'disabled' : ''} autocomplete="off" spellcheck="false" />
+            <button type="button" class="home-btn" data-act="join" ${busy ? 'disabled' : ''}>Join</button>
+          </div>
+        </div>
+        <div class="mp-actions" ${inRoom ? '' : 'hidden'}>
+          <button type="button" class="home-btn" data-act="leave">Leave room</button>
+        </div>
+        <button type="button" class="home-btn home-btn-back" data-act="back">Back</button>
+      </div>
+    `
+
+    root.querySelector('[data-act="back"]')?.addEventListener('click', () => {
+      client.disconnect()
+      unsub()
+      showHome(root, resolve, user)
+    })
+    root.querySelector('[data-act="leave"]')?.addEventListener('click', () => {
+      client.disconnect()
+    })
+    root.querySelector('[data-act="create"]')?.addEventListener('click', () => {
+      void (async () => {
+        if (busy) return
+        busy = true
+        paint(client.getState())
+        const res = await createMpRoom()
+        busy = false
+        if (!res.ok) {
+          paint({ ...client.getState(), status: 'error', error: res.error })
+          return
+        }
+        joinCode = res.code
+        client.connect(res.code)
+      })()
+    })
+    root.querySelector('[data-act="join"]')?.addEventListener('click', () => {
+      const input = root.querySelector('[data-code]') as HTMLInputElement | null
+      joinCode = normalizeRoomCode(input?.value ?? '')
+      client.connect(joinCode)
+    })
+    root.querySelector('[data-code]')?.addEventListener('input', (ev) => {
+      joinCode = (ev.target as HTMLInputElement).value
+    })
+  }
+
+  const unsub = client.subscribe((state) => paint(state))
 }
 
 function escapeHtml(s: string): string {

@@ -110,3 +110,17 @@ Worker CORS allows `https://henrycui330.github.io` plus any `http(s)://localhost
 | POST | `/auth/logout` | Bearer token |
 | GET | `/auth/me` | Bearer token |
 | PATCH | `/auth/profile` | Bearer + `{ wrapId }` |
+| POST | `/mp/rooms` | Bearer → `{ code }` (5-char room) |
+| GET | `/mp/ws?room=&token=` | WebSocket upgrade (session token) |
+| GET | `/mp/rooms/:code` | lobby peek (optional) |
+
+## Multiplayer lobby (MP1)
+
+After deploy (Durable Object migration `v1-mp-rooms` runs on first deploy):
+
+1. Sign in **Online**
+2. Home → **Multiplayer**
+3. **Create room** (share the code) or **Join** with a code
+4. Both browsers should list each other in the lobby (max 2). Match start is a later step.
+
+Local: run Worker (`npm run dev` in `workers/steel-auth`) + Vite with `VITE_STEEL_API=/steel-api` and `ws` proxy (already in `vite.config.ts`).

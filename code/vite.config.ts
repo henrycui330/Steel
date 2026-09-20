@@ -30,6 +30,7 @@ export default defineConfig(({ mode, command }) => {
         '/steel-api': {
           target: proxyTarget.replace(/\/$/, ''),
           changeOrigin: true,
+          ws: true,
           rewrite: (p) => p.replace(/^\/steel-api/, ''),
         },
       },
@@ -39,6 +40,7 @@ export default defineConfig(({ mode, command }) => {
         '/steel-api': {
           target: proxyTarget.replace(/\/$/, ''),
           changeOrigin: true,
+          ws: true,
           rewrite: (p) => p.replace(/^\/steel-api/, ''),
         },
       },
