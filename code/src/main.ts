@@ -664,20 +664,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
       label: 'Player',
       onDestroyed: (_r, info) => {
         if (airCrashed || airEnded || flight.isFlameout()) return
-        if (info.severe) {
-          // Ammo-rack / catastrophic — no glide, you're done now.
-          const spd = flight.telemetry().speed
-          flight.forceCrash()
-          propEngine.setIntensity(0)
-          if (smokeEarly) spawnDestroyedWreck(scene, air.root, smokeEarly, isKoth)
-          console.info('[Steel] Player aircraft catastrophic kill — no glide')
-          bailOut('crash', spd)
-          return
-        }
-        // Don't freeze mid-air — flame-out dive until the deck (onCrash → bailOut).
-        flight.beginFlameout()
+        // Always deadstick — never forceCrash mid-air (that froze KOTH players
+        // for the 5s respawn timer). Crit just sinks harder; wreck waits for deck.
+        flight.beginFlameout(info.severe ? 'hard' : 'normal')
         propEngine.setIntensity(0)
-        console.info('[Steel] Player aircraft shot down — engine flame-out')
+        console.info(
+          `[Steel] Player aircraft shot down — flame-out${info.severe ? ' (catastrophic sink)' : ''}`,
+        )
       },
     })
     const airPlayerHostile = playerAsHostile(airPlayerCombat)

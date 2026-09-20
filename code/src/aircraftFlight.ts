@@ -106,8 +106,9 @@ export type AircraftFlight = {
   /**
    * Shot down: cut the engine and keep integrating as a burning deadstick
    * until terrain contact fires `onCrash`. No-op if already crashed / flameout.
+   * `hard` = catastrophic hit — steeper sink, still glides (never freezes mid-air).
    */
-  beginFlameout: () => void
+  beginFlameout: (severity?: 'normal' | 'hard') => void
   isFlameout: () => boolean
 }
 
@@ -194,11 +195,14 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     }
   }
 
+  let flameoutHard = false
+
   function hitGround(impactSpeed: number): void {
     const groundY = heightAt(root.position.x, root.position.z)
     root.position.y = groundY + CRASH_AGL
     crashed = true
     flameout = false
+    flameoutHard = false
     velocity.set(0, 0, 0)
     sinkRate = 0
     onCrash?.({ speed: impactSpeed, agl: CRASH_AGL })
@@ -212,13 +216,18 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     nearCeiling = false
     nearEdge = false
 
-    // Bleed airspeed; gravity owns the vertical.
-    speed = Math.max(0, speed * Math.exp(-FLAMEOUT_DRAG * dt))
-    sinkRate -= FLAMEOUT_GRAVITY * dt
+    const drag = flameoutHard ? FLAMEOUT_DRAG * 0.85 : FLAMEOUT_DRAG
+    const grav = flameoutHard ? FLAMEOUT_GRAVITY * 1.55 : FLAMEOUT_GRAVITY
+    const tumble = flameoutHard ? FLAMEOUT_TUMBLE * 1.4 : FLAMEOUT_TUMBLE
+    const noseHeavy = flameoutHard ? FLAMEOUT_NOSE_HEAVY * 1.6 : FLAMEOUT_NOSE_HEAVY
 
-    // Nose tends to drop; random-ish tumble so it doesn't fall like a brick.
-    rotateBody(AXIS_X, FLAMEOUT_NOSE_HEAVY * dt)
-    spin.setFromAxisAngle(flameTumble, FLAMEOUT_TUMBLE * dt)
+    // Bleed airspeed; gravity owns the vertical.
+    speed = Math.max(0, speed * Math.exp(-drag * dt))
+    sinkRate -= grav * dt
+
+    // Nose tends to drop; light tumble so it reads as a glide, not a freeze.
+    rotateBody(AXIS_X, noseHeavy * dt)
+    spin.setFromAxisAngle(flameTumble, tumble * dt)
     root.quaternion.premultiply(spin)
     root.quaternion.normalize()
 
@@ -397,6 +406,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     reset(pos, yaw, throttle01 = 0.55) {
       crashed = false
       flameout = false
+      flameoutHard = false
       stalled = false
       nearCeiling = false
       nearEdge = false
@@ -413,12 +423,14 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       if (crashed) return
       crashed = true
       flameout = false
+      flameoutHard = false
       velocity.set(0, 0, 0)
       sinkRate = 0
     },
-    beginFlameout() {
+    beginFlameout(severity: 'normal' | 'hard' = 'normal') {
       if (crashed || flameout) return
       flameout = true
+      flameoutHard = severity === 'hard'
       throttle = 0
       stalled = true
       // Keep residual airspeed + vertical rate so the dive continues from now.
@@ -426,12 +438,14 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       if (velocity.lengthSq() < 1) {
         velocity.copy(nose).multiplyScalar(speed)
       }
-      sinkRate = Math.min(sinkRate, -6)
+      sinkRate = Math.min(sinkRate, flameoutHard ? -18 : -6)
       // Pick a tumble bias from current attitude so each kill looks different.
       flameTumble
         .set(0.35 + Math.random() * 0.5, 0.15 + Math.random() * 0.35, 0.55 + Math.random() * 0.45)
         .normalize()
-      console.info('[Steel] Flight flame-out — engine dead, diving')
+      console.info(
+        `[Steel] Flight flame-out — engine dead, diving${flameoutHard ? ' (hard)' : ''}`,
+      )
     },
     isFlameout: () => flameout,
   }
