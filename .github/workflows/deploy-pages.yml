@@ -32,8 +32,8 @@ jobs:
       - name: Build
         env:
           VITE_BASE: /Steel/
-          # Optional: set in repo Settings → Secrets as VITE_STEEL_API
-          VITE_STEEL_API: ${{ secrets.VITE_STEEL_API }}
+          # Prefer repo secret; always fall back so Online/MP work on Pages.
+          VITE_STEEL_API: ${{ secrets.VITE_STEEL_API || 'https://steel-auth.henrycui330.workers.dev' }}
         run: npm run build
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

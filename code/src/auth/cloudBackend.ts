@@ -76,10 +76,18 @@ async function postJson(
   })
 }
 
+/** Live Worker — used when VITE_STEEL_API is missing (common on Pages without a CI secret). */
+const DEFAULT_STEEL_API = 'https://steel-auth.henrycui330.workers.dev'
+
 export function getSteelApiBase(): string | null {
   const v = import.meta.env.VITE_STEEL_API
-  if (!v || !String(v).trim()) return null
-  return String(v).trim().replace(/\/$/, '')
+  if (v && String(v).trim()) return String(v).trim().replace(/\/$/, '')
+  // Production / GitHub Pages: don't leave Online + Multiplayer dead if the secret was unset.
+  if (import.meta.env.PROD) return DEFAULT_STEEL_API
+  if (typeof location !== 'undefined' && /\.github\.io$/i.test(location.hostname)) {
+    return DEFAULT_STEEL_API
+  }
+  return null
 }
 
 export function createCloudflareAuthBackend(apiBase: string): AuthBackend {

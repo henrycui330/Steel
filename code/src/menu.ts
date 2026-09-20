@@ -212,7 +212,13 @@ function showHome(
   root.classList.add('menu-screen-home')
   const mode = getSession()?.mode ?? 'offline'
   const wallet = getWallet()
-  const onlineOk = mode === 'online' && !!getSteelApiBase()
+  const apiBase = getSteelApiBase()
+  const onlineOk = mode === 'online' && !!apiBase
+  const mpBlockReason = !apiBase
+    ? 'Multiplayer needs the Online API (VITE_STEEL_API).'
+    : mode !== 'online'
+      ? 'Log out, choose Online, then sign in to use Multiplayer.'
+      : ''
   root.innerHTML = `
     <div class="menu-panel menu-panel-home">
       <p class="menu-brand">Steel</p>
@@ -224,13 +230,13 @@ function showHome(
       </p>
       <div class="home-actions">
         <button type="button" class="home-btn home-btn-play" data-go="play">Play</button>
-        <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" ${onlineOk ? '' : 'disabled title="Sign in Online with VITE_STEEL_API set"'}>Multiplayer</button>
+        <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" title="${onlineOk ? 'Create or join a room' : escapeHtml(mpBlockReason)}">Multiplayer</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>
         <button type="button" class="home-btn" data-go="settings">Settings</button>
         <button type="button" class="home-btn" data-go="credits">Credits</button>
         <button type="button" class="home-btn home-btn-logout" data-go="logout">Log out</button>
       </div>
-      ${onlineOk ? '' : '<p class="auth-mode-note">Multiplayer needs Online login + Worker API.</p>'}
+      ${onlineOk ? '' : `<p class="auth-mode-note" data-mp-hint>${escapeHtml(mpBlockReason)}</p>`}
     </div>
   `
   root.querySelector('[data-go="play"]')!.addEventListener('click', () => {
@@ -238,7 +244,15 @@ function showHome(
   })
   const mpBtn = root.querySelector('[data-go="mp"]') as HTMLButtonElement | null
   mpBtn?.addEventListener('click', () => {
-    if (!onlineOk) return
+    if (!onlineOk) {
+      const hint = root.querySelector('[data-mp-hint]') as HTMLElement | null
+      if (hint) {
+        hint.textContent = mpBlockReason
+        hint.style.color = '#c4a35a'
+      }
+      console.warn('[Steel] Multiplayer blocked:', mpBlockReason, { mode, apiBase })
+      return
+    }
     showMpLobby(root, resolve, user)
   })
   root.querySelector('[data-go="customize"]')!.addEventListener('click', () => {
