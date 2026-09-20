@@ -58,10 +58,10 @@ const TURNBACK_MAX = 2.2
 const EDGE_SPEED_BLEED = 0.4
 
 /** Deadstick after shot-down: gravity pull while airspeed bleeds. */
-const FLAMEOUT_GRAVITY = 38
-const FLAMEOUT_DRAG = 0.55
-const FLAMEOUT_TUMBLE = 1.35
-const FLAMEOUT_NOSE_HEAVY = 0.55
+const FLAMEOUT_GRAVITY = 28
+const FLAMEOUT_DRAG = 0.38
+const FLAMEOUT_TUMBLE = 0.55
+const FLAMEOUT_NOSE_HEAVY = 0.32
 
 const AXIS_X = new THREE.Vector3(1, 0, 0)
 const AXIS_Y = new THREE.Vector3(0, 1, 0)

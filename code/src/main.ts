@@ -662,8 +662,18 @@ async function startMission(sel: MenuSelection): Promise<void> {
       broadRadius: 9,
       altitudeSpan: 7,
       label: 'Player',
-      onDestroyed: () => {
+      onDestroyed: (_r, info) => {
         if (airCrashed || airEnded || flight.isFlameout()) return
+        if (info.severe) {
+          // Ammo-rack / catastrophic — no glide, you're done now.
+          const spd = flight.telemetry().speed
+          flight.forceCrash()
+          propEngine.setIntensity(0)
+          if (smokeEarly) spawnDestroyedWreck(scene, air.root, smokeEarly, isKoth)
+          console.info('[Steel] Player aircraft catastrophic kill — no glide')
+          bailOut('crash', spd)
+          return
+        }
         // Don't freeze mid-air — flame-out dive until the deck (onCrash → bailOut).
         flight.beginFlameout()
         propEngine.setIntensity(0)

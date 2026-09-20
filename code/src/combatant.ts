@@ -61,7 +61,11 @@ export type CombatantOptions = {
   altitudeSpan?: number
   /** Per-tank armor table (defaults to Pz-III if omitted). */
   armor?: Record<ArmorPartId, ArmorPartDef>
-  onDestroyed?: (root: THREE.Group) => void
+  /**
+   * `severe` = ammo-rack / crit — airframes may explode mid-air instead of
+   * flaming out and gliding to the deck.
+   */
+  onDestroyed?: (root: THREE.Group, info: { severe: boolean }) => void
   /** Fired when APHE pens tracks (immobilize applied). */
   onTracksDisabled?: (seconds: number) => void
   label?: string
@@ -164,11 +168,12 @@ export function createCombatant(
           alive = false
           destroyed = true
           hp = 0
-          const reason = resolution.crit ? 'AMMO RACK' : 'DESTROYED'
+          const severe = resolution.crit === true
+          const reason = severe ? 'AMMO RACK' : 'DESTROYED'
           console.info(
             `[Steel] ${label} ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}`,
           )
-          opts.onDestroyed?.(root)
+          opts.onDestroyed?.(root, { severe })
         } else if (!tracksDisabled) {
           console.info(
             `[Steel] ${label} ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage} HP (${hp}/${maxHp})`,

@@ -129,20 +129,35 @@ export async function spawnAiCorsair(
 
   const label = team === 'friendly' ? `Friendly ${chassis.name}` : `Enemy ${chassis.name}`
   let flight!: AircraftFlight
+  let flaming = false
+  let wrecked = false
   const combat = createCombatant(root, {
     maxHp: Math.round(chassis.maxHp * 0.9),
     armor: chassis.armor,
     broadRadius: 9,
     altitudeSpan: 7,
     label,
-    onDestroyed: (r) => {
+    onDestroyed: (r, info) => {
       opts.onDeath?.(r)
-      flight.forceCrash()
-      if (persistMesh) {
-        r.visible = false
+      if (info.severe) {
+        // Catastrophic — stop mid-air and leave a wreck (or hide in KOTH).
+        flight.forceCrash()
+        flaming = false
+        if (persistMesh) {
+          r.visible = false
+        } else if (!wrecked) {
+          wrecked = true
+          spawnDestroyedWreck(scene, r, opts.smoke)
+        }
+        console.info(`[Steel] AI ${chassis.name} catastrophic kill — mid-air wreck`)
         return
       }
-      spawnDestroyedWreck(scene, r, opts.smoke)
+      // HP gone but not crit — deadstick glide until the deck.
+      if (!flight.isFlameout()) {
+        flight.beginFlameout()
+        flaming = true
+        console.info(`[Steel] AI ${chassis.name} shot down — flame-out glide`)
+      }
     },
   })
 
@@ -152,6 +167,18 @@ export async function spawnAiCorsair(
     throttle: 0.55,
     bounds,
     ceiling,
+    onCrash: () => {
+      flaming = false
+      if (persistMesh) {
+        root.visible = false
+        return
+      }
+      if (!wrecked) {
+        wrecked = true
+        spawnDestroyedWreck(scene, root, opts.smoke)
+        console.info(`[Steel] AI ${chassis.name} impact — wreck`)
+      }
+    },
   })
 
   const guns: AircraftGuns = createAircraftGuns({
@@ -311,7 +338,18 @@ export async function spawnAiCorsair(
     previewShellHit: (p, v, s) => combat.previewShellHit(p, v, s),
 
     update(dt, ctx) {
+      // Keep integrating a flame-out dive after HP death so the airframe
+      // glides to the deck instead of freezing mid-sky.
       if (!combat.alive) {
+        if (flaming && !flight.telemetry().crashed) {
+          const tm = flight.update(dt, emptyStick())
+          if (!tm.crashed) air.spinProp(dt, 0)
+          if (opts.smoke && Math.random() < 0.35) {
+            _aim.set(0, 0.4, -2.2).applyQuaternion(root.quaternion)
+            _aim.add(root.position)
+            opts.smoke.wreckBurn(_aim)
+          }
+        }
         guns.update(dt, false, ctx.hostiles, ctx.camera)
         return
       }
@@ -332,6 +370,8 @@ export async function spawnAiCorsair(
       const y = sampleGround(pos.x, pos.z) + spawnAlt
       const p = new THREE.Vector3(pos.x, y, pos.z)
       combat.revive()
+      flaming = false
+      wrecked = false
       flight.reset(p, newYaw, 0.55)
       guns.refill()
       passTimer = 0
