@@ -29,6 +29,7 @@ import {
 import { getWallet } from './wallet'
 import { createMpClient, createMpRoom, normalizeRoomCode, type MpLobbyState } from './net/mpClient'
 import { setMpSession } from './net/mpSession'
+import { MIN_MP_START } from './net/mpProtocol'
 import {
   NATIONS,
   nationByTeam,
@@ -57,9 +58,14 @@ export type MenuSelection = {
   /** Present when launching from Multiplayer lobby. */
   mp?: {
     isHost: boolean
-    remoteTankId: TankId
-    remoteUserId: string
     myUserId: string
+    /** Everyone else in the match (host + other guests from each client's view). */
+    peers: Array<{
+      userId: string
+      tankId: TankId
+      team: TeamId
+      spawnIndex: number
+    }>
   }
 }
 
@@ -306,13 +312,19 @@ function showMpLobby(
     if (started) return
     started = true
     const me = match.players.find((p) => p.id === (getSession()?.userId ?? user.id))
-    const other = match.players.find((p) => p.id !== me?.id)
-    if (!me || !other) {
+    if (!me || match.players.length < MIN_MP_START) {
       console.error('[Steel] MP start missing players', match)
       return
     }
     const tankId = (me.tankId as TankId) || 'tiger'
-    const remoteTankId = (other.tankId as TankId) || 'tiger'
+    const peers = match.players
+      .filter((p) => p.id !== me.id)
+      .map((p) => ({
+        userId: p.id,
+        tankId: (p.tankId as TankId) || 'tiger',
+        team: p.team as TeamId,
+        spawnIndex: p.spawnIndex,
+      }))
     setMpSession({
       client,
       isHost: !!me.host,
@@ -324,7 +336,7 @@ function showMpLobby(
     unsubStart()
     document.getElementById('main-menu')?.remove()
     console.info(
-      `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} vs ${remoteTankId} team=${me.team}`,
+      `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} team=${me.team} peers=${peers.length}`,
     )
     resolve({
       mapId: (match.mapId as MapId) || 'forest',
@@ -339,9 +351,8 @@ function showMpLobby(
       gameMode: 'skirmish',
       mp: {
         isHost: !!me.host,
-        remoteTankId,
-        remoteUserId: other.id,
         myUserId: me.id,
+        peers,
       },
     })
   })
@@ -372,12 +383,17 @@ function showMpLobby(
     if (state.status === 'starting') return 'Starting match…'
     if (state.status === 'open') {
       const n = state.players.length
-      const wait =
-        n < state.max
-          ? 'Waiting for opponent…'
-          : state.you?.host
-            ? 'Both here — press Start when ready.'
-            : 'Waiting for host to Start…'
+      let wait: string
+      if (n < MIN_MP_START) {
+        wait = 'Waiting for players…'
+      } else if (state.you?.host) {
+        wait =
+          n < state.max
+            ? `Ready — Start anytime (or wait, up to ${state.max}).`
+            : 'Room full — press Start when ready.'
+      } else {
+        wait = 'Waiting for host to Start…'
+      }
       return `Room <strong>${escapeHtml(state.code)}</strong> · ${n}/${state.max} — ${wait}`
     }
     if (state.status === 'error') return escapeHtml(state.error || 'Error')
@@ -388,7 +404,7 @@ function showMpLobby(
   function paint(state: MpLobbyState): void {
     const inRoom = state.status === 'open' || state.status === 'connecting' || state.status === 'starting'
     const canStart =
-      state.status === 'open' && !!state.you?.host && state.players.length >= state.max
+      state.status === 'open' && !!state.you?.host && state.players.length >= MIN_MP_START
     root.innerHTML = `
       <div class="menu-panel menu-panel-mp">
         <p class="menu-brand">Steel</p>

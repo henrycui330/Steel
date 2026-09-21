@@ -1,5 +1,6 @@
 import { getSession, getSteelApiBase } from '../auth'
 import {
+  MAX_MP_PLAYERS,
   parseMpServerMsg,
   type MpClientMsg,
   type MpInput,
@@ -93,7 +94,7 @@ export function createMpClient(): MpClient {
     code: '',
     you: null,
     players: [],
-    max: 2,
+    max: MAX_MP_PLAYERS,
     status: 'idle',
     error: '',
   }

@@ -121,6 +121,6 @@ After deploy (Durable Object migration `v1-mp-rooms` runs on first deploy):
 1. Sign in **Online**
 2. Home → **Multiplayer**
 3. **Create room** (share the code) or **Join** with a code
-4. Both browsers should list each other in the lobby (max 2). Match start is a later step.
+4. Lobby lists everyone (max **6**). Host can **Start** once **2+** players are in.
 
 Local: run Worker (`npm run dev` in `workers/steel-auth`) + Vite with `VITE_STEEL_API=/steel-api` and `ws` proxy (already in `vite.config.ts`).

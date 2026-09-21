@@ -1,5 +1,10 @@
 /** Shared multiplayer message types (client ↔ SteelRoom DO). */
 
+/** Lobby / match seat limit (must match Durable Object). */
+export const MAX_MP_PLAYERS = 6
+/** Host may start once this many seats are filled. */
+export const MIN_MP_START = 2
+
 export type MpPlayer = {
   id: string
   username: string
@@ -28,6 +33,8 @@ export type MpTankPose = {
 
 /** Guest → host control packet (compact keys). */
 export type MpInput = {
+  /** Guest user id — stamped by the room when forwarding. */
+  id?: string
   /** Forward −1..1 */
   f: number
   /** Turn −1..1 (left +) */

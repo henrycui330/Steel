@@ -1,6 +1,6 @@
 /**
  * Steel multiplayer room — Durable Object WebSocket relay.
- * Lobby + start + host snapshot fan-out (MP1–MP2).
+ * Lobby + start + host snapshot fan-out (up to 6 players).
  */
 
 export interface RoomEnv {
@@ -16,7 +16,8 @@ type Seat = {
   tankId?: string
 }
 
-const MAX_PLAYERS = 2
+const MAX_PLAYERS = 6
+const MIN_START = 2
 const DEFAULT_TANK = 'tiger'
 
 function lobbyPayload(seats: Seat[]) {
@@ -29,6 +30,22 @@ function lobbyPayload(seats: Seat[]) {
       tankId: s.tankId,
     })),
   }
+}
+
+/** Host first, then stable id order; alternate red/blue with spawn slots 0–2. */
+function matchPlayersFromSeats(seats: Seat[]) {
+  const ordered = [...seats].sort((a, b) => {
+    if (a.host !== b.host) return a.host ? -1 : 1
+    return a.userId.localeCompare(b.userId)
+  })
+  return ordered.map((s, i) => ({
+    id: s.userId,
+    username: s.username,
+    host: s.host,
+    tankId: s.tankId || DEFAULT_TANK,
+    team: (i % 2 === 0 ? 'red' : 'blue') as 'red' | 'blue',
+    spawnIndex: Math.floor(i / 2) % 3,
+  }))
 }
 
 export class SteelRoom implements DurableObject {
@@ -109,7 +126,7 @@ export class SteelRoom implements DurableObject {
     this.broadcast(JSON.stringify(lobbyPayload([...this.seats.values()])), server)
 
     console.info(
-      `[SteelRoom] join user=${username} host=${host} n=${this.seats.size} room=${roomCode}`,
+      `[SteelRoom] join user=${username} host=${host} n=${this.seats.size}/${MAX_PLAYERS} room=${roomCode}`,
     )
 
     return new Response(null, { status: 101, webSocket: client })
@@ -156,58 +173,44 @@ export class SteelRoom implements DurableObject {
         ws.send(JSON.stringify({ t: 'error', message: 'Only the host can start.' }))
         return
       }
-      if (this.seats.size < 2) {
-        ws.send(JSON.stringify({ t: 'error', message: 'Need 2 players to start.' }))
+      if (this.seats.size < MIN_START) {
+        ws.send(
+          JSON.stringify({
+            t: 'error',
+            message: `Need at least ${MIN_START} players to start.`,
+          }),
+        )
         return
       }
-      const ordered = [...this.seats.values()].sort((a, b) => (a.host === b.host ? 0 : a.host ? -1 : 1))
-      const hostSeat = ordered.find((s) => s.host) ?? ordered[0]!
-      const guestSeat = ordered.find((s) => !s.host) ?? ordered[1]!
+      const players = matchPlayersFromSeats([...this.seats.values()])
       const startMsg = {
         t: 'start' as const,
         mapId: 'forest',
         timeOfDay: 'day',
         season: 'summer',
         weather: 'clear',
-        players: [
-          {
-            id: hostSeat.userId,
-            username: hostSeat.username,
-            host: true,
-            tankId: hostSeat.tankId || DEFAULT_TANK,
-            team: 'red' as const,
-            spawnIndex: 1,
-          },
-          {
-            id: guestSeat.userId,
-            username: guestSeat.username,
-            host: false,
-            tankId: guestSeat.tankId || DEFAULT_TANK,
-            team: 'blue' as const,
-            spawnIndex: 1,
-          },
-        ],
+        players,
       }
       console.info(
-        `[SteelRoom] start host=${hostSeat.username} guest=${guestSeat.username} tanks=${startMsg.players.map((p) => p.tankId).join(',')}`,
+        `[SteelRoom] start n=${players.length} ${players.map((p) => `${p.username}:${p.tankId}:${p.team}`).join(' | ')}`,
       )
       this.broadcast(JSON.stringify(startMsg))
       return
     }
 
     if (data.t === 'snap' && seat.host && Array.isArray(data.tanks)) {
-      // Host snapshots → guests only
       this.broadcast(message, ws)
       return
     }
 
     if (data.t === 'input' && !seat.host) {
-      // Guest controls → host only (also log for debug).
+      // Stamp sender id so the host can drive multiple guests.
+      const stamped = JSON.stringify({ ...(data as object), id: seat.userId })
       let delivered = 0
       for (const [ows, oseat] of this.seats) {
         if (!oseat.host) continue
         try {
-          ows.send(message)
+          ows.send(stamped)
           delivered++
         } catch {
           /* ignore */
@@ -229,7 +232,7 @@ export class SteelRoom implements DurableObject {
       )
       const leftMsg = JSON.stringify({
         t: 'peerLeft',
-        message: seat.host ? 'Host left the match.' : 'Opponent left the match.',
+        message: seat.host ? 'Host left the match.' : `${seat.username} left the match.`,
       })
       for (const [ows] of this.seats) {
         try {

@@ -76,7 +76,7 @@ import { PALETTE } from './paint'
 import { lockPointer } from './pointerLock'
 import { punchShotRecoil, resetShotRecoil, updateShotRecoil } from './recoil'
 import { createSmokeSystem } from './smoke'
-import { tankOptionById } from './tankCatalog'
+import { tankOptionById, type TankId } from './tankCatalog'
 import { collectWheels, updateWheels } from './wheels'
 import { collectTracks, updateTracks } from './tracks'
 import { spawnDestroyedWreck, updateWrecks } from './wreck'
@@ -297,7 +297,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   void preloadUrls([
     ...FOREST_PROP_URLS,
     option.url,
-    ...(mp ? [tankOptionById(mp.remoteTankId).url] : []),
+    ...(mp ? mp.peers.map((p) => tankOptionById(p.tankId).url) : []),
     ...redAi.map((id) => tankOptionById(id).url),
     ...blueAi.map((id) => tankOptionById(id).url),
   ])
@@ -307,7 +307,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   let mapPaths: Array<{ points: Array<{ x: number; z: number }> }> | undefined
   let mapSpawns = mapOpt.spawns
   let playerHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
-  let remoteHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
+  let remoteHandlesEarly: Awaited<ReturnType<typeof loadPlayerTank>>[] = []
   let airHandleEarly: AircraftHandle | null = null
   let smokeEarly: Awaited<ReturnType<typeof createSmokeSystem>> | null = null
   const isAir = option.aircraft === true
@@ -317,12 +317,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
       createSmokeSystem(scene),
       isAir ? loadPlayerAircraft(tankId) : loadPlayerTank(tankId),
     ]
-    if (mp && !isAir) loads.push(loadPlayerTank(mp.remoteTankId))
+    const peerLoadAt = loads.length
+    if (mp && !isAir) {
+      for (const peer of mp.peers) loads.push(loadPlayerTank(peer.tankId))
+    }
     const settled = await Promise.allSettled(loads)
     const mapRes = settled[0]!
     const smokeRes = settled[1]!
     const playerRes = settled[2]!
-    const remoteRes = mp && !isAir ? settled[3] : undefined
     if (mapRes.status === 'fulfilled') {
       const v = mapRes.value as Awaited<ReturnType<typeof loadMap>>
       mapColliders = v.colliders
@@ -342,10 +344,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
     } else {
       console.warn('[Steel] Player vehicle load failed', playerRes.reason)
     }
-    if (remoteRes?.status === 'fulfilled') {
-      remoteHandleEarly = remoteRes.value as Awaited<ReturnType<typeof loadPlayerTank>>
-    } else if (remoteRes?.status === 'rejected') {
-      console.warn('[Steel] Remote tank load failed', remoteRes.reason)
+    if (mp && !isAir) {
+      for (let i = 0; i < mp.peers.length; i++) {
+        const remoteRes = settled[peerLoadAt + i]
+        if (remoteRes?.status === 'fulfilled') {
+          remoteHandlesEarly.push(remoteRes.value as Awaited<ReturnType<typeof loadPlayerTank>>)
+        } else if (remoteRes?.status === 'rejected') {
+          console.warn('[Steel] Remote tank load failed', remoteRes.reason)
+        }
+      }
     }
   } catch (err) {
     console.warn('[Steel] Map / tank / smoke load failed', err)
@@ -1389,27 +1396,54 @@ async function startMission(sel: MenuSelection): Promise<void> {
     scene.add(tank)
     resetAim(tank.rotation.y)
 
-    /** Remote human tank (MP2/MP3 — host sims both). */
-    let remoteTank: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
-    let remoteDrive: ReturnType<typeof createDriveController> | null = null
-    let guestInput: MpInput = { f: 0, u: 0, b: false, fire: false, ay: 0, ap: 0 }
-    let guestInputAge = 999
-    if (mp && remoteHandleEarly) {
-      remoteTank = remoteHandleEarly
-      const remoteOpt = tankOptionById(mp.remoteTankId)
-      remoteDrive = createDriveController(remoteOpt.drive)
-      remoteDrive.setGroundY(mapGroundY)
-      remoteDrive.setHeightAt(heightAt ?? null)
-      const remoteSpawn = spawnAt(opposite, 1)
-      const remoteYaw = Math.atan2(-remoteSpawn.x, -remoteSpawn.z)
-      remoteTank.root.name = 'mpRemote'
-      remoteTank.root.position.copy(remoteSpawn)
-      remoteTank.root.rotation.order = 'YXZ'
-      remoteTank.root.rotation.y = remoteYaw
-      scene.add(remoteTank.root)
-      console.info(
-        `[Steel] MP remote tank ${mp.remoteTankId} at (${remoteSpawn.x.toFixed(0)}, ${remoteSpawn.z.toFixed(0)})`,
-      )
+    /** Remote human tanks (MP — host sims guests; guests apply snaps). */
+    type MpRemoteUnit = {
+      userId: string
+      tankId: TankId
+      team: TeamId
+      handle: Awaited<ReturnType<typeof loadPlayerTank>>
+      drive: ReturnType<typeof createDriveController> | null
+      input: MpInput
+      inputAge: number
+    }
+    const emptyMpInput = (): MpInput => ({
+      f: 0,
+      u: 0,
+      b: false,
+      fire: false,
+      ay: 0,
+      ap: 0,
+    })
+    const remotes: MpRemoteUnit[] = []
+    if (mp) {
+      for (let i = 0; i < mp.peers.length; i++) {
+        const peer = mp.peers[i]!
+        const handle = remoteHandlesEarly[i]
+        if (!handle) continue
+        const remoteOpt = tankOptionById(peer.tankId)
+        const drive = mp.isHost ? createDriveController(remoteOpt.drive) : null
+        drive?.setGroundY(mapGroundY)
+        drive?.setHeightAt(heightAt ?? null)
+        const remoteSpawn = spawnAt(peer.team, peer.spawnIndex)
+        const remoteYaw = Math.atan2(-remoteSpawn.x, -remoteSpawn.z)
+        handle.root.name = `mpRemote:${peer.userId}`
+        handle.root.position.copy(remoteSpawn)
+        handle.root.rotation.order = 'YXZ'
+        handle.root.rotation.y = remoteYaw
+        scene.add(handle.root)
+        remotes.push({
+          userId: peer.userId,
+          tankId: peer.tankId,
+          team: peer.team,
+          handle,
+          drive,
+          input: emptyMpInput(),
+          inputAge: 999,
+        })
+        console.info(
+          `[Steel] MP remote ${peer.tankId} (${peer.userId.slice(0, 6)}) ${peer.team}[${peer.spawnIndex}] @ (${remoteSpawn.x.toFixed(0)}, ${remoteSpawn.z.toFixed(0)})`,
+        )
+      }
     }
 
     function poseFromTank(
@@ -1455,12 +1489,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
     if (mpSess?.isHost) {
       let hostInputLogAcc = 0
       mpSess.client.onInput((input) => {
-        guestInput = input
-        guestInputAge = 0
+        const uid = input.id
+        if (!uid) return
+        const remote = remotes.find((r) => r.userId === uid)
+        if (!remote) return
+        remote.input = input
+        remote.inputAge = 0
         hostInputLogAcc += 0.05
         if (hostInputLogAcc >= 2 && Math.abs(input.f) + Math.abs(input.u) > 0) {
           hostInputLogAcc = 0
-          console.info(`[Steel] MP host got guest input f=${input.f} u=${input.u}`)
+          console.info(`[Steel] MP host got input from ${uid.slice(0, 6)} f=${input.f} u=${input.u}`)
         }
       })
     }
@@ -1627,9 +1665,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const matchOpening = createMatchOpening({
       units: [
         { root: tank, team, aircraft: false },
-        ...(remoteTank
-          ? [{ root: remoteTank.root, team: opposite, aircraft: false as const }]
-          : []),
+        ...remotes.map((r) => ({
+          root: r.handle.root,
+          team: r.team,
+          aircraft: false as const,
+        })),
         ...friendlies.map((u) => ({
           root: u.root,
           team,
@@ -1794,13 +1834,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (consumeNvgToggle()) nvg.toggle()
 
       const mpGuest = !!(mp && mpSess && !mpSess.isHost)
-      // Guest: only snap the *host* tank. Own hull is driven locally (prediction)
-      // so WASD always works even if a snap packet is late.
-      if (mpGuest && mpSess.lastSnap && remoteTank && mp) {
+      // Guest: snap every *other* tank. Own hull is driven locally (prediction).
+      if (mpGuest && mpSess.lastSnap && mp) {
         for (const pose of mpSess.lastSnap) {
-          if (pose.id === mp.remoteUserId) {
-            applyTankPose(remoteTank.root, remoteTank.turret, remoteTank.barrel, pose)
-          }
+          if (pose.id === mp.myUserId) continue
+          const remote = remotes.find((r) => r.userId === pose.id)
+          if (!remote) continue
+          applyTankPose(remote.handle.root, remote.handle.turret, remote.handle.barrel, pose)
         }
       }
 
@@ -1871,33 +1911,36 @@ async function startMission(sel: MenuSelection): Promise<void> {
         arty?.update(0)
       }
 
-      // Host also sims the guest tank from networked input (authoritative ghost).
-      if (mp && mpSess?.isHost && remoteTank && remoteDrive && !matchOver) {
-        guestInputAge += dt
-        const stale = guestInputAge > 0.45
-        const gFwd = stale ? 0 : guestInput.f
-        const gTurn = stale ? 0 : guestInput.u
-        const gBrake = stale ? true : guestInput.b
+      // Host sims every guest tank from networked input (authoritative).
+      if (mp && mpSess?.isHost && !matchOver) {
         const mods = env.getDriveMods()
-        remoteDrive.setMobilityMul(mods.mobilityMul)
-        remoteDrive.setSlip(mods.slip)
-        remoteDrive.update(
-          dt,
-          { forward: gFwd, turn: gTurn, brake: gBrake },
-          remoteTank.root,
-          (pos) => {
-            const blocked =
-              resolvePropCollisions(pos, TANK_RADIUS, mapColliders) ||
-              clampToArena(pos, playable, TANK_RADIUS)
-            if (blocked) remoteDrive!.killSpeed()
-          },
-        )
-        if (!stale) {
-          remoteTank.turret.rotation.y = guestInput.ay
-          if (remoteTank.barrel.userData.gunForward === 'x') {
-            remoteTank.barrel.rotation.z = guestInput.ap
-          } else {
-            remoteTank.barrel.rotation.x = guestInput.ap
+        for (const remote of remotes) {
+          if (!remote.drive) continue
+          remote.inputAge += dt
+          const stale = remote.inputAge > 0.45
+          const gFwd = stale ? 0 : remote.input.f
+          const gTurn = stale ? 0 : remote.input.u
+          const gBrake = stale ? true : remote.input.b
+          remote.drive.setMobilityMul(mods.mobilityMul)
+          remote.drive.setSlip(mods.slip)
+          remote.drive.update(
+            dt,
+            { forward: gFwd, turn: gTurn, brake: gBrake },
+            remote.handle.root,
+            (pos) => {
+              const blocked =
+                resolvePropCollisions(pos, TANK_RADIUS, mapColliders) ||
+                clampToArena(pos, playable, TANK_RADIUS)
+              if (blocked) remote.drive!.killSpeed()
+            },
+          )
+          if (!stale) {
+            remote.handle.turret.rotation.y = remote.input.ay
+            if (remote.handle.barrel.userData.gunForward === 'x') {
+              remote.handle.barrel.rotation.z = remote.input.ap
+            } else {
+              remote.handle.barrel.rotation.x = remote.input.ap
+            }
           }
         }
       }
@@ -2081,7 +2124,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
       checkMatchEnd()
 
-      if (mp && mpSess?.isHost && remoteTank) {
+      if (mp && mpSess?.isHost) {
         mpSnapAcc += dt
         if (mpSnapAcc >= 0.05) {
           mpSnapAcc = 0
@@ -2089,7 +2132,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
             t: 'snap',
             tanks: [
               poseFromTank(mp.myUserId, tank, turret, barrel),
-              poseFromTank(mp.remoteUserId, remoteTank.root, remoteTank.turret, remoteTank.barrel),
+              ...remotes.map((r) =>
+                poseFromTank(r.userId, r.handle.root, r.handle.turret, r.handle.barrel),
+              ),
             ],
           })
         }
