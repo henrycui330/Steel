@@ -55,6 +55,8 @@ export type FlightInput = {
   fire: boolean
   /** Edge-triggered: release one bomb (B). */
   dropBomb: boolean
+  /** Edge-triggered: fire one wing rocket (R) — Corsair HVAR. */
+  fireRocket: boolean
   /** Edge-triggered: toggle the bombsight scope (V). */
   toggleSight: boolean
   /** Edge-triggered: cut the bomb cinematic short (C). */
@@ -83,6 +85,7 @@ let stickRoll = 0
 let stickMovedAt = 0
 let flightBound = false
 let bombQueued = false
+let rocketQueued = false
 let sightQueued = false
 let skipCineQueued = false
 let ejectQueued = false
@@ -97,6 +100,7 @@ export function bindFlightInput(): void {
   window.addEventListener('keydown', (e) => {
     if (e.repeat) return
     if (e.code === 'KeyB') bombQueued = true
+    if (e.code === 'KeyR') rocketQueued = true
     if (e.code === 'KeyV') sightQueued = true
     if (e.code === 'KeyC') skipCineQueued = true
     if (e.code === 'KeyY') ejectQueued = true
@@ -129,12 +133,14 @@ export function getFlightInput(dt: number): FlightInput {
   const handsOff = idleMs > 180 && deflection < HANDS_OFF_DEFLECTION && rudder === 0
 
   const dropBomb = bombQueued
+  const fireRocket = rocketQueued
   const toggleSight = sightQueued
   const skipCinematic = skipCineQueued
   const eject = ejectQueued
   const toggleGear = gearQueued
   const fireMissile = missileQueued
   bombQueued = false
+  rocketQueued = false
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false
@@ -149,6 +155,7 @@ export function getFlightInput(dt: number): FlightInput {
     throttleDown: isDown('KeyS'),
     fire: isDown('Space'),
     dropBomb,
+    fireRocket,
     toggleSight,
     skipCinematic,
     eject,
@@ -165,6 +172,7 @@ export function resetFlightInput(): void {
   stickRoll = 0
   stickMovedAt = 0
   bombQueued = false
+  rocketQueued = false
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false

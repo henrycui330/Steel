@@ -82,6 +82,7 @@ function emptyStick(partial: Partial<FlightInput> = {}): FlightInput {
     throttleDown: false,
     fire: false,
     dropBomb: false,
+    fireRocket: false,
     toggleSight: false,
     skipCinematic: false,
     eject: false,

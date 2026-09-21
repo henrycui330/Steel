@@ -837,7 +837,9 @@ function showSpawnSelect(
     btn.className = 'tank-card'
     btn.dataset.id = tank.id
     const stats = tank.aircraft
-      ? `Air · guns + bombs · KOTH support`
+      ? tank.id === 'corsair'
+        ? `Air · guns + bombs + HVAR · KOTH`
+        : `Air · guns + bombs · KOTH support`
       : `Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}`
     btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-stats">${stats}</span><span class="tank-blurb">${tank.blurb}</span>`
     btn.addEventListener('click', () => {

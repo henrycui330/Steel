@@ -875,7 +875,7 @@ export const TANK_OPTIONS: TankOption[] = [
     id: 'corsair',
     name: 'F4U-1A Corsair',
     role: 'Fighter-bomber · air',
-    blurb: 'Bent-wing carrier fighter · six .50 cals · owns the sky',
+    blurb: 'Bent-wing carrier fighter · six .50s · bombs + HVAR rockets',
     url: assetUrl('models/f4u_corsair.glb?v=5'),
     reloadSec: 0.12,
     maxHp: 520,

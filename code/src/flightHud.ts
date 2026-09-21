@@ -34,6 +34,11 @@ export type BombHudState = {
   scopeOn: boolean
 }
 
+/** Corsair wing rockets (HVAR). */
+export type RocketHudState = {
+  remaining: number
+}
+
 /** F-16 missile lock + ammo. */
 export type MissileHudState = {
   phase: 'idle' | 'soft' | 'acquiring' | 'hard'
@@ -64,6 +69,7 @@ export type FlightHud = {
     tactical?: FlightTactical,
     missiles?: MissileHudState | null,
     countermeasures?: { releasing: boolean } | null,
+    rockets?: RocketHudState | null,
   ) => void
   setVisible: (visible: boolean) => void
   setKoth: (state: HudKothState | null) => void
@@ -136,6 +142,11 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       <span class="fh-label">BOMBS</span>
       <span class="fh-value fh-bomb-count">0</span>
       <span class="fh-bomb-fall">—</span>
+    </div>
+    <div class="fh-rockets" hidden>
+      <span class="fh-label">RKT</span>
+      <span class="fh-value fh-rkt-count">0</span>
+      <span class="fh-rkt-hint">R</span>
     </div>
     <div class="fh-msl" hidden>
       <span class="fh-label">MSL</span>
@@ -218,6 +229,8 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   const bombsEl = root.querySelector<HTMLElement>('.fh-bombs')!
   const bombCount = root.querySelector<HTMLElement>('.fh-bomb-count')!
   const bombFall = root.querySelector<HTMLElement>('.fh-bomb-fall')!
+  const rocketsEl = root.querySelector<HTMLElement>('.fh-rockets')!
+  const rktCount = root.querySelector<HTMLElement>('.fh-rkt-count')!
   const mslEl = root.querySelector<HTMLElement>('.fh-msl')!
   const mslStatus = root.querySelector<HTMLElement>('.fh-msl-status')!
   const mslAmmo = root.querySelector<HTMLElement>('.fh-msl-ammo')!
@@ -244,6 +257,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   let lastHeat = -1
   let lastFiring: boolean | null = null
   let lastBombs = -1
+  let lastRockets = -1
   let lastFall = ''
   let lastOnTarget: boolean | null = null
   let lastScope: boolean | null = null
@@ -253,7 +267,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   let lastCm = false
 
   return {
-    update(tm, guns, bombs, tactical, missiles, countermeasures) {
+    update(tm, guns, bombs, tactical, missiles, countermeasures, rockets) {
       // Artificial horizon: roll the whole horizon against bank, slide the
       // ladder against pitch. Bank is "right wing down positive", and the
       // instrument rolls opposite the aircraft, hence the negation.
@@ -335,6 +349,17 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       } else if (!bombsEl.hidden) {
         bombsEl.hidden = true
         scopeEl.hidden = true
+      }
+
+      if (rockets) {
+        if (rocketsEl.hidden) rocketsEl.hidden = false
+        if (rockets.remaining !== lastRockets) {
+          lastRockets = rockets.remaining
+          rktCount.textContent = String(rockets.remaining)
+          rktCount.classList.toggle('is-low', rockets.remaining === 0)
+        }
+      } else if (!rocketsEl.hidden) {
+        rocketsEl.hidden = true
       }
 
       if (!guns) {

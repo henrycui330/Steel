@@ -50,6 +50,7 @@ import { createAircraftChaseCamera } from './aircraftCamera'
 import { createFlightHud, type MissileHudState } from './flightHud'
 import { createAircraftGuns } from './aircraftGuns'
 import { createAircraftBombs } from './aircraftBombs'
+import { createAircraftRockets } from './aircraftRockets'
 import { createImpactCinematic, KILL_SHOT } from './impactCinematic'
 import { createEjectCinematic } from './ejectCinematic'
 import { createEjectAlert } from './ejectAlert'
@@ -797,6 +798,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
       console.info(`[Steel] Corsair bomb destroyed ${victim.name || 'target'}`)
     })
 
+    const rockets =
+      tankId === 'corsair'
+        ? createAircraftRockets({
+            scene,
+            root: air.root,
+            heightAt: sampleY,
+            bounds: playable,
+            velocity: flight.velocity,
+          })
+        : null
+    rockets?.setOnKill((victim) => {
+      airBoard.noteKill(air.root)
+      console.info(`[Steel] Corsair HVAR destroyed ${victim.name || 'target'}`)
+    })
+    if (rockets) console.info('[Steel] Corsair armed — HVAR ×8 · press R')
+
     // Bombsight scope renders the target area as a second, narrow-FOV pass.
     // Off by default so the extra draw call is opt-in.
     let scopeOn = false
@@ -829,6 +846,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       airLock?.reset()
       airMissile?.reset()
       airAam?.dispose()
+      rockets?.dispose()
       countermeasures.dispose()
       airLockHud?.setVisible(false)
       airLockHud?.dispose()
@@ -876,6 +894,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       flight.reset(pos, yaw, 0.55)
       guns.refill()
       bombs.refill()
+      rockets?.refill()
       airPlayerCombat.revive()
       chase.reset()
       airCrashed = false
@@ -961,7 +980,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
       // Flame-out ignores stick entirely (handled inside the flight model).
       const input =
         ejectCam.active() || flight.isFlameout()
-          ? { ...raw, pitch: 0, roll: 0, rudder: 0, handsOff: true, fire: false, dropBomb: false }
+          ? {
+              ...raw,
+              pitch: 0,
+              roll: 0,
+              rudder: 0,
+              handsOff: true,
+              fire: false,
+              dropBomb: false,
+              fireRocket: false,
+            }
           : raw
       const tm = flight.update(dt, input)
       if (!tm.crashed && !tm.flameout) air.spinProp(dt, tm.throttle)
@@ -1039,6 +1067,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
             console.info(`[Steel] Bombsight ${scopeOn ? 'ON' : 'OFF'}`)
           }
           bombs.update(dt, input.dropBomb, airEnemies, camera)
+          rockets?.update(dt, input.fireRocket, airEnemies)
+        } else {
+          rockets?.update(dt, false, airEnemies)
         }
 
         if (isKoth) {
@@ -1155,6 +1186,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         },
         mslHud,
         { releasing: countermeasures.bannerActive() },
+        rockets ? { remaining: rockets.remaining() } : null,
       )
 
       renderer.render(scene, camera)
