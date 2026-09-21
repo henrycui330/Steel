@@ -1140,17 +1140,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
             holdLock: isLockHold(),
           })
           airLockHud.apply(lockFrame)
-          mslHud = {
-            phase: lockFrame.phase,
-            ammo: airAam?.ammo(),
-          }
+          // MSL plate only when this airframe actually carries AAMs.
+          mslHud = airAam
+            ? { phase: lockFrame.phase, ammo: airAam.ammo() }
+            : null
           if (airMissile) {
             airMissilePhase = noteMissileLockChange(airMissile, airMissilePhase)
           }
         } else {
           airLock.reset()
           airLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
-          mslHud = airAam ? { phase: 'idle', ammo: airAam.ammo() } : { phase: 'idle' }
+          mslHud = airAam ? { phase: 'idle', ammo: airAam.ammo() } : null
         }
       }
 

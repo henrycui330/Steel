@@ -217,13 +217,16 @@
   position: absolute;
   bottom: 30px;
   right: 40px;
-  display: flex;
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-guns:not([hidden]) {
+  display: flex;
 }
 
 .fh-guns .fh-value {
@@ -261,13 +264,16 @@
   position: absolute;
   bottom: 74px;
   right: 40px;
-  display: flex;
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-bombs:not([hidden]) {
+  display: flex;
 }
 
 .fh-bombs .fh-value {
@@ -294,13 +300,16 @@
   position: absolute;
   bottom: 118px;
   right: 40px;
-  display: flex;
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-rockets:not([hidden]) {
+  display: flex;
 }
 
 .fh-rockets .fh-value {
@@ -315,18 +324,21 @@
   min-width: 12px;
 }
 
-/* ——— F-16 missile lock stub ——— */
+/* ——— Jet AAM lock (F-16 / MiG only) ——— */
 .fh-msl {
   position: absolute;
   bottom: 118px;
   right: 40px;
-  display: flex;
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+}
+
+.fh-msl:not([hidden]) {
+  display: flex;
 }
 
 .fh-msl .fh-value {

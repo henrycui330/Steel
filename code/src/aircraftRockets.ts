@@ -17,6 +17,11 @@ const BLAST_RADIUS = 14
 const DIRECT_DMG = 420
 const BLAST_DMG = 900
 const PEN = 55
+/** Exhaust puff every this many metres. */
+const TRAIL_SPACING = 3.2
+const TRAIL_LIFE = 1.55
+const TRAIL_BURST = 2
+const MAX_TRAIL = 56
 /** Alternate left / right wing stations (local). */
 const STATIONS: ReadonlyArray<readonly [number, number, number]> = [
   [-3.4, -0.35, 0.6],
@@ -30,6 +35,14 @@ type Rocket = {
   vel: THREE.Vector3
   age: number
   dead: boolean
+  trailBudget: number
+}
+
+type TrailPuff = {
+  mesh: THREE.Mesh
+  age: number
+  life: number
+  drift: THREE.Vector3
 }
 
 export type AircraftRockets = {
@@ -72,7 +85,22 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     emissiveIntensity: 0.35,
   })
 
+  const trailGeo = new THREE.SphereGeometry(0.62, 6, 6)
+  const trailSmokeMat = new THREE.MeshBasicMaterial({
+    color: 0xb8b4aa,
+    transparent: true,
+    opacity: 0.62,
+    depthWrite: false,
+  })
+  const trailHotMat = new THREE.MeshBasicMaterial({
+    color: 0xff9030,
+    transparent: true,
+    opacity: 0.78,
+    depthWrite: false,
+  })
+
   const live: Rocket[] = []
+  const trail: TrailPuff[] = []
   let remaining = ROCKET_COUNT
   let gap = 0
   let station = 0
@@ -85,9 +113,77 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   const _local = new THREE.Vector3()
   const _q = new THREE.Quaternion()
   const _fwd = new THREE.Vector3(0, 0, 1)
+  const _back = new THREE.Vector3()
+  const _side = new THREE.Vector3()
 
   function outOfBounds(p: THREE.Vector3): boolean {
     return Math.abs(p.x) > bounds.x + 40 || Math.abs(p.z) > bounds.z + 40
+  }
+
+  function killTrail(p: TrailPuff): void {
+    scene.remove(p.mesh)
+    ;(p.mesh.material as THREE.Material).dispose()
+  }
+
+  function emitTrail(r: Rocket, hot: boolean): void {
+    while (trail.length >= MAX_TRAIL) {
+      killTrail(trail[0]!)
+      trail.shift()
+    }
+    _back.copy(r.vel)
+    if (_back.lengthSq() < 1e-8) _back.set(0, 0, -1)
+    else _back.normalize().multiplyScalar(-1)
+    _side.set(_back.z, 0, -_back.x)
+    if (_side.lengthSq() < 1e-8) _side.set(1, 0, 0)
+    else _side.normalize()
+
+    for (let i = 0; i < TRAIL_BURST; i++) {
+      if (trail.length >= MAX_TRAIL) break
+      const matInst = (hot ? trailHotMat : trailSmokeMat).clone()
+      const mesh = new THREE.Mesh(trailGeo, matInst)
+      const aft = 0.55 + Math.random() * 1.2 + i * 0.4
+      const spray = (Math.random() - 0.5) * 1.4
+      mesh.position
+        .copy(r.root.position)
+        .addScaledVector(_back, aft)
+        .addScaledVector(_side, spray)
+      mesh.position.y += (Math.random() - 0.3) * 0.55
+      mesh.scale.setScalar((hot ? 0.65 : 1.05) + Math.random() * 0.85)
+      mesh.frustumCulled = true
+      scene.add(mesh)
+
+      const drift = _back
+        .clone()
+        .multiplyScalar(1.8 + Math.random() * 3.5)
+        .addScaledVector(_side, (Math.random() - 0.5) * 2.8)
+      drift.y += 0.5 + Math.random() * 1.8
+
+      trail.push({
+        mesh,
+        age: 0,
+        life: TRAIL_LIFE * (0.7 + Math.random() * 0.45),
+        drift,
+      })
+    }
+  }
+
+  function updateTrail(dt: number): void {
+    for (const p of trail) {
+      p.age += dt
+      p.mesh.position.addScaledVector(p.drift, dt)
+      p.drift.multiplyScalar(Math.exp(-0.5 * dt))
+      p.drift.y += 2.1 * dt
+      const fade = 1 - p.age / p.life
+      const mat = p.mesh.material as THREE.MeshBasicMaterial
+      mat.opacity = Math.max(0, fade * fade * 0.7)
+      p.mesh.scale.multiplyScalar(1 + 0.7 * dt)
+    }
+    for (let i = trail.length - 1; i >= 0; i--) {
+      if (trail[i]!.age >= trail[i]!.life) {
+        killTrail(trail[i]!)
+        trail.splice(i, 1)
+      }
+    }
   }
 
   function surfacePoint(from: THREE.Vector3, target: GunTarget): THREE.Vector3 | null {
@@ -174,9 +270,13 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     scene.add(group)
 
     const vel = velocity.clone().addScaledVector(_nose, MUZZLE_BOOST)
-    live.push({ root: group, vel, age: 0, dead: false })
+    live.push({ root: group, vel, age: 0, dead: false, trailBudget: 0 })
     remaining--
     gap = FIRE_GAP
+    // Launch bloom — a few hot puffs at the rail.
+    const just = live[live.length - 1]!
+    emitTrail(just, true)
+    emitTrail(just, true)
     console.info(`[Steel] HVAR launch · ${remaining} left`)
   }
 
@@ -206,10 +306,17 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
         }
         r.age += dt
         r.vel.y -= GRAVITY * dt
+        const step = r.vel.length() * dt
         r.root.position.addScaledVector(r.vel, dt)
         if (r.vel.lengthSq() > 1e-4) {
           _dir.copy(r.vel).normalize()
           r.root.quaternion.setFromUnitVectors(_fwd, _dir)
+        }
+
+        r.trailBudget += step
+        while (r.trailBudget >= TRAIL_SPACING) {
+          r.trailBudget -= TRAIL_SPACING
+          emitTrail(r, Math.random() < 0.4)
         }
 
         const p = r.root.position
@@ -241,6 +348,8 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
           live.splice(i, 1)
         }
       }
+
+      updateTrail(dt)
     },
 
     remaining: () => remaining,
@@ -255,10 +364,15 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     dispose() {
       for (const r of live) killRocket(r)
       live.length = 0
+      for (const p of trail) killTrail(p)
+      trail.length = 0
       bodyGeo.dispose()
       tipGeo.dispose()
       bodyMat.dispose()
       tipMat.dispose()
+      trailGeo.dispose()
+      trailSmokeMat.dispose()
+      trailHotMat.dispose()
     },
   }
 }
