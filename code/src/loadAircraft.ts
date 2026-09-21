@@ -8,7 +8,6 @@ const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=5')
 const YAK9_URL = assetUrl('models/yak9.glb?v=6')
 const P51_URL = assetUrl('models/p51_mustang.glb?v=1')
 const F16_URL = assetUrl('models/f16a.glb?v=2')
-const B17_URL = assetUrl('models/b17.glb?v=1')
 const MIG15_URL = assetUrl('models/mig15.glb?v=1')
 const MIG21_URL = assetUrl('models/mig21.glb?v=1')
 
@@ -307,17 +306,6 @@ export async function loadF16(): Promise<AircraftHandle> {
   })
 }
 
-/** B-17G — nose +Z; props fused into nacelle meshes (no separate blades). */
-export async function loadB17(): Promise<AircraftHandle> {
-  return loadAircraftRig({
-    url: B17_URL,
-    name: 'b17',
-    targetWingspan: 31.6,
-    noProp: true,
-    noGear: true,
-  })
-}
-
 /** MiG-15 — early Soviet jet; static airframe (no prop / gear motion). */
 export async function loadMig15(): Promise<AircraftHandle> {
   return loadAircraftRig({
@@ -347,7 +335,6 @@ export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   if (id === 'yak9') return loadYak9()
   if (id === 'p51') return loadP51Mustang()
   if (id === 'f16') return loadF16()
-  if (id === 'b17') return loadB17()
   if (id === 'mig15') return loadMig15()
   if (id === 'mig21') return loadMig21()
   return loadCorsair()

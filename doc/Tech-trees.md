@@ -14,7 +14,6 @@ PzH 2000
     M1 Abrams
     P-51 Mustang
     F-16A Fighting Falcon
-    B-17G Flying Fortress
 Soviet:
  T-34
  T-44-100

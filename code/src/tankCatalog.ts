@@ -25,7 +25,6 @@ export type TankId =
   | 'yak9'
   | 'p51'
   | 'f16'
-  | 'b17'
   | 'mig15'
   | 'mig21'
 
@@ -951,32 +950,6 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 2.4,
       apLabel: 'AP 20mm',
       heLabel: 'HEI 20mm',
-    },
-  },
-  {
-    id: 'b17',
-    name: 'B-17G Flying Fortress',
-    role: 'Heavy bomber · air',
-    blurb: 'Four-engine fortress · .50 cal defensive · tough as nails',
-    url: assetUrl('models/b17.glb?v=1'),
-    reloadSec: 0.16,
-    maxHp: 1400,
-    targetWidth: 31.6,
-    vintageCrew: true,
-    nation: 'usa',
-    aircraft: true,
-    drive: CORSAIR_DRIVE,
-    armor: armorKit({ front: 22, side: 18, rear: 14, turret: 16 }),
-    gun: {
-      aphePen: 30,
-      apheDmg: 62,
-      hePen: 10,
-      heDmg: 36,
-      heBlast: 48,
-      traverseRadPerSec: 1.8,
-      elevateRadPerSec: 1.6,
-      apLabel: 'AP .50',
-      heLabel: 'API .50',
     },
   },
   {
