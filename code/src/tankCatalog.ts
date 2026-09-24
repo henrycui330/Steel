@@ -1047,7 +1047,6 @@ export const TANK_OPTIONS: TankOption[] = [
     nation: 'soviet',
     aircraft: true,
     jet: true,
-    aircraftNoseYaw: -Math.PI / 2,
     drive: CORSAIR_DRIVE,
     armor: armorKit({ front: 20, side: 16, rear: 14, turret: 18 }),
     gun: {

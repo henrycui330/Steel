@@ -329,13 +329,12 @@ export async function loadMig21(): Promise<AircraftHandle> {
   })
 }
 
-/** Su-24 Fencer — Soviet strike jet; nose along +X in pack → bake −90°. */
+/** Su-24 Fencer — Soviet strike jet; pack already nose +Z after loader. */
 export async function loadSu24(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: SU24_URL,
     name: 'su24',
     targetWingspan: 17.6,
-    noseYaw: -Math.PI / 2,
     noProp: true,
     noGear: true,
   })
