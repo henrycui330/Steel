@@ -6,10 +6,10 @@ import {
   unlockAudio,
   createDieselEngine,
   createPropEngine,
+  createJetEngine,
   createEjectSiren,
   createLowAltAlarm,
   createStallAlarm,
-  type EngineLoop,
 } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
 import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
@@ -80,6 +80,7 @@ import { tankOptionById, type TankId } from './tankCatalog'
 import { collectWheels, updateWheels } from './wheels'
 import { collectTracks, updateTracks } from './tracks'
 import { spawnDestroyedWreck, updateWrecks } from './wreck'
+import { updateExplosions, disposeExplosions } from './explosions'
 import { createEnvironment } from './environment'
 import { createNvg } from './nvg'
 import { createMatchOpening } from './openingCinematic'
@@ -407,13 +408,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     // or eject respawns; in Skirmish either one ends the match.
     let airCrashed = false
     let airDeadFor = 0
-    // Jets: no prop SFX (static airframe — no spin / gear motion either).
-    const silentProp: EngineLoop = {
-      start() {},
-      stop() {},
-      setIntensity() {},
-    }
-    const propEngine = option.jet ? silentProp : createPropEngine()
+    // Jets: turbine loop (no prop spin). Props: prop-idle.
+    const propEngine = option.jet ? createJetEngine() : createPropEngine()
     const ejectSiren = createEjectSiren()
     const lowAltAlarm = createLowAltAlarm()
     const stallAlarm = createStallAlarm()
@@ -854,6 +850,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       airMissile?.reset()
       airAam?.dispose()
       rockets?.dispose()
+      disposeExplosions()
       countermeasures.dispose()
       airLockHud?.setVisible(false)
       airLockHud?.dispose()
@@ -1115,6 +1112,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
 
       updateWrecks(dt, smokeEarly ?? undefined)
+      updateExplosions(dt)
       smokeEarly?.update(dt, camera)
 
       const pred = bombs.prediction()
@@ -1783,6 +1781,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       groundLockHud?.setVisible(false)
       groundLockHud?.dispose()
       sam?.dispose()
+      disposeExplosions()
       const rows = board.ranked()
       const reward = end.kind === 'win' ? grantMatchWin('tank-victory') : null
       showMatchEnd({ ...end, leaderboard: rows, podium3d: true, reward })
@@ -2110,6 +2109,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
 
       updateWrecks(dt, smoke)
+      updateExplosions(dt)
       smoke.update(dt, camera)
       tickRespawns(dt)
       if (isKoth && !matchOver) {

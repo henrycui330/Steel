@@ -10,6 +10,9 @@ function dieselIdleUrl(): string {
 function propIdleUrl(): string {
   return fixPublicUrl(assetUrl('sfx/prop-idle.mp3'))
 }
+function jetIdleUrl(): string {
+  return fixPublicUrl(assetUrl('sfx/jet-idle.mp3'))
+}
 function ejectSirenUrl(): string {
   return fixPublicUrl(assetUrl('sfx/eject-siren.mp3'))
 }
@@ -167,6 +170,18 @@ export function createPropEngine(): EngineLoop {
     volFull: 0.42,
     rateIdle: 0.88,
     rateFull: 1.22,
+  })
+}
+
+/** Jet turbine loop — F-16 / MiG / Su-25. */
+export function createJetEngine(): EngineLoop {
+  return createEngineLoop({
+    url: jetIdleUrl(),
+    label: 'Jet',
+    volIdle: 0.14,
+    volFull: 0.5,
+    rateIdle: 0.9,
+    rateFull: 1.28,
   })
 }
 

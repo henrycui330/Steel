@@ -27,7 +27,7 @@ export type TankId =
   | 'f16'
   | 'mig15'
   | 'mig21'
-  | 'su24'
+  | 'su25'
 
 export type DriveProfile = {
   maxSpeed: number
@@ -1035,30 +1035,30 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
-    id: 'su24',
-    name: 'Su-24',
-    role: 'Strike jet · air',
-    blurb: 'Fencer · swing-wing bomber · GSh-6-23 · terrain hugger',
-    url: assetUrl('models/su24.glb?v=1'),
-    reloadSec: 0.07,
-    maxHp: 720,
-    targetWidth: 17.6,
+    id: 'su25',
+    name: 'Su-25',
+    role: 'Attack jet · air',
+    blurb: 'Grach · armored frogfoot · GSh-30-2 · close air support',
+    url: assetUrl('models/su25.glb?v=1'),
+    reloadSec: 0.08,
+    maxHp: 780,
+    targetWidth: 14.36,
     vintageCrew: false,
     nation: 'soviet',
     aircraft: true,
     jet: true,
     drive: CORSAIR_DRIVE,
-    armor: armorKit({ front: 20, side: 16, rear: 14, turret: 18 }),
+    armor: armorKit({ front: 24, side: 18, rear: 16, turret: 20 }),
     gun: {
-      aphePen: 48,
-      apheDmg: 100,
-      hePen: 16,
-      heDmg: 55,
-      heBlast: 70,
-      traverseRadPerSec: 2.5,
-      elevateRadPerSec: 2.2,
-      apLabel: 'AP 23mm',
-      heLabel: 'HE 23mm',
+      aphePen: 52,
+      apheDmg: 110,
+      hePen: 18,
+      heDmg: 60,
+      heBlast: 75,
+      traverseRadPerSec: 2.4,
+      elevateRadPerSec: 2.1,
+      apLabel: 'AP 30mm',
+      heLabel: 'HE 30mm',
     },
   },
 ]
