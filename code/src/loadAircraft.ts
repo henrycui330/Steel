@@ -11,6 +11,7 @@ const F16_URL = assetUrl('models/f16a.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=1')
 const MIG21_URL = assetUrl('models/mig21.glb?v=1')
 const SU25_URL = assetUrl('models/su25.glb?v=2')
+const SU27_URL = assetUrl('models/su27.glb?v=1')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -346,6 +347,17 @@ export async function loadSu25(): Promise<AircraftHandle> {
   return handle
 }
 
+/** Su-27 Flanker — air superiority jet; Pugachev cobra via flight input T. */
+export async function loadSu27(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: SU27_URL,
+    name: 'su27',
+    targetWingspan: 14.7,
+    noProp: true,
+    noGear: true,
+  })
+}
+
 /** Load the aircraft chosen on the menu / AI slot. */
 export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   const opt = tankOptionById(id)
@@ -356,5 +368,6 @@ export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   if (id === 'mig15') return loadMig15()
   if (id === 'mig21') return loadMig21()
   if (id === 'su25') return loadSu25()
+  if (id === 'su27') return loadSu27()
   return loadCorsair()
 }

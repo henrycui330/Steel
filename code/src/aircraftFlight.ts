@@ -63,6 +63,15 @@ const FLAMEOUT_DRAG = 0.38
 const FLAMEOUT_TUMBLE = 0.55
 const FLAMEOUT_NOSE_HEAVY = 0.32
 
+/** Pugachev's Cobra — arcade timing. */
+const COBRA_MIN_SPEED = 48
+const COBRA_COOLDOWN = 5.5
+const COBRA_PULL_SEC = 0.42
+const COBRA_HOLD_SEC = 0.28
+const COBRA_RECOVER_SEC = 0.85
+const COBRA_PEAK_PITCH = 1.72 // ~98°
+const COBRA_PULL_RATE = 4.2
+
 const AXIS_X = new THREE.Vector3(1, 0, 0)
 const AXIS_Y = new THREE.Vector3(0, 1, 0)
 const AXIS_Z = new THREE.Vector3(0, 0, 1)
@@ -88,6 +97,8 @@ export type FlightTelemetry = {
   crashed: boolean
   /** Shot-down deadstick — engine out, tumbling toward the deck. */
   flameout: boolean
+  /** True while Pugachev's Cobra is playing. */
+  cobra: boolean
 }
 
 export type AircraftFlight = {
@@ -122,12 +133,14 @@ export type FlightOptions = {
   bounds?: { x: number; z: number }
   /** Hard altitude ceiling (world Y). */
   ceiling?: number
+  /** Su-27: allow Pugachev's Cobra on input.cobra (T). */
+  canCobra?: boolean
   /** Fired once, when the aircraft touches terrain. */
   onCrash?: (info: { speed: number; agl: number }) => void
 }
 
 export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
-  const { root, heightAt, bounds, ceiling, onCrash } = opts
+  const { root, heightAt, bounds, ceiling, onCrash, canCobra } = opts
 
   let throttle = THREE.MathUtils.clamp(opts.throttle ?? 0.55, 0, 1)
   let speed = THREE.MathUtils.lerp(IDLE_SPEED, MAX_SPEED, throttle)
@@ -140,6 +153,12 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
   let flameout = false
   /** Stable tumble axis while flaming out (picked once on beginFlameout). */
   const flameTumble = new THREE.Vector3(0.55, 0.25, 0.8).normalize()
+
+  type CobraPhase = 'idle' | 'pull' | 'hold' | 'recover'
+  let cobraPhase: CobraPhase = 'idle'
+  let cobraAge = 0
+  let cobraCool = 0
+  const cobraPath = new THREE.Vector3(0, 0, 1)
 
   const velocity = new THREE.Vector3()
   const nose = new THREE.Vector3()
@@ -192,12 +211,128 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       nearEdge,
       crashed,
       flameout,
+      cobra: cobraPhase !== 'idle',
     }
   }
 
   let flameoutHard = false
 
+  function clearCobra(): void {
+    cobraPhase = 'idle'
+    cobraAge = 0
+  }
+
+  function startCobra(): void {
+    readAxes()
+    cobraPath.set(nose.x, 0, nose.z)
+    if (cobraPath.lengthSq() < 1e-4) cobraPath.set(0, 0, 1)
+    else cobraPath.normalize()
+    cobraPhase = 'pull'
+    cobraAge = 0
+    cobraCool = COBRA_COOLDOWN
+    sinkRate = Math.min(sinkRate, 0)
+    console.info('[Steel] COBRA — pull')
+  }
+
+  /** Arcade Pugachev: path keeps going while the nose snaps up past vertical. */
+  function updateCobra(dt: number): FlightTelemetry {
+    cobraAge += dt
+    readAxes()
+    stalled = true
+    nearEdge = edgeStrength() > 0
+
+    // Bleed knots hard — the point of the move.
+    speed = Math.max(18, speed * Math.exp(-1.15 * dt))
+
+    if (cobraPhase === 'pull') {
+      const p = pitchAngle()
+      if (p < COBRA_PEAK_PITCH) {
+        rotateBody(AXIS_X, -COBRA_PULL_RATE * dt)
+      }
+      // Kill bank so the profile reads clean.
+      const b = bankAngle()
+      rotateBody(AXIS_Z, THREE.MathUtils.clamp(-b * 4, -3, 3) * dt)
+      if (cobraAge >= COBRA_PULL_SEC || p >= COBRA_PEAK_PITCH * 0.92) {
+        cobraPhase = 'hold'
+        cobraAge = 0
+        console.info('[Steel] COBRA — hold')
+      }
+    } else if (cobraPhase === 'hold') {
+      const p = pitchAngle()
+      const err = COBRA_PEAK_PITCH - p
+      rotateBody(AXIS_X, THREE.MathUtils.clamp(-err * 3, -2, 2) * dt)
+      if (cobraAge >= COBRA_HOLD_SEC) {
+        cobraPhase = 'recover'
+        cobraAge = 0
+        console.info('[Steel] COBRA — recover')
+      }
+    } else {
+      // Recover: nose to horizon, wings level.
+      const p = pitchAngle()
+      const b = bankAngle()
+      rotateBody(
+        AXIS_X,
+        THREE.MathUtils.clamp(p * 2.8, -2.5, 2.5) * dt,
+      )
+      rotateBody(
+        AXIS_Z,
+        THREE.MathUtils.clamp(-b * 3.2, -2.5, 2.5) * dt,
+      )
+      if (cobraAge >= COBRA_RECOVER_SEC || (Math.abs(p) < 0.12 && Math.abs(b) < 0.12)) {
+        clearCobra()
+        console.info('[Steel] COBRA — done')
+      }
+    }
+
+    readAxes()
+    // Flight path stays mostly along the entry track; attitude is decoupled.
+    const pathBlend = cobraPhase === 'recover' ? THREE.MathUtils.clamp(cobraAge / COBRA_RECOVER_SEC, 0, 1) : 0
+    const path = cobraPath.clone().multiplyScalar(1 - pathBlend)
+    path.addScaledVector(nose, pathBlend)
+    if (path.lengthSq() > 1e-6) path.normalize()
+    else path.copy(nose)
+
+    velocity.copy(path).multiplyScalar(speed)
+    // Slight loft on the pull so it doesn't pancake.
+    if (cobraPhase === 'pull') velocity.y += 6 * (1 - cobraAge / COBRA_PULL_SEC)
+    if (cobraPhase === 'hold') velocity.y += 2
+    if (cobraPhase === 'recover') velocity.y += sinkRate
+
+    nearCeiling = false
+    if (ceiling !== undefined) {
+      const room = ceiling - root.position.y
+      nearCeiling = room < CEILING_SOFT
+      if (nearCeiling && velocity.y > 0) {
+        velocity.y *= THREE.MathUtils.clamp(room / CEILING_SOFT, 0, 1)
+      }
+    }
+
+    root.position.addScaledVector(velocity, dt)
+
+    if (ceiling !== undefined && root.position.y > ceiling) {
+      root.position.y = ceiling
+    }
+
+    if (bounds) {
+      root.position.x = THREE.MathUtils.clamp(root.position.x, -bounds.x, bounds.x)
+      root.position.z = THREE.MathUtils.clamp(root.position.z, -bounds.z, bounds.z)
+    }
+
+    const groundY = heightAt(root.position.x, root.position.z)
+    const agl = root.position.y - groundY
+    if (agl <= CRASH_AGL) {
+      clearCobra()
+      const impact = Math.hypot(velocity.x, velocity.y, velocity.z)
+      hitGround(Math.max(speed, impact))
+    }
+
+    const tm = telemetry()
+    tm.handsOff = false
+    return tm
+  }
+
   function hitGround(impactSpeed: number): void {
+    clearCobra()
     const groundY = heightAt(root.position.x, root.position.z)
     root.position.y = groundY + CRASH_AGL
     crashed = true
@@ -282,7 +417,22 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
   function update(dt: number, input: FlightInput): FlightTelemetry {
     // Wreckage does not fly. Everything below assumes a live aircraft.
     if (crashed) return telemetry()
-    if (flameout) return updateFlameout(dt)
+    if (flameout) {
+      clearCobra()
+      return updateFlameout(dt)
+    }
+
+    cobraCool = Math.max(0, cobraCool - dt)
+    if (
+      canCobra &&
+      input.cobra &&
+      cobraPhase === 'idle' &&
+      cobraCool <= 0 &&
+      speed >= COBRA_MIN_SPEED
+    ) {
+      startCobra()
+    }
+    if (cobraPhase !== 'idle') return updateCobra(dt)
 
     // ——— Throttle ———
     if (input.throttleUp) throttle += THROTTLE_RATE * dt
@@ -407,6 +557,8 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       crashed = false
       flameout = false
       flameoutHard = false
+      clearCobra()
+      cobraCool = 0
       stalled = false
       nearCeiling = false
       nearEdge = false
@@ -421,6 +573,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     },
     forceCrash() {
       if (crashed) return
+      clearCobra()
       crashed = true
       flameout = false
       flameoutHard = false
@@ -429,6 +582,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
     },
     beginFlameout(severity: 'normal' | 'hard' = 'normal') {
       if (crashed || flameout) return
+      clearCobra()
       flameout = true
       flameoutHard = severity === 'hard'
       throttle = 0

@@ -26,3 +26,4 @@ Soviet:
     MiG-15
     MiG-21MF
     Su-25
+    Su-27

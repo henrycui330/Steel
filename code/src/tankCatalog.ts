@@ -28,6 +28,7 @@ export type TankId =
   | 'mig15'
   | 'mig21'
   | 'su25'
+  | 'su27'
 
 export type DriveProfile = {
   maxSpeed: number
@@ -1057,6 +1058,33 @@ export const TANK_OPTIONS: TankOption[] = [
       heBlast: 75,
       traverseRadPerSec: 2.4,
       elevateRadPerSec: 2.1,
+      apLabel: 'AP 30mm',
+      heLabel: 'HE 30mm',
+    },
+  },
+  {
+    id: 'su27',
+    name: 'Su-27',
+    role: 'Air superiority · air',
+    blurb: 'Flanker · GSh-30-1 · AAMs · press T for Cobra',
+    url: assetUrl('models/su27.glb?v=1'),
+    reloadSec: 0.08,
+    maxHp: 680,
+    targetWidth: 14.7,
+    vintageCrew: false,
+    nation: 'soviet',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 18, side: 14, rear: 12, turret: 16 }),
+    gun: {
+      aphePen: 46,
+      apheDmg: 95,
+      hePen: 15,
+      heDmg: 52,
+      heBlast: 62,
+      traverseRadPerSec: 2.8,
+      elevateRadPerSec: 2.4,
       apLabel: 'AP 30mm',
       heLabel: 'HE 30mm',
     },

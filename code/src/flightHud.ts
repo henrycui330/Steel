@@ -166,6 +166,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
     <div class="fh-warn fh-stall">STALL</div>
     <div class="fh-caution">CEILING</div>
     <div class="fh-mode fh-autolevel">AUTO-LEVEL</div>
+    <div class="fh-mode fh-cobra">COBRA</div>
     <div class="fh-hp combat-hp">
       <div class="hud-plate-head">
         <span class="combat-label">HP</span>
@@ -222,6 +223,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   const stall = root.querySelector<HTMLElement>('.fh-stall')!
   const caution = root.querySelector<HTMLElement>('.fh-caution')!
   const autoLevel = root.querySelector<HTMLElement>('.fh-autolevel')!
+  const cobraEl = root.querySelector<HTMLElement>('.fh-cobra')!
   const gunsEl = root.querySelector<HTMLElement>('.fh-guns')!
   const gunAmmo = root.querySelector<HTMLElement>('.fh-gun-ammo')!
   const heatFill = root.querySelector<HTMLElement>('.fh-heat-fill')!
@@ -252,6 +254,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   let lastThr = -1
   let lastStall: boolean | null = null
   let lastAuto: boolean | null = null
+  let lastCobra: boolean | null = null
   let lastCaution = ''
   let lastAmmo = -1
   let lastHeat = -1
@@ -319,6 +322,11 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       if (tm.handsOff !== lastAuto) {
         lastAuto = tm.handsOff
         autoLevel.classList.toggle('is-on', tm.handsOff)
+      }
+
+      if (tm.cobra !== lastCobra) {
+        lastCobra = tm.cobra
+        cobraEl.classList.toggle('is-on', tm.cobra)
       }
 
       if (bombs) {

@@ -421,10 +421,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
       // pulled in a little so the aircraft turns before clipping a wall.
       bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
       ceiling: mapGroundY + AIR_CEILING,
+      canCobra: tankId === 'su27',
       onCrash: ({ speed }) => {
         bailOut('crash', speed)
       },
     })
+    if (tankId === 'su27') console.info('[Steel] Su-27 armed — press T for Cobra')
 
     function bailOut(reason: 'crash' | 'eject', speed: number): void {
       if (airCrashed || airEnded) return
@@ -993,6 +995,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
               fire: false,
               dropBomb: false,
               fireRocket: false,
+              cobra: false,
             }
           : raw
       const tm = flight.update(dt, input)

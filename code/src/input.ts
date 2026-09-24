@@ -57,6 +57,8 @@ export type FlightInput = {
   dropBomb: boolean
   /** Edge-triggered: fire one wing rocket (R) — Corsair HVAR. */
   fireRocket: boolean
+  /** Edge-triggered: Pugachev's Cobra (T) — Su-27 only. */
+  cobra: boolean
   /** Edge-triggered: toggle the bombsight scope (V). */
   toggleSight: boolean
   /** Edge-triggered: cut the bomb cinematic short (C). */
@@ -86,6 +88,7 @@ let stickMovedAt = 0
 let flightBound = false
 let bombQueued = false
 let rocketQueued = false
+let cobraQueued = false
 let sightQueued = false
 let skipCineQueued = false
 let ejectQueued = false
@@ -101,6 +104,7 @@ export function bindFlightInput(): void {
     if (e.repeat) return
     if (e.code === 'KeyB') bombQueued = true
     if (e.code === 'KeyR') rocketQueued = true
+    if (e.code === 'KeyT') cobraQueued = true
     if (e.code === 'KeyV') sightQueued = true
     if (e.code === 'KeyC') skipCineQueued = true
     if (e.code === 'KeyY') ejectQueued = true
@@ -134,6 +138,7 @@ export function getFlightInput(dt: number): FlightInput {
 
   const dropBomb = bombQueued
   const fireRocket = rocketQueued
+  const cobra = cobraQueued
   const toggleSight = sightQueued
   const skipCinematic = skipCineQueued
   const eject = ejectQueued
@@ -141,6 +146,7 @@ export function getFlightInput(dt: number): FlightInput {
   const fireMissile = missileQueued
   bombQueued = false
   rocketQueued = false
+  cobraQueued = false
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false
@@ -156,6 +162,7 @@ export function getFlightInput(dt: number): FlightInput {
     fire: isDown('Space'),
     dropBomb,
     fireRocket,
+    cobra,
     toggleSight,
     skipCinematic,
     eject,
@@ -173,6 +180,7 @@ export function resetFlightInput(): void {
   stickMovedAt = 0
   bombQueued = false
   rocketQueued = false
+  cobraQueued = false
   sightQueued = false
   skipCineQueued = false
   ejectQueued = false
