@@ -10,6 +10,7 @@ const P51_URL = assetUrl('models/p51_mustang.glb?v=1')
 const F16_URL = assetUrl('models/f16a.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=1')
 const MIG21_URL = assetUrl('models/mig21.glb?v=1')
+const SU24_URL = assetUrl('models/su24.glb?v=1')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -328,6 +329,18 @@ export async function loadMig21(): Promise<AircraftHandle> {
   })
 }
 
+/** Su-24 Fencer — Soviet strike jet; nose along +X in pack → bake −90°. */
+export async function loadSu24(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: SU24_URL,
+    name: 'su24',
+    targetWingspan: 17.6,
+    noseYaw: -Math.PI / 2,
+    noProp: true,
+    noGear: true,
+  })
+}
+
 /** Load the aircraft chosen on the menu / AI slot. */
 export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   const opt = tankOptionById(id)
@@ -337,5 +350,6 @@ export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   if (id === 'f16') return loadF16()
   if (id === 'mig15') return loadMig15()
   if (id === 'mig21') return loadMig21()
+  if (id === 'su24') return loadSu24()
   return loadCorsair()
 }

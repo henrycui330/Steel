@@ -25,3 +25,4 @@ Soviet:
     Yak-9
     MiG-15
     MiG-21MF
+    Su-24
