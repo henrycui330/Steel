@@ -517,6 +517,18 @@
   opacity: 1;
 }
 
+.fh-cobra {
+  top: calc(50% + 210px);
+  color: #ffe0a8;
+  border-color: rgba(255, 180, 80, 0.55);
+  background: rgba(48, 28, 8, 0.7);
+  letter-spacing: 0.2em;
+}
+
+.fh-cobra.is-on {
+  animation: fh-blink 0.45s steps(2, end) infinite;
+}
+
 @keyframes fh-blink {
   50% {
     opacity: 0.25;
