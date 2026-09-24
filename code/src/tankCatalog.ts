@@ -1039,7 +1039,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Su-25',
     role: 'Attack jet · air',
     blurb: 'Grach · armored frogfoot · GSh-30-2 · close air support',
-    url: assetUrl('models/su25.glb?v=1'),
+    url: assetUrl('models/su25.glb?v=2'),
     reloadSec: 0.08,
     maxHp: 780,
     targetWidth: 14.36,

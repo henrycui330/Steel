@@ -10,7 +10,7 @@ const P51_URL = assetUrl('models/p51_mustang.glb?v=1')
 const F16_URL = assetUrl('models/f16a.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=1')
 const MIG21_URL = assetUrl('models/mig21.glb?v=1')
-const SU25_URL = assetUrl('models/su25.glb?v=1')
+const SU25_URL = assetUrl('models/su25.glb?v=2')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -331,13 +331,19 @@ export async function loadMig21(): Promise<AircraftHandle> {
 
 /** Su-25 Grach — Soviet attack jet; no prop/gear motion. */
 export async function loadSu25(): Promise<AircraftHandle> {
-  return loadAircraftRig({
+  const handle = await loadAircraftRig({
     url: SU25_URL,
     name: 'su25',
     targetWingspan: 14.36,
     noProp: true,
     noGear: true,
   })
+  const parts: string[] = []
+  handle.root.traverse((o) => {
+    if ((o as THREE.Mesh).isMesh && o.name) parts.push(o.name)
+  })
+  console.info(`[Steel] Su-25 parts (${parts.length}): ${parts.join(', ')}`)
+  return handle
 }
 
 /** Load the aircraft chosen on the menu / AI slot. */
