@@ -347,12 +347,13 @@ export async function loadSu25(): Promise<AircraftHandle> {
   return handle
 }
 
-/** Su-27 Flanker — air superiority jet; Pugachev cobra via flight input T. */
+/** Su-27SKM Flanker — pack faces aft; bake 180° so nose is +Z. */
 export async function loadSu27(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: SU27_URL,
     name: 'su27',
     targetWingspan: 14.7,
+    noseYaw: Math.PI,
     noProp: true,
     noGear: true,
   })
