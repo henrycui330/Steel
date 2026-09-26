@@ -11,7 +11,7 @@ const F16_URL = assetUrl('models/f16a.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=1')
 const MIG21_URL = assetUrl('models/mig21.glb?v=1')
 const SU25_URL = assetUrl('models/su25.glb?v=2')
-const SU27_URL = assetUrl('models/su27.glb?v=1')
+const SU27_URL = assetUrl('models/su27.glb?v=2')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair

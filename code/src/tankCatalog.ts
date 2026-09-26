@@ -1064,10 +1064,10 @@ export const TANK_OPTIONS: TankOption[] = [
   },
   {
     id: 'su27',
-    name: 'Su-27',
+    name: 'Su-27SKM',
     role: 'Air superiority · air',
-    blurb: 'Flanker · GSh-30-1 · AAMs · press T for Cobra',
-    url: assetUrl('models/su27.glb?v=1'),
+    blurb: 'Flanker SKM · GSh-30-1 · AAMs · press T for Cobra',
+    url: assetUrl('models/su27.glb?v=2'),
     reloadSec: 0.08,
     maxHp: 680,
     targetWidth: 14.7,
