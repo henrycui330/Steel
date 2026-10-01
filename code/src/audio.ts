@@ -324,13 +324,13 @@ export function createCabinBed(): CabinBed {
     const t = clamp01(wantedTurn)
     // Need real motion before clatter reads; turn at crawl still ticks a little.
     const motion = Math.max(0, (s - 0.08) / 0.92)
-    const raw = motion * 0.72 + t * motion * 0.28
+    const raw = motion * 0.82 + t * motion * 0.35
     const duck = aiming ? 0.28 : 1
-    const level = raw * duck * 0.14
+    const level = raw * duck * 0.2
     const now = ctx.currentTime
     gain.gain.cancelScheduledValues(now)
     gain.gain.setTargetAtTime(level, now, 0.08)
-    const hz = 280 + motion * 520 + t * 90
+    const hz = 260 + motion * 580 + t * 110
     filter.frequency.cancelScheduledValues(now)
     filter.frequency.setTargetAtTime(hz, now, 0.1)
   }

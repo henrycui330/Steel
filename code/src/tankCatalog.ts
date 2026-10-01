@@ -10,6 +10,11 @@ export type TankId =
   | 'leopard2'
   | 'pzh2000'
   | 'chaffee'
+  | 'cromwell'
+  | 'churchill'
+  | 'conqueror'
+  | 'challenger2'
+  | 'challenger3'
   | 'sherman'
   | 'pershing'
   | 'duster'
@@ -29,6 +34,12 @@ export type TankId =
   | 'corsair'
   | 'yak9'
   | 'p51'
+  | 'f84f'
+  | 'f104g'
+  | 'bf109'
+  | 'spitfire'
+  | 'f35b'
+  | 'tornado'
   | 'f16'
   | 'mig15'
   | 'mig21'
@@ -122,6 +133,10 @@ export type TankOption = {
    */
   jet?: boolean
   /**
+   * Bomb-bay size override (default 2 for fighters). Bombers want more.
+   */
+  aircraftBombCount?: number
+  /**
    * Yaw (radians) to bake into podium / raw GLB so nose faces camera-forward.
    * Flight load path applies the same via `loadAircraft`.
    */
@@ -153,7 +168,7 @@ export type TankOption = {
   /** Override gun elevation (degrees). */
   aimPitchMaxDeg?: number
   /** Tech-tree nation — used for country-by-country track/wheel passes. */
-  nation?: 'germany' | 'usa' | 'soviet'
+  nation?: 'germany' | 'usa' | 'soviet' | 'britain'
 }
 
 /** Menu / HUD helper. */
@@ -238,6 +253,76 @@ const CHAFFEE_DRIVE: DriveProfile = {
   turnRate: 2.95,
   turnInPlace: 1.45,
   tiltMax: (6.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** Cromwell IV — British cruiser · fast medium · 75mm. */
+const CROMWELL_DRIVE: DriveProfile = {
+  maxSpeed: 18.5,
+  maxReverse: 7,
+  accel: 13,
+  reverseAccel: 9,
+  brakeDecel: 26,
+  coastDrag: 5.3,
+  turnRate: 2.7,
+  turnInPlace: 1.35,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** Churchill VII — British infantry heavy · slow · thick plate · 75mm. */
+const CHURCHILL_DRIVE: DriveProfile = {
+  maxSpeed: 12.5,
+  maxReverse: 5,
+  accel: 8.5,
+  reverseAccel: 6,
+  brakeDecel: 22,
+  coastDrag: 6.5,
+  turnRate: 1.85,
+  turnInPlace: 0.95,
+  tiltMax: (4.5 * Math.PI) / 180,
+  tiltFromAccel: 0.012,
+}
+
+/** Conqueror — British heavy · 120mm · cold-war bruiser. */
+const CONQUEROR_DRIVE: DriveProfile = {
+  maxSpeed: 14,
+  maxReverse: 5.5,
+  accel: 9.5,
+  reverseAccel: 6.5,
+  brakeDecel: 24,
+  coastDrag: 6,
+  turnRate: 2.0,
+  turnInPlace: 1.0,
+  tiltMax: (4.8 * Math.PI) / 180,
+  tiltFromAccel: 0.011,
+}
+
+/** Challenger 2 — British MBT · Dorchester · L30 120mm. */
+const CHALLENGER2_DRIVE: DriveProfile = {
+  maxSpeed: 16.8,
+  maxReverse: 6.5,
+  accel: 11.2,
+  reverseAccel: 7.5,
+  brakeDecel: 26,
+  coastDrag: 5.5,
+  turnRate: 2.25,
+  turnInPlace: 1.18,
+  tiltMax: (5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** Challenger 3 — British MBT · Trophy · L55A1 120mm. */
+const CHALLENGER3_DRIVE: DriveProfile = {
+  maxSpeed: 17.4,
+  maxReverse: 6.8,
+  accel: 11.8,
+  reverseAccel: 7.8,
+  brakeDecel: 27,
+  coastDrag: 5.4,
+  turnRate: 2.35,
+  turnInPlace: 1.22,
+  tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
 }
 
@@ -648,6 +733,136 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 3.8,
       apLabel: 'AP',
       heLabel: 'HE 155',
+    },
+  },
+  {
+    id: 'cromwell',
+    name: 'Cromwell IV',
+    role: 'Cruiser · British',
+    blurb: 'Fast cruiser · 75mm ROQF · first of the British tree',
+    url: assetUrl('models/cromwell.glb?v=1'),
+    reloadSec: 5.0,
+    maxHp: 820,
+    targetWidth: 2.9,
+    vintageCrew: true,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CROMWELL_DRIVE,
+    armor: armorKit({ front: 64, side: 32, rear: 32, turret: 76 }),
+    gun: {
+      aphePen: 125,
+      apheDmg: 340,
+      hePen: 16,
+      heDmg: 90,
+      heBlast: 150,
+      traverseRadPerSec: 6.5,
+      elevateRadPerSec: 4.5,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'churchill',
+    name: 'Churchill VII',
+    role: 'Infantry heavy · British',
+    blurb: 'Thick hide · slow crawl · 75mm · breakthrough bruiser',
+    url: assetUrl('models/churchill.glb?v=1'),
+    reloadSec: 5.4,
+    maxHp: 1100,
+    targetWidth: 3.25,
+    vintageCrew: true,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CHURCHILL_DRIVE,
+    armor: armorKit({ front: 152, side: 95, rear: 50, turret: 152 }),
+    gun: {
+      aphePen: 120,
+      apheDmg: 330,
+      hePen: 16,
+      heDmg: 95,
+      heBlast: 155,
+      traverseRadPerSec: 4.8,
+      elevateRadPerSec: 3.6,
+      apLabel: 'APCBC',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'conqueror',
+    name: 'Conqueror',
+    role: 'Heavy · British',
+    blurb: 'FV214 · 120mm L1 · cold-war heavyweight',
+    url: assetUrl('models/conqueror.glb?v=1'),
+    reloadSec: 6.5,
+    maxHp: 1380,
+    targetWidth: 3.99,
+    vintageCrew: false,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CONQUEROR_DRIVE,
+    armor: armorKit({ front: 280, side: 120, rear: 70, turret: 300 }),
+    gun: {
+      aphePen: 420,
+      apheDmg: 780,
+      hePen: 32,
+      heDmg: 150,
+      heBlast: 240,
+      traverseRadPerSec: 5.0,
+      elevateRadPerSec: 3.8,
+      apLabel: 'APDS',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'challenger2',
+    name: 'Challenger 2',
+    role: 'MBT · British',
+    blurb: 'Mk.3 · Dorchester · L30A1 120mm',
+    url: assetUrl('models/challenger2.glb?v=2'),
+    reloadSec: 5.6,
+    maxHp: 1550,
+    targetWidth: 3.52,
+    vintageCrew: false,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CHALLENGER2_DRIVE,
+    armor: armorKit({ front: 620, side: 200, rear: 90, turret: 700, modern: true }),
+    gun: {
+      aphePen: 620,
+      apheDmg: 1050,
+      hePen: 38,
+      heDmg: 180,
+      heBlast: 270,
+      traverseRadPerSec: 6.0,
+      elevateRadPerSec: 4.4,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'challenger3',
+    name: 'Challenger 3',
+    role: 'MBT · British',
+    blurb: 'Trophy APS · L55A1 120mm · top of the British tree',
+    url: assetUrl('models/challenger3.glb?v=1'),
+    reloadSec: 5.2,
+    maxHp: 1680,
+    targetWidth: 3.55,
+    vintageCrew: false,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CHALLENGER3_DRIVE,
+    armor: armorKit({ front: 700, side: 220, rear: 100, turret: 780, modern: true }),
+    gun: {
+      aphePen: 680,
+      apheDmg: 1120,
+      hePen: 40,
+      heDmg: 190,
+      heBlast: 280,
+      traverseRadPerSec: 6.4,
+      elevateRadPerSec: 4.6,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
     },
   },
   {
@@ -1123,7 +1338,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'F4U-1A Corsair',
     role: 'Fighter-bomber · air',
     blurb: 'Bent-wing carrier fighter · six .50s · bombs + HVAR rockets',
-    url: assetUrl('models/f4u_corsair.glb?v=5'),
+    url: assetUrl('models/f4u_corsair.glb?v=7'),
     reloadSec: 0.12,
     maxHp: 520,
     // Wingspan, not track gauge — the air rig scales from this.
@@ -1152,7 +1367,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'P-51 Mustang',
     role: 'Fighter · air',
     blurb: 'Long-range escort · six .50s · queen of the piston fighters',
-    url: assetUrl('models/p51_mustang.glb?v=1'),
+    url: assetUrl('models/p51_mustang.glb?v=2'),
     reloadSec: 0.11,
     maxHp: 540,
     targetWidth: 11.3,
@@ -1174,11 +1389,174 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'bf109',
+    name: 'Bf 109 K-4',
+    role: 'Fighter · air',
+    blurb: 'Messerschmitt · late-war Kurfürst · 30mm Mk 108',
+    url: assetUrl('models/bf109.glb?v=1'),
+    reloadSec: 0.15,
+    maxHp: 460,
+    targetWidth: 9.92,
+    vintageCrew: true,
+    nation: 'germany',
+    aircraft: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 14, side: 10, rear: 8, turret: 12 }),
+    gun: {
+      aphePen: 42,
+      apheDmg: 85,
+      hePen: 14,
+      heDmg: 48,
+      heBlast: 60,
+      traverseRadPerSec: 2.5,
+      elevateRadPerSec: 2.1,
+      apLabel: 'AP 30mm',
+      heLabel: 'HE 30mm',
+    },
+  },
+  {
+    id: 'spitfire',
+    name: 'Spitfire Mk.IIa',
+    role: 'Fighter · air',
+    blurb: 'Supermarine · eight .303s · Battle of Britain classic',
+    url: assetUrl('models/spitfire.glb?v=1'),
+    reloadSec: 0.08,
+    maxHp: 480,
+    targetWidth: 11.23,
+    vintageCrew: true,
+    nation: 'britain',
+    aircraft: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 12, side: 10, rear: 8, turret: 10 }),
+    gun: {
+      aphePen: 18,
+      apheDmg: 42,
+      hePen: 6,
+      heDmg: 24,
+      heBlast: 32,
+      traverseRadPerSec: 2.6,
+      elevateRadPerSec: 2.2,
+      apLabel: 'AP .303',
+      heLabel: 'Ball .303',
+    },
+  },
+  {
+    id: 'f35b',
+    name: 'F-35B Lightning II',
+    role: 'STOVL strike · air',
+    blurb: 'Lightning II · RAF/RN · stealth · bombs + cannon',
+    url: assetUrl('models/f35b.glb?v=1'),
+    reloadSec: 0.07,
+    maxHp: 680,
+    targetWidth: 10.7,
+    vintageCrew: false,
+    nation: 'britain',
+    aircraft: true,
+    jet: true,
+    aircraftBombCount: 4,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 16, side: 12, rear: 12, turret: 14 }),
+    gun: {
+      aphePen: 38,
+      apheDmg: 75,
+      hePen: 12,
+      heDmg: 45,
+      heBlast: 55,
+      traverseRadPerSec: 2.8,
+      elevateRadPerSec: 2.4,
+      apLabel: 'AP 25mm',
+      heLabel: 'HE 25mm',
+    },
+  },
+  {
+    id: 'tornado',
+    name: 'Tornado GR4',
+    role: 'Strike jet · air',
+    blurb: 'Panavia MiG Eater · swing-wing · bombs + cannon',
+    url: assetUrl('models/tornado.glb?v=1'),
+    reloadSec: 0.08,
+    maxHp: 720,
+    targetWidth: 13.91,
+    vintageCrew: false,
+    nation: 'britain',
+    aircraft: true,
+    jet: true,
+    aircraftBombCount: 6,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 18, side: 14, rear: 12, turret: 14 }),
+    gun: {
+      aphePen: 42,
+      apheDmg: 88,
+      hePen: 14,
+      heDmg: 50,
+      heBlast: 65,
+      traverseRadPerSec: 2.6,
+      elevateRadPerSec: 2.2,
+      apLabel: 'AP 27mm',
+      heLabel: 'HE 27mm',
+    },
+  },
+  {
+    id: 'f104g',
+    name: 'F-104G Starfighter',
+    role: 'Jet interceptor · air',
+    blurb: 'Missile with a man in it · M61 · German G export',
+    url: assetUrl('models/f104g.glb?v=1'),
+    reloadSec: 0.07,
+    maxHp: 540,
+    // Real span ~6.68 m — stub wings; pack X already ~6.78 m.
+    targetWidth: 6.68,
+    vintageCrew: false,
+    nation: 'germany',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 14, side: 10, rear: 10, turret: 12 }),
+    gun: {
+      aphePen: 36,
+      apheDmg: 70,
+      hePen: 12,
+      heDmg: 42,
+      heBlast: 52,
+      traverseRadPerSec: 2.8,
+      elevateRadPerSec: 2.4,
+      apLabel: 'AP 20mm',
+      heLabel: 'HEI 20mm',
+    },
+  },
+  {
+    id: 'f84f',
+    name: 'F-84F Thunderstreak',
+    role: 'Jet fighter-bomber · air',
+    blurb: 'Swept-wing Thunderjet · guns + bombs · early USAF jet',
+    url: assetUrl('models/f84f.glb?v=1'),
+    reloadSec: 0.09,
+    maxHp: 560,
+    targetWidth: 10.24,
+    vintageCrew: false,
+    nation: 'usa',
+    aircraft: true,
+    jet: true,
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 16, side: 12, rear: 10, turret: 14 }),
+    gun: {
+      aphePen: 30,
+      apheDmg: 62,
+      hePen: 10,
+      heDmg: 36,
+      heBlast: 48,
+      traverseRadPerSec: 2.6,
+      elevateRadPerSec: 2.2,
+      apLabel: 'AP .50',
+      heLabel: 'API .50',
+    },
+  },
+  {
     id: 'f16',
     name: 'F-16A Fighting Falcon',
     role: 'Jet fighter · air',
     blurb: 'Block 15 · VIPER · light multirole',
-    url: assetUrl('models/f16a.glb?v=2'),
+    url: assetUrl('models/f16a.glb?v=4'),
     reloadSec: 0.07,
     maxHp: 580,
     targetWidth: 9.96,
@@ -1205,7 +1583,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Yak-9',
     role: 'Fighter · air',
     blurb: 'Soviet interceptor · 20mm ShVAK · light and mean',
-    url: assetUrl('models/yak9.glb?v=6'),
+    url: assetUrl('models/yak9.glb?v=7'),
     reloadSec: 0.14,
     maxHp: 480,
     targetWidth: 9.74,
@@ -1232,7 +1610,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'MiG-15',
     role: 'Jet fighter · air',
     blurb: 'Early Soviet jet · swept wing · NR-23 cannon',
-    url: assetUrl('models/mig15.glb?v=1'),
+    url: assetUrl('models/mig15.glb?v=2'),
     reloadSec: 0.09,
     maxHp: 560,
     targetWidth: 10.08,
@@ -1259,7 +1637,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'MiG-21MF',
     role: 'Jet fighter · air',
     blurb: 'Fishbed · delta wing · GSh-23 · Mach-capable interceptor',
-    url: assetUrl('models/mig21.glb?v=1'),
+    url: assetUrl('models/mig21.glb?v=3'),
     reloadSec: 0.08,
     maxHp: 600,
     targetWidth: 7.15,
@@ -1286,7 +1664,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Su-25',
     role: 'Attack jet · air',
     blurb: 'Grach · armored frogfoot · GSh-30-2 · close air support',
-    url: assetUrl('models/su25.glb?v=2'),
+    url: assetUrl('models/su25.glb?v=3'),
     reloadSec: 0.08,
     maxHp: 780,
     targetWidth: 14.36,
@@ -1313,7 +1691,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Su-27SKM',
     role: 'Air superiority · air',
     blurb: 'Flanker SKM · GSh-30-1 · AAMs · press T for Cobra',
-    url: assetUrl('models/su27.glb?v=2'),
+    url: assetUrl('models/su27.glb?v=3'),
     reloadSec: 0.08,
     maxHp: 680,
     targetWidth: 14.7,

@@ -221,37 +221,37 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
     trackDust(origin, outward, intensity = 1) {
       const i = THREE.MathUtils.clamp(intensity, 0, 1)
       if (i < 0.08) return
-      // Probabilistic — keep grit readable without filling the puff pool.
-      if (Math.random() > 0.22 + i * 0.45) return
+      // Probabilistic — denser grit, still pooled.
+      if (Math.random() > 0.12 + i * 0.55) return
       const out = outward.clone()
       if (out.lengthSq() < 1e-6) out.set(1, 0, 0)
       else out.normalize()
-      const n = Math.random() < 0.35 + i * 0.4 ? 2 : 1
+      const n = Math.random() < 0.4 + i * 0.45 ? 2 : 1
       for (let k = 0; k < n; k++) {
         const side = out
           .clone()
-          .multiplyScalar(0.35 + Math.random() * 0.9)
+          .multiplyScalar(0.4 + Math.random() * 1.05)
           .add(
             new THREE.Vector3(
-              (Math.random() - 0.5) * 0.5,
-              0.15 + Math.random() * 0.55,
-              (Math.random() - 0.5) * 0.6,
+              (Math.random() - 0.5) * 0.55,
+              0.18 + Math.random() * 0.65,
+              (Math.random() - 0.5) * 0.7,
             ),
           )
         spawn(
           origin.clone().add(
             new THREE.Vector3(
-              (Math.random() - 0.5) * 0.35,
-              0.02 + Math.random() * 0.08,
-              (Math.random() - 0.5) * 0.45,
+              (Math.random() - 0.5) * 0.4,
+              0.02 + Math.random() * 0.1,
+              (Math.random() - 0.5) * 0.5,
             ),
           ),
           side,
           {
-            size: 0.55 + Math.random() * 0.7,
-            life: 0.45 + Math.random() * 0.55,
-            grow: 1.8,
-            opacity: 0.22 + i * 0.2,
+            size: 0.6 + Math.random() * 0.85,
+            life: 0.5 + Math.random() * 0.65,
+            grow: 2.0,
+            opacity: 0.26 + i * 0.22,
             color: Math.random() < 0.4 ? 0x7a6e52 : 0x8a7d5c,
           },
         )

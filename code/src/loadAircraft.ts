@@ -4,14 +4,20 @@ import { cloneGltfScene } from './loadGltf'
 import { createLandingGear, type LandingGear } from './landingGear'
 import { tankOptionById, type TankId } from './tankCatalog'
 
-const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=5')
-const YAK9_URL = assetUrl('models/yak9.glb?v=6')
-const P51_URL = assetUrl('models/p51_mustang.glb?v=1')
-const F16_URL = assetUrl('models/f16a.glb?v=2')
-const MIG15_URL = assetUrl('models/mig15.glb?v=1')
-const MIG21_URL = assetUrl('models/mig21.glb?v=1')
-const SU25_URL = assetUrl('models/su25.glb?v=2')
-const SU27_URL = assetUrl('models/su27.glb?v=2')
+const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=7')
+const YAK9_URL = assetUrl('models/yak9.glb?v=7')
+const P51_URL = assetUrl('models/p51_mustang.glb?v=2')
+const F84F_URL = assetUrl('models/f84f.glb?v=1')
+const F104G_URL = assetUrl('models/f104g.glb?v=1')
+const BF109_URL = assetUrl('models/bf109.glb?v=1')
+const SPITFIRE_URL = assetUrl('models/spitfire.glb?v=1')
+const F35B_URL = assetUrl('models/f35b.glb?v=1')
+const TORNADO_URL = assetUrl('models/tornado.glb?v=1')
+const F16_URL = assetUrl('models/f16a.glb?v=4')
+const MIG15_URL = assetUrl('models/mig15.glb?v=2')
+const MIG21_URL = assetUrl('models/mig21.glb?v=3')
+const SU25_URL = assetUrl('models/su25.glb?v=3')
+const SU27_URL = assetUrl('models/su27.glb?v=3')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -57,20 +63,6 @@ type AircraftRigOpts = {
   noGear?: boolean
 }
 
-function findNode(root: THREE.Object3D, names: string[]): THREE.Object3D | null {
-  for (const name of names) {
-    const hit = root.getObjectByName(name)
-    if (hit) return hit
-  }
-  const lower = names.map((n) => n.toLowerCase())
-  let found: THREE.Object3D | null = null
-  root.traverse((obj) => {
-    if (found || !obj.name) return
-    if (lower.includes(obj.name.toLowerCase())) found = obj
-  })
-  return found
-}
-
 /**
  * Sketchfab / WT packs often leave metallicFactor at the glTF default (1.0)
  * with noisy metalness maps → painted fuselage reads as chrome / grey.
@@ -97,9 +89,13 @@ function sanitizeAircraftMaterials(root: THREE.Object3D): void {
   })
 }
 
-function findPropeller(model: THREE.Object3D, names: string[]): THREE.Object3D | null {
-  const named = findNode(model, names)
-  if (named) return named
+function findPropellers(model: THREE.Object3D, names: string[]): THREE.Object3D[] {
+  const lower = new Set(names.map((n) => n.toLowerCase()))
+  const named: THREE.Object3D[] = []
+  model.traverse((obj) => {
+    if (obj.name && lower.has(obj.name.toLowerCase())) named.push(obj)
+  })
+  if (named.length > 0) return named
 
   // Flattened Sketchfab packs: only accept disc-like meshes (two wide axes,
   // one thin). Otherwise we spin nacelles / turrets (B-17 Object_38 lesson).
@@ -132,7 +128,7 @@ function findPropeller(model: THREE.Object3D, names: string[]): THREE.Object3D |
       best = obj
     }
   })
-  return best
+  return best ? [best] : []
 }
 
 /**
@@ -235,15 +231,25 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     'Propellor',
     'Yak-9_Propellor',
   ]
-  const propeller = opts.noProp ? null : findPropeller(model, propNames)
-  if (!propeller && !opts.noProp) {
+  const propNodes = opts.noProp ? [] : findPropellers(model, propNames)
+  if (propNodes.length === 0 && !opts.noProp) {
     console.warn(`[Steel] ${opts.name} propeller node not found — prop will not spin`)
   }
 
-  const propAxis = propeller ? localSpinAxis(propeller) : new THREE.Vector3(0, 1, 0)
-  if (propeller) {
+  const propSpinners = propNodes.map((obj) => ({
+    obj,
+    axis: localSpinAxis(obj),
+  }))
+  const propeller = propSpinners[0]?.obj ?? null
+  const propAxis = propSpinners[0]?.axis ?? new THREE.Vector3(0, 1, 0)
+  if (propSpinners.length > 0) {
     console.info(
-      `[Steel] ${opts.name} prop axis (local) = ${propAxis.x},${propAxis.y},${propAxis.z} · span ${size.x.toFixed(2)}m`,
+      `[Steel] ${opts.name} prop×${propSpinners.length} · ${propSpinners
+        .map((p) => {
+          const a = p.axis
+          return `${p.obj.name} axis=(${a.x.toFixed(2)},${a.y.toFixed(2)},${a.z.toFixed(2)})`
+        })
+        .join(' · ')} · span ${size.x.toFixed(2)}m`,
     )
   }
 
@@ -259,9 +265,12 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     lengthM: size.z,
     landingGear,
     spinProp(dt, throttle01) {
-      if (!propeller) return
+      if (propSpinners.length === 0) return
       const rps = PROP_IDLE_RPS + THREE.MathUtils.clamp(throttle01, 0, 1) * PROP_MAX_RPS
-      propeller.rotateOnAxis(propAxis, dt * rps * Math.PI * 2)
+      const ang = dt * rps * Math.PI * 2
+      for (const p of propSpinners) {
+        p.obj.rotateOnAxis(p.axis, ang)
+      }
     },
   }
 }
@@ -294,6 +303,90 @@ export async function loadYak9(): Promise<AircraftHandle> {
     targetWingspan: 9.74,
     noseYaw: -Math.PI / 2,
     propNames: ['Yak-9_Propellor', 'Yak-9_Propeller', 'Yak-9_Propulsion'],
+  })
+}
+
+/**
+ * F-84F Thunderstreak — WoWP pack; SpecGloss→metalrough; jet (no prop/gear).
+ * Wingspan already on X (~10.24 m).
+ */
+export async function loadF84F(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: F84F_URL,
+    name: 'f84f',
+    targetWingspan: 10.24,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/**
+ * F-104G Starfighter — WT German pack; SpecGloss→metalrough; stub-wing jet.
+ * Wingspan already on X (~6.68 m).
+ */
+export async function loadF104G(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: F104G_URL,
+    name: 'f104g',
+    targetWingspan: 6.68,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/**
+ * Bf 109 K-4 — low-poly pack; nose already +Z; named `prop` spins.
+ * Model units are huge — scaled to 9.92 m span.
+ */
+export async function loadBf109(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: BF109_URL,
+    name: 'bf109',
+    targetWingspan: 9.92,
+    noGear: true,
+    propNames: ['prop', 'Prop', 'Propeller', 'Propellor'],
+  })
+}
+
+/**
+ * Spitfire Mk.IIa — Sketchfab pack; nose already +Z; Object_150 prop disc.
+ * Real span ~11.23 m.
+ */
+export async function loadSpitfire(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: SPITFIRE_URL,
+    name: 'spitfire',
+    targetWingspan: 11.23,
+    noGear: true,
+    propNames: ['Object_150'],
+  })
+}
+
+/**
+ * F-35B Lightning II — Sketchfab pack; cockpit/nose on +Z; STOVL jet (no prop).
+ * Real span ~10.7 m.
+ */
+export async function loadF35B(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: F35B_URL,
+    name: 'f35b',
+    targetWingspan: 10.7,
+    noProp: true,
+    noGear: true,
+  })
+}
+
+/**
+ * Tornado GR4 "MiG Eater" — Sketchfab pack; nose already +Z; twin jet (no prop).
+ * Span ~13.91 m (unswept).
+ */
+export async function loadTornado(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: TORNADO_URL,
+    name: 'tornado',
+    targetWingspan: 13.91,
+    noProp: true,
+    noGear: true,
   })
 }
 
@@ -365,6 +458,12 @@ export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   if (!opt.aircraft) throw new Error(`Not an aircraft: ${id}`)
   if (id === 'yak9') return loadYak9()
   if (id === 'p51') return loadP51Mustang()
+  if (id === 'f84f') return loadF84F()
+  if (id === 'f104g') return loadF104G()
+  if (id === 'bf109') return loadBf109()
+  if (id === 'spitfire') return loadSpitfire()
+  if (id === 'f35b') return loadF35B()
+  if (id === 'tornado') return loadTornado()
   if (id === 'f16') return loadF16()
   if (id === 'mig15') return loadMig15()
   if (id === 'mig21') return loadMig21()

@@ -3,10 +3,11 @@ import * as THREE from 'three'
 /** Muzzle speed (units/sec). */
 export const SHELL_SPEED = 180
 /**
- * Mild arcade gravity (world u/s²). Enough for a slight long-range drop;
- * not howitzer loft. SPG high-angle stays a separate path when added.
+ * Arcade gravity (world u/s²). Boom1: bumped from 1 for a readable mid-range
+ * arc — kept low so ~200 m shots still land near the reticle (4.5 was too much).
+ * `predictBallisticImpact` / `elevationToHit` read this same constant.
  */
-export const SHELL_GRAVITY = 1
+export const SHELL_GRAVITY = 1.8
 export const SHELL_RADIUS = 0.12
 export const SHELL_MAX_FLIGHT = 6
 

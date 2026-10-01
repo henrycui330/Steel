@@ -8,6 +8,96 @@ export type EnvironmentConfig = {
   timeOfDay: TimeOfDay
   season: Season
   weather: WeatherKind
+  /** When set (e.g. `forest`), apply map-tuned haze + sky gradient. */
+  mapId?: string
+}
+
+type SkyPalette = {
+  zenith: number
+  horizon: number
+  ground: number
+  fogDensity: number
+}
+
+/**
+ * Soft sky dome (inside-out sphere). Fog disabled so the gradient stays crisp;
+ * FogExp2 horizon color matches the mid band so pines dissolve into it.
+ */
+function createSkyDome(pal: SkyPalette): THREE.Mesh {
+  const geo = new THREE.SphereGeometry(1600, 24, 16)
+  const mat = new THREE.ShaderMaterial({
+    name: 'ForestSkyGradient',
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      zenithColor: { value: new THREE.Color(pal.zenith) },
+      horizonColor: { value: new THREE.Color(pal.horizon) },
+      groundColor: { value: new THREE.Color(pal.ground) },
+    },
+    vertexShader: /* glsl */ `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 zenithColor;
+      uniform vec3 horizonColor;
+      uniform vec3 groundColor;
+      varying vec3 vDir;
+      void main() {
+        float h = vDir.y; // -1 ground … 0 horizon … 1 zenith
+        vec3 col;
+        if (h > 0.0) {
+          float t = smoothstep(0.0, 0.85, h);
+          col = mix(horizonColor, zenithColor, t);
+        } else {
+          float t = smoothstep(0.0, -0.55, h);
+          col = mix(horizonColor, groundColor, t);
+        }
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.name = 'forestSkyDome'
+  mesh.frustumCulled = false
+  mesh.renderOrder = -1000
+  return mesh
+}
+
+/** Forest Overwatch atmosphere — soft haze, KOTH hill (~0.9 km) still readable. */
+function forestSkyPalette(
+  night: boolean,
+  winter: boolean,
+  raining: boolean,
+  foggy: boolean,
+): SkyPalette {
+  if (night) {
+    return {
+      zenith: 0x050810,
+      horizon: 0x101820,
+      ground: 0x0a0e14,
+      fogDensity: foggy ? 0.011 : raining ? 0.0048 : 0.0026,
+    }
+  }
+  if (winter) {
+    return {
+      zenith: raining || foggy ? 0x7a8898 : 0x8ea8c4,
+      horizon: raining || foggy ? 0x9aa4b0 : 0xb0bcc8,
+      ground: 0x7a848c,
+      fogDensity: foggy ? 0.011 : raining ? 0.0042 : 0.0017,
+    }
+  }
+  // Summer day — cool blue-grey air (no olive/green cast)
+  return {
+    zenith: raining || foggy ? 0x7a848c : 0x6a8eb8,
+    horizon: raining || foggy ? 0x9aa4ac : 0xb0c0cc,
+    ground: raining || foggy ? 0x6a7078 : 0x8a9098,
+    fogDensity: foggy ? 0.011 : raining ? 0.0042 : 0.00155,
+  }
 }
 
 export type DriveWeatherMods = {
@@ -41,7 +131,7 @@ export function createEnvironment(
   },
   config: EnvironmentConfig,
 ): EnvironmentSystem {
-  const { timeOfDay, season, weather } = config
+  const { timeOfDay, season, weather, mapId } = config
 
   let heat = 0
   let freezeLeft = 0
@@ -53,6 +143,7 @@ export function createEnvironment(
   const winter = season === 'winter'
   const raining = weather === 'rain'
   const foggy = weather === 'fog'
+  const forestLook = mapId === 'forest'
 
   if (night) {
     renderer.setClearColor(0x0a0e18, 1)
@@ -84,12 +175,26 @@ export function createEnvironment(
     lights.sun.intensity = raining || foggy ? 0.55 : 1.1
   }
 
-  // --- Fog / visibility ---
+  // --- Fog + sky (V2) ---
   let fog: THREE.FogExp2 | null = null
-  if (foggy) {
-    fog = new THREE.FogExp2(night ? 0x1a2030 : winter ? 0x9aa4b0 : 0x9aa890, 0.012)
+  let skyDome: THREE.Mesh | null = null
+  const prevBackground = scene.background
+
+  if (forestLook) {
+    const pal = forestSkyPalette(night, winter, raining, foggy)
+    skyDome = createSkyDome(pal)
+    scene.add(skyDome)
+    scene.background = new THREE.Color(pal.horizon)
+    renderer.setClearColor(pal.horizon, 1)
+    // Hemi: sky fill from zenith; ground bounce stays neutral dirt (not fog green).
+    lights.hemi.color.setHex(pal.zenith)
+    lights.hemi.groundColor.setHex(night ? 0x1a1814 : winter ? 0x6a7068 : 0x5e6458)
+    if (!night) lights.hemi.intensity = Math.max(lights.hemi.intensity, 0.42)
+    fog = new THREE.FogExp2(pal.horizon, pal.fogDensity)
+  } else if (foggy) {
+    fog = new THREE.FogExp2(night ? 0x1a2030 : winter ? 0x9aa4b0 : 0x9aa8b0, 0.012)
   } else if (raining) {
-    fog = new THREE.FogExp2(night ? 0x121820 : winter ? 0x889098 : 0x6a7870, 0.0045)
+    fog = new THREE.FogExp2(night ? 0x121820 : winter ? 0x889098 : 0x7a8490, 0.0045)
   } else if (night) {
     fog = new THREE.FogExp2(0x0a0e18, 0.0022)
   } else if (winter) {
@@ -129,6 +234,9 @@ export function createEnvironment(
 
   console.info(
     `[Steel] Environment — ${timeOfDay}, ${season}, ${weather}` +
+      (forestLook && fog
+        ? ` · V2 forest haze dens=${fog.density.toFixed(4)}`
+        : '') +
       (foggy ? ' (low visibility)' : '') +
       (raining ? ' (wet tracks)' : ''),
   )
@@ -136,6 +244,11 @@ export function createEnvironment(
   return {
     update(dt, camera, speed, vintageCrew) {
       status = ''
+
+      if (skyDome) {
+        camera.getWorldPosition(_rainPos)
+        skyDome.position.copy(_rainPos)
+      }
 
       // Rain follow camera
       if (rain && rainVel) {
@@ -206,6 +319,13 @@ export function createEnvironment(
         ;(rain.material as THREE.Material).dispose()
         rain = null
       }
+      if (skyDome) {
+        scene.remove(skyDome)
+        skyDome.geometry.dispose()
+        ;(skyDome.material as THREE.Material).dispose()
+        skyDome = null
+      }
+      scene.background = prevBackground
       scene.fog = null
     },
   }

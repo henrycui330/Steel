@@ -220,7 +220,7 @@ function showHome(
   syncWrapFromProfile(user.profile.wrapId)
   warmupMatchAssets()
   clearRoot(root)
-  root.classList.add('menu-screen-home')
+  root.classList.add('menu-screen-home', 'menu-wt')
   const mode = getSession()?.mode ?? 'offline'
   const wallet = getWallet()
   const apiBase = getSteelApiBase()
@@ -240,7 +240,7 @@ function showHome(
         <span class="wallet-chip wallet-gold"><i></i><b>${wallet.gold}</b> Gold</span>
       </p>
       <div class="home-actions">
-        <button type="button" class="home-btn home-btn-play" data-go="play">Play</button>
+        <button type="button" class="home-btn home-btn-play" data-go="play">Start Match</button>
         <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" title="${onlineOk ? 'Create or join a room' : escapeHtml(mpBlockReason)}">Multiplayer</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>
         <button type="button" class="home-btn" data-go="settings">Settings</button>
@@ -251,7 +251,7 @@ function showHome(
     </div>
   `
   root.querySelector('[data-go="play"]')!.addEventListener('click', () => {
-    showMatchSetup(root, resolve)
+    showVoteMap(root, resolve)
   })
   const mpBtn = root.querySelector('[data-go="mp"]') as HTMLButtonElement | null
   mpBtn?.addEventListener('click', () => {
@@ -716,14 +716,73 @@ function showCustomize(
   queueShow()
 }
 
-function showMatchSetup(
+const LOADING_TIPS = [
+  "Don't forget to take cover — you'll need it :3",
+  'An angled plate beats a flat one. Side shots hurt.',
+  'Range first, then fire. Panic shells miss.',
+  'Hull-down on a ridge: expose the turret, hide the ammo.',
+  'MG suppresses. Cannon finishes.',
+  'Smoke is free armor — use it when reloading.',
+  'In KOTH, the hill wins wars. Parks tanks on it.',
+  'Aircraft: speed is life. Low and slow is a gift to SPAAG.',
+  'Tracks broken? Sit still and pray the next shell is soft.',
+  'Friendly fire is still fire. Check your markers.',
+] as const
+
+export function pickLoadingTip(): string {
+  return LOADING_TIPS[Math.floor(Math.random() * LOADING_TIPS.length)]!
+}
+
+function showVoteMap(
   root: HTMLDivElement,
   resolve: (s: MenuSelection) => void,
 ): void {
   clearRoot(root)
-  root.classList.add('menu-screen-match')
+  root.classList.add('menu-screen-vote', 'menu-wt')
 
   let mapId: MapId = 'forest'
+
+  root.innerHTML = `
+    <div class="menu-panel menu-panel-vote">
+      <p class="menu-kicker">Briefing · 1 / 4</p>
+      <h1 class="menu-title">Vote — Map</h1>
+      <p class="menu-sub">Select the theatre of operations.</p>
+      <div class="vote-grid" data-vote="map">
+        <button type="button" class="vote-card is-selected" data-val="forest">
+          <span class="vote-card-art" aria-hidden="true"></span>
+          <span class="vote-card-name">Forest Overwatch</span>
+          <span class="vote-card-blurb">${mapOptionById('forest').blurb}</span>
+        </button>
+      </div>
+      <div class="menu-nav-row">
+        <button type="button" class="home-btn menu-back">Back</button>
+        <button type="button" class="deploy-btn" data-next>Confirm map</button>
+      </div>
+    </div>
+  `
+
+  const grid = root.querySelector('[data-vote="map"]')!
+  grid.querySelectorAll('.vote-card').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      grid.querySelectorAll('.vote-card').forEach((el) => el.classList.remove('is-selected'))
+      btn.classList.add('is-selected')
+      mapId = ((btn as HTMLElement).dataset.val as MapId) || 'forest'
+    })
+  })
+  root.querySelector('.menu-back')!.addEventListener('click', () => goHome(root, resolve))
+  root.querySelector('[data-next]')!.addEventListener('click', () => {
+    showVoteMode(root, resolve, mapId)
+  })
+}
+
+function showVoteMode(
+  root: HTMLDivElement,
+  resolve: (s: MenuSelection) => void,
+  mapId: MapId,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-vote', 'menu-wt')
+
   const redAi: TankId[] = [DEFAULT_AI_TANK]
   const blueAi: TankId[] = [DEFAULT_AI_TANK]
   let timeOfDay: TimeOfDay = 'day'
@@ -732,61 +791,58 @@ function showMatchSetup(
   let gameMode: GameModeId = 'koth'
 
   root.innerHTML = `
-    <div class="menu-panel menu-panel-wide">
-      <p class="menu-brand">Steel</p>
-      <h1 class="menu-title">Match setup</h1>
-      <p class="menu-sub">Pick a mode, conditions, and AI. You’ll choose your nation spawn next.</p>
+    <div class="menu-panel menu-panel-vote">
+      <p class="menu-kicker">Briefing · 2 / 4</p>
+      <h1 class="menu-title">Vote — Mission</h1>
+      <p class="menu-sub">${mapOptionById(mapId).name} · choose rules of engagement.</p>
 
-      <p class="menu-section">Mode</p>
-      <div class="env-row" data-env="mode">
-        <button type="button" class="env-chip is-selected" data-val="koth">King of the Hill</button>
-        <button type="button" class="env-chip" data-val="skirmish">Skirmish</button>
+      <div class="vote-grid" data-vote="mode">
+        <button type="button" class="vote-card is-selected" data-val="koth">
+          <span class="vote-card-name">King of the Hill</span>
+          <span class="vote-card-blurb">Hold Midwood 90s. Respawn. Change vehicles after death.</span>
+        </button>
+        <button type="button" class="vote-card" data-val="skirmish">
+          <span class="vote-card-name">Skirmish</span>
+          <span class="vote-card-blurb">Wipe the enemy force. One life.</span>
+        </button>
       </div>
-      <p class="menu-hint" data-mode-hint>Hold Midwood for 90s. Infinite respawns until a nation wins.</p>
 
-      <p class="menu-section">Map</p>
-      <div class="env-row" data-env="map">
-        <button type="button" class="env-chip is-selected" data-val="forest">Forest Overwatch</button>
-      </div>
-      <p class="menu-hint" data-map-hint>750×2000 pine hills · road clearings · 3 towns</p>
-
-      <p class="menu-section">Time of day</p>
+      <p class="menu-section">Conditions</p>
       <div class="env-row" data-env="time">
         <button type="button" class="env-chip is-selected" data-val="day">Day</button>
         <button type="button" class="env-chip" data-val="night">Night</button>
       </div>
-
-      <p class="menu-section">Season</p>
       <div class="env-row" data-env="season">
         <button type="button" class="env-chip is-selected" data-val="summer">Summer</button>
         <button type="button" class="env-chip" data-val="winter">Winter</button>
       </div>
-
-      <p class="menu-section">Weather</p>
       <div class="env-row" data-env="weather">
-        <button type="button" class="env-chip is-selected" data-val="clear">Clear / sun</button>
+        <button type="button" class="env-chip is-selected" data-val="clear">Clear</button>
         <button type="button" class="env-chip" data-val="rain">Rain</button>
         <button type="button" class="env-chip" data-val="fog">Fog</button>
       </div>
-      <p class="menu-hint">Rain: wet slip · Fog: low visibility · Summer heat / winter oil: older tanks only</p>
 
-      <p class="menu-section">Vostok Republic AI</p>
+      <p class="menu-section">Opposing forces (AI)</p>
       <div class="match-panel" data-team-ai="red"></div>
-
-      <p class="menu-section">United Meridian Democracy AI</p>
       <div class="match-panel" data-team-ai="blue"></div>
 
       <div class="menu-nav-row">
         <button type="button" class="home-btn menu-back">Back</button>
-        <button type="button" class="deploy-btn" data-continue>Continue</button>
+        <button type="button" class="deploy-btn" data-next>Confirm mission</button>
       </div>
     </div>
   `
 
-  function wireEnvRow(
-    key: 'time' | 'season' | 'weather' | 'mode' | 'map',
-    apply: (v: string) => void,
-  ): void {
+  const modeGrid = root.querySelector('[data-vote="mode"]')!
+  modeGrid.querySelectorAll('.vote-card').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      modeGrid.querySelectorAll('.vote-card').forEach((el) => el.classList.remove('is-selected'))
+      btn.classList.add('is-selected')
+      gameMode = (btn as HTMLElement).dataset.val === 'skirmish' ? 'skirmish' : 'koth'
+    })
+  })
+
+  function wireEnvRow(key: 'time' | 'season' | 'weather', apply: (v: string) => void): void {
     const row = root.querySelector(`[data-env="${key}"]`)!
     row.querySelectorAll('.env-chip').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -805,28 +861,13 @@ function showMatchSetup(
   wireEnvRow('weather', (v) => {
     weather = v as WeatherKind
   })
-  const modeHint = root.querySelector('[data-mode-hint]') as HTMLElement
-  const mapHint = root.querySelector('[data-map-hint]') as HTMLElement
-  wireEnvRow('mode', (v) => {
-    gameMode = v === 'skirmish' ? 'skirmish' : 'koth'
-    modeHint.textContent =
-      gameMode === 'koth'
-        ? 'Hold Midwood for 90s. Infinite respawns until a nation wins.'
-        : 'Wipe the enemy team. You lose if your tank is destroyed.'
-  })
-  wireEnvRow('map', (v) => {
-    mapId = 'forest'
-    void v
-    const opt = mapOptionById(mapId)
-    mapHint.textContent = opt.blurb
-  })
 
   function renderTeamAi(team: 'red' | 'blue'): void {
     const box = root.querySelector(`[data-team-ai="${team}"]`)!
     const list = team === 'red' ? redAi : blueAi
     box.innerHTML = `
       <div class="match-row">
-        <span class="match-label">${nationByTeam(team).short} AI count</span>
+        <span class="match-label">${nationByTeam(team).short} AI</span>
         <div class="match-stepper">
           <button type="button" class="match-step" data-team="${team}" data-dir="-1">−</button>
           <span class="match-value" data-count="${team}">${list.length}</span>
@@ -847,7 +888,6 @@ function showMatchSetup(
       `
       slots.appendChild(row)
     })
-
     box.querySelectorAll('.match-step').forEach((btn) => {
       btn.addEventListener('click', () => {
         const dir = Number((btn as HTMLElement).dataset.dir)
@@ -867,12 +907,11 @@ function showMatchSetup(
       })
     })
   }
-
   renderTeamAi('red')
   renderTeamAi('blue')
 
-  root.querySelector('.menu-back')!.addEventListener('click', () => goHome(root, resolve))
-  root.querySelector('[data-continue]')!.addEventListener('click', () => {
+  root.querySelector('.menu-back')!.addEventListener('click', () => showVoteMap(root, resolve))
+  root.querySelector('[data-next]')!.addEventListener('click', () => {
     const draft: MatchDraft = {
       mapId,
       redAi: [...redAi],
@@ -883,7 +922,113 @@ function showMatchSetup(
       gameMode,
     }
     warmupMatchAssets([...draft.redAi, ...draft.blueAi])
-    showSpawnSelect(root, draft, resolve)
+    showHangar(root, draft, resolve)
+  })
+}
+
+function tankStatsLine(tank: (typeof TANK_OPTIONS)[number]): string {
+  if (tank.aircraft) {
+    if (tank.id === 'corsair') return 'Air · guns + bombs + HVAR'
+    if (tank.aircraftBombCount && tank.aircraftBombCount > 2) {
+      return `Air · guns + bombs ×${tank.aircraftBombCount}`
+    }
+    return 'Air · guns + bombs'
+  }
+  return `Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}`
+}
+
+/**
+ * Vehicle hangar — preview left, selection right, Deploy bottom.
+ */
+function showHangar(
+  root: HTMLDivElement,
+  draft: MatchDraft,
+  resolve: (s: MenuSelection) => void,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-hangar', 'menu-wt')
+  warmupMatchAssets([...draft.redAi, ...draft.blueAi])
+
+  const map = mapOptionById(draft.mapId)
+  const pool = TANK_OPTIONS
+  let tankId: TankId = pool[0]?.id ?? 'pz3'
+  let preview: ReturnType<typeof createCustomizePreview> | null = null
+
+  root.innerHTML = `
+    <div class="hangar-shell">
+      <header class="hangar-header">
+        <p class="menu-kicker">Briefing · 3 / 4</p>
+        <h1 class="menu-title">Select vehicle</h1>
+        <p class="menu-sub">${map.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} — preview left, roster right.</p>
+      </header>
+      <div class="hangar-body">
+        <div class="hangar-preview" data-viewport>
+          <p class="customize-loading">Loading chassis…</p>
+        </div>
+        <aside class="hangar-roster" aria-label="Vehicles">
+          <div class="hangar-list" role="listbox"></div>
+        </aside>
+      </div>
+      <footer class="hangar-footer">
+        <button type="button" class="home-btn menu-back">Back</button>
+        <div class="hangar-selected" data-selected></div>
+        <button type="button" class="deploy-btn" data-deploy>Deploy</button>
+      </footer>
+    </div>
+  `
+
+  const list = root.querySelector('.hangar-list')!
+  const selectedEl = root.querySelector('[data-selected]') as HTMLElement
+  const viewport = root.querySelector('[data-viewport]') as HTMLElement
+
+  function refreshSelected(): void {
+    const t = tankOptionById(tankId)
+    selectedEl.innerHTML = `<strong>${t.name}</strong><span>${t.role}</span>`
+  }
+
+  async function showPreview(id: TankId): Promise<void> {
+    viewport.dataset.loading = '1'
+    try {
+      if (!preview) preview = createCustomizePreview(viewport)
+      await preview.show(id, getTankCosmetics(id))
+    } finally {
+      viewport.dataset.loading = '0'
+    }
+  }
+
+  for (const tank of pool) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'hangar-card'
+    btn.dataset.id = tank.id
+    btn.setAttribute('role', 'option')
+    btn.innerHTML = `
+      <span class="hangar-card-name">${tank.name}</span>
+      <span class="hangar-card-role">${tank.role}</span>
+      <span class="hangar-card-stats">${tankStatsLine(tank)}</span>
+    `
+    btn.addEventListener('click', () => {
+      tankId = tank.id
+      list.querySelectorAll('.hangar-card').forEach((el) => el.classList.remove('is-selected'))
+      btn.classList.add('is-selected')
+      refreshSelected()
+      warmupMatchAssets([tankId, ...draft.redAi, ...draft.blueAi])
+      void showPreview(tankId)
+    })
+    list.appendChild(btn)
+  }
+  ;(list.querySelector('.hangar-card') as HTMLButtonElement | null)?.click()
+
+  root.querySelector('.menu-back')!.addEventListener('click', () => {
+    preview?.dispose()
+    preview = null
+    showVoteMode(root, resolve, draft.mapId)
+  })
+
+  root.querySelector('[data-deploy]')!.addEventListener('click', () => {
+    preview?.dispose()
+    preview = null
+    showSpawnSelect(root, draft, resolve, { tankId })
   })
 }
 
@@ -891,20 +1036,22 @@ function showSpawnSelect(
   root: HTMLDivElement,
   draft: MatchDraft,
   resolve: (s: MenuSelection) => void,
+  pre?: { tankId: TankId; lockedTeam?: TeamId },
 ): void {
   clearRoot(root)
-  root.classList.add('menu-screen-spawn')
-  warmupMatchAssets([...draft.redAi, ...draft.blueAi])
+  root.classList.add('menu-screen-spawn', 'menu-wt')
+  warmupMatchAssets([...(pre ? [pre.tankId] : []), ...draft.redAi, ...draft.blueAi])
 
   const map = mapOptionById(draft.mapId)
-  let team: TeamId | null = null
+  let team: TeamId | null = pre?.lockedTeam ?? null
   let spawnIndex: number | null = null
-  let tankId: TankId = TANK_OPTIONS[0]?.id ?? 'pz3'
+  const tankId: TankId = pre?.tankId ?? TANK_OPTIONS[0]?.id ?? 'pz3'
+  const tank = tankOptionById(tankId)
 
   const markers = [
     ...map.spawns.red.map((p, i) => ({ team: 'red' as const, index: i, pos: p })),
     ...map.spawns.blue.map((p, i) => ({ team: 'blue' as const, index: i, pos: p })),
-  ]
+  ].filter((m) => (pre?.lockedTeam ? m.team === pre.lockedTeam : true))
 
   const mapW = map.sizeX
   const mapH = map.sizeZ
@@ -927,10 +1074,10 @@ function showSpawnSelect(
     .join('')
 
   root.innerHTML = `
-    <div class="menu-panel menu-panel-wide">
-      <p class="menu-brand">Steel</p>
-      <h1 class="menu-title">Choose spawn</h1>
-      <p class="menu-sub">${map.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} · ${mapW}×${mapH}m — click a spawn, then pick your tank.</p>
+    <div class="menu-panel menu-panel-wide menu-panel-spawn">
+      <p class="menu-kicker">Briefing · 4 / 4</p>
+      <h1 class="menu-title">Choose deploy point</h1>
+      <p class="menu-sub">${map.name} · ${tank.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} — click a spawn, then enter the field.</p>
 
       <div class="spawn-map-wrap">
         <div class="spawn-map" style="width:${svgW}px;height:${svgH}px">
@@ -948,22 +1095,18 @@ function showSpawnSelect(
 
       <p class="spawn-picked" data-picked>No spawn selected</p>
 
-      <p class="menu-section">Your tank</p>
-      <div class="tank-grid" role="listbox" aria-label="Your tank"></div>
-
       <div class="menu-nav-row">
         <button type="button" class="home-btn menu-back">Back</button>
-        <button type="button" class="deploy-btn" data-deploy disabled>Deploy</button>
+        <button type="button" class="deploy-btn" data-deploy disabled>Enter battle</button>
       </div>
     </div>
   `
 
   const picked = root.querySelector('[data-picked]') as HTMLElement
   const deploy = root.querySelector('[data-deploy]') as HTMLButtonElement
-  const tankGrid = root.querySelector('.tank-grid')!
 
   function refreshDeploy(): void {
-    deploy.disabled = !(team !== null && spawnIndex !== null && tankId)
+    deploy.disabled = !(team !== null && spawnIndex !== null)
   }
 
   root.querySelectorAll('.spawn-dot').forEach((btn) => {
@@ -979,30 +1122,8 @@ function showSpawnSelect(
     })
   })
 
-  for (const tank of TANK_OPTIONS) {
-    const btn = document.createElement('button')
-    btn.type = 'button'
-    btn.className = 'tank-card'
-    btn.dataset.id = tank.id
-    const stats = tank.aircraft
-      ? tank.id === 'corsair'
-        ? `Air · guns + bombs + HVAR · KOTH`
-        : `Air · guns + bombs · KOTH support`
-      : `Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}`
-    btn.innerHTML = `<span class="tank-name">${tank.name}</span><span class="tank-role">${tank.role}</span><span class="tank-stats">${stats}</span><span class="tank-blurb">${tank.blurb}</span>`
-    btn.addEventListener('click', () => {
-      tankId = tank.id
-      warmupMatchAssets([tankId, ...draft.redAi, ...draft.blueAi])
-      tankGrid.querySelectorAll('.tank-card').forEach((el) => el.classList.remove('is-selected'))
-      btn.classList.add('is-selected')
-      refreshDeploy()
-    })
-    tankGrid.appendChild(btn)
-  }
-  ;(tankGrid.querySelector('.tank-card') as HTMLButtonElement | null)?.click()
-
   root.querySelector('.menu-back')!.addEventListener('click', () => {
-    showMatchSetup(root, resolve)
+    showHangar(root, draft, resolve)
   })
 
   deploy.addEventListener('click', () => {
@@ -1020,6 +1141,187 @@ function showSpawnSelect(
       weather: draft.weather,
       gameMode: draft.gameMode,
     })
+  })
+}
+
+export type RespawnPick = {
+  tankId: TankId
+  spawnIndex: number
+}
+
+/**
+ * Mid-match KOTH hangar — pick a new chassis (or the same), then a spawn on your team.
+ */
+export function showRespawnHangar(opts: {
+  mapId: MapId
+  gameMode: GameModeId
+  team: TeamId
+  groundOnly?: boolean
+  redAi?: TankId[]
+  blueAi?: TankId[]
+  timeOfDay?: TimeOfDay
+  season?: Season
+  weather?: WeatherKind
+}): Promise<RespawnPick> {
+  return new Promise((resolve) => {
+    const root = ensureRoot()
+    const draft: MatchDraft = {
+      mapId: opts.mapId,
+      redAi: opts.redAi ?? [DEFAULT_AI_TANK],
+      blueAi: opts.blueAi ?? [DEFAULT_AI_TANK],
+      timeOfDay: opts.timeOfDay ?? 'day',
+      season: opts.season ?? 'summer',
+      weather: opts.weather ?? 'clear',
+      gameMode: opts.gameMode,
+    }
+
+    // Overlay hangar that resolves only tank+spawn (team locked).
+    clearRoot(root)
+    root.classList.add('menu-screen-hangar', 'menu-wt', 'menu-respawn')
+    const map = mapOptionById(draft.mapId)
+    const vehicles =
+      opts.groundOnly === true
+        ? TANK_OPTIONS.filter((t) => !t.aircraft)
+        : opts.groundOnly === false
+          ? TANK_OPTIONS.filter((t) => !!t.aircraft)
+          : [...TANK_OPTIONS]
+    let tankId: TankId = vehicles[0]?.id ?? 'pz3'
+    let preview: ReturnType<typeof createCustomizePreview> | null = null
+
+    root.innerHTML = `
+      <div class="hangar-shell hangar-shell-respawn">
+        <header class="hangar-header">
+          <p class="menu-kicker">Respawn</p>
+          <h1 class="menu-title">Change vehicle</h1>
+          <p class="menu-sub">${map.name} · ${nationByTeam(opts.team).short} — pick a chassis, then a spawn.</p>
+        </header>
+        <div class="hangar-body">
+          <div class="hangar-preview" data-viewport>
+            <p class="customize-loading">Loading chassis…</p>
+          </div>
+          <aside class="hangar-roster">
+            <div class="hangar-list" role="listbox"></div>
+          </aside>
+        </div>
+        <footer class="hangar-footer">
+          <div class="hangar-selected" data-selected></div>
+          <button type="button" class="deploy-btn" data-to-spawn>Choose spawn</button>
+        </footer>
+      </div>
+    `
+
+    const list = root.querySelector('.hangar-list')!
+    const selectedEl = root.querySelector('[data-selected]') as HTMLElement
+    const viewport = root.querySelector('[data-viewport]') as HTMLElement
+
+    function refreshSelected(): void {
+      const t = tankOptionById(tankId)
+      selectedEl.innerHTML = `<strong>${t.name}</strong><span>${t.role}</span>`
+    }
+
+    async function showPreview(id: TankId): Promise<void> {
+      viewport.dataset.loading = '1'
+      try {
+        if (!preview) preview = createCustomizePreview(viewport)
+        await preview.show(id, getTankCosmetics(id))
+      } finally {
+        viewport.dataset.loading = '0'
+      }
+    }
+
+    for (const t of vehicles) {
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'hangar-card'
+      btn.innerHTML = `
+        <span class="hangar-card-name">${t.name}</span>
+        <span class="hangar-card-role">${t.role}</span>
+        <span class="hangar-card-stats">${tankStatsLine(t)}</span>
+      `
+      btn.addEventListener('click', () => {
+        tankId = t.id
+        list.querySelectorAll('.hangar-card').forEach((el) => el.classList.remove('is-selected'))
+        btn.classList.add('is-selected')
+        refreshSelected()
+        void showPreview(tankId)
+      })
+      list.appendChild(btn)
+    }
+    ;(list.querySelector('.hangar-card') as HTMLButtonElement | null)?.click()
+
+    root.querySelector('[data-to-spawn]')!.addEventListener('click', () => {
+      preview?.dispose()
+      preview = null
+      showRespawnSpawn(root, draft, opts.team, tankId, (pick) => {
+        root.remove()
+        resolve(pick)
+      })
+    })
+  })
+}
+
+function showRespawnSpawn(
+  root: HTMLDivElement,
+  draft: MatchDraft,
+  team: TeamId,
+  tankId: TankId,
+  done: (p: RespawnPick) => void,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-spawn', 'menu-wt', 'menu-respawn')
+  const map = mapOptionById(draft.mapId)
+  let spawnIndex: number | null = null
+  const tank = tankOptionById(tankId)
+  const mapW = map.sizeX
+  const mapH = map.sizeZ
+  const aspect = mapW / mapH
+  const svgH = SVG_SIZE
+  const svgW = Math.max(120, Math.round(svgH * aspect))
+  function toSvg(x: number, z: number): { cx: number; cy: number } {
+    return {
+      cx: ((x + mapW / 2) / mapW) * svgW,
+      cy: ((mapH / 2 - z) / mapH) * svgH,
+    }
+  }
+  const dots = map.spawns[team]
+    .map((p, i) => {
+      const { cx, cy } = toSvg(p.x, p.z)
+      return `<button type="button" class="spawn-dot spawn-${team}" data-index="${i}" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" aria-label="Spawn ${i + 1}"></button>`
+    })
+    .join('')
+
+  root.innerHTML = `
+    <div class="menu-panel menu-panel-wide menu-panel-spawn">
+      <p class="menu-kicker">Respawn</p>
+      <h1 class="menu-title">Deploy ${tank.name}</h1>
+      <p class="menu-sub">Select a ${nationByTeam(team).short} spawn point.</p>
+      <div class="spawn-map-wrap">
+        <div class="spawn-map" style="width:${svgW}px;height:${svgH}px">
+          <div class="spawn-map-grid"></div>
+          ${draft.gameMode === 'koth' ? `<div class="spawn-hill" style="left:50%;top:50%"></div>` : ''}
+          ${dots}
+        </div>
+      </div>
+      <p class="spawn-picked" data-picked>No spawn selected</p>
+      <div class="menu-nav-row">
+        <button type="button" class="deploy-btn" data-deploy disabled>Enter battle</button>
+      </div>
+    </div>
+  `
+  const picked = root.querySelector('[data-picked]') as HTMLElement
+  const deploy = root.querySelector('[data-deploy]') as HTMLButtonElement
+  root.querySelectorAll('.spawn-dot').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      root.querySelectorAll('.spawn-dot').forEach((el) => el.classList.remove('is-selected'))
+      btn.classList.add('is-selected')
+      spawnIndex = Number((btn as HTMLElement).dataset.index)
+      picked.textContent = `Spawn ${spawnIndex + 1}`
+      deploy.disabled = false
+    })
+  })
+  deploy.addEventListener('click', () => {
+    if (spawnIndex === null) return
+    done({ tankId, spawnIndex })
   })
 }
 

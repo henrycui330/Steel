@@ -81,10 +81,13 @@ export type BombOptions = {
   heightAt: HeightSampler
   bounds: { x: number; z: number }
   velocity: THREE.Vector3
+  /** Override bay size (fighters default 2; bombers pass more). */
+  bombCount?: number
 }
 
 export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   const { scene, root, heightAt, bounds, velocity } = opts
+  const capacity = Math.max(1, Math.floor(opts.bombCount ?? BOMB_COUNT))
 
   const bombGeo = new THREE.CapsuleGeometry(0.19, 1.0, 4, 8)
   const bombMat = new THREE.MeshStandardMaterial({
@@ -119,12 +122,16 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   scene.add(sight)
 
   const bombs: Bomb[] = []
-  let remaining = BOMB_COUNT
+  let remaining = capacity
   let gap = 0
   let sightOn = true
   let onKill: ((victim: THREE.Object3D) => void) | null = null
   let onRelease: ((bomb: BombHandle) => void) | null = null
   let onDetonate: ((at: THREE.Vector3) => void) | null = null
+
+  if (capacity > BOMB_COUNT) {
+    console.info(`[Steel] Bomb bay armed · ${capacity} bombs`)
+  }
 
   const pred: BombPrediction = {
     point: new THREE.Vector3(),
@@ -353,7 +360,7 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     remaining: () => remaining,
     inFlight: () => bombs.length,
     refill() {
-      remaining = BOMB_COUNT
+      remaining = capacity
       gap = 0
     },
     setOnKill: (fn) => {

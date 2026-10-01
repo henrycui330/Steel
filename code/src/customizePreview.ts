@@ -1,8 +1,9 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { TankCosmetics } from './cosmetics'
+import { loadPlayerAircraft, type AircraftHandle } from './loadAircraft'
 import { loadTankChassis } from './loadTank'
-import type { TankId } from './tankCatalog'
+import { tankOptionById, type TankId } from './tankCatalog'
 import { applyTankWrap } from './wraps'
 
 export type CustomizePreview = {
@@ -18,6 +19,7 @@ const DEFAULT_YAW = Math.PI * 0.2
 
 /**
  * Embedded Three.js showroom — orbit + manual X/Y/Z rotation sliders.
+ * Aircraft use `loadPlayerAircraft` (never the tank turret pipeline).
  */
 export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   const canvas = document.createElement('canvas')
@@ -35,17 +37,17 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   renderer.shadowMap.enabled = true
 
   const scene = new THREE.Scene()
-  scene.fog = new THREE.Fog(0x1a2228, 18, 42)
+  scene.fog = new THREE.Fog(0x1a2228, 18, 80)
 
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.2, 80)
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.2, 200)
   camera.position.set(6.5, 3.2, 7.5)
 
   const controls = new OrbitControls(camera, canvas)
   controls.enablePan = false
   controls.enableDamping = true
   controls.dampingFactor = 0.08
-  controls.minDistance = 4
-  controls.maxDistance = 16
+  controls.minDistance = 3
+  controls.maxDistance = 48
   controls.maxPolarAngle = Math.PI * 0.49
   controls.target.set(0, 1.1, 0)
   controls.update()
@@ -60,7 +62,7 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   scene.add(new THREE.AmbientLight(0xb0b8c0, 0.35))
 
   const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(10, 48),
+    new THREE.CircleGeometry(28, 48),
     new THREE.MeshStandardMaterial({
       color: 0x3a4238,
       roughness: 0.92,
@@ -72,12 +74,14 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   scene.add(ground)
 
   let tankRoot: THREE.Object3D | null = null
+  let airHandle: AircraftHandle | null = null
   let tankId: TankId | null = null
   let draft: TankCosmetics = { wrapId: 'stock' }
   let rot = { x: 0, y: DEFAULT_YAW, z: 0 }
   let loadGen = 0
   let disposed = false
   let raf = 0
+  let lastT = performance.now()
 
   function resize(): void {
     const w = Math.max(1, host.clientWidth)
@@ -94,6 +98,10 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   function tick(): void {
     if (disposed) return
     raf = requestAnimationFrame(tick)
+    const now = performance.now()
+    const dt = Math.min(0.05, (now - lastT) / 1000)
+    lastT = now
+    if (airHandle) airHandle.spinProp(dt, 0.35)
     controls.update()
     renderer.render(scene, camera)
   }
@@ -103,12 +111,18 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
     if (!tankRoot) return
     scene.remove(tankRoot)
     tankRoot = null
+    airHandle = null
   }
 
   function applyRot(): void {
     if (!tankRoot) return
     tankRoot.rotation.order = 'XYZ'
     tankRoot.rotation.set(rot.x, rot.y, rot.z)
+    if (airHandle) {
+      tankRoot.updateMatrixWorld(true)
+      const box = new THREE.Box3().setFromObject(tankRoot)
+      tankRoot.position.y -= box.min.y
+    }
   }
 
   function frameCamera(root: THREE.Object3D): void {
@@ -123,6 +137,8 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
       center.y + dist * 0.45,
       center.z + dist * 0.85,
     )
+    controls.minDistance = Math.max(2, span * 0.55)
+    controls.maxDistance = Math.max(24, span * 4.5)
     controls.update()
   }
 
@@ -130,18 +146,41 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
     const gen = ++loadGen
     host.dataset.loading = '1'
     try {
-      const handle = await loadTankChassis(id)
-      if (disposed || gen !== loadGen) return
+      const opt = tankOptionById(id)
       clearTank()
-      await applyTankWrap(handle.root, cos.wrapId)
-      handle.root.position.set(0, 0, 0)
-      scene.add(handle.root)
-      tankRoot = handle.root
-      tankId = id
-      draft = { wrapId: cos.wrapId }
-      applyRot()
-      if (resetCam) frameCamera(handle.root)
-      console.info(`[Steel] Customize preview ${id} wrap=${cos.wrapId}`)
+      if (opt.aircraft) {
+        const air = await loadPlayerAircraft(id)
+        if (disposed || gen !== loadGen) return
+        // Flight rig centres origin in the fuselage — plant so belly sits on the pad.
+        air.root.position.set(0, 0, 0)
+        scene.add(air.root)
+        air.root.updateMatrixWorld(true)
+        const box = new THREE.Box3().setFromObject(air.root)
+        air.root.position.y -= box.min.y
+        tankRoot = air.root
+        airHandle = air
+        tankId = id
+        draft = { wrapId: cos.wrapId }
+        applyRot()
+        // Re-plant after rotation (yaw can change AABB min.y slightly)
+        air.root.updateMatrixWorld(true)
+        const box2 = new THREE.Box3().setFromObject(air.root)
+        air.root.position.y -= box2.min.y
+        if (resetCam) frameCamera(air.root)
+        console.info(`[Steel] Customize preview aircraft ${id}`)
+      } else {
+        const handle = await loadTankChassis(id)
+        if (disposed || gen !== loadGen) return
+        await applyTankWrap(handle.root, cos.wrapId)
+        handle.root.position.set(0, 0, 0)
+        scene.add(handle.root)
+        tankRoot = handle.root
+        tankId = id
+        draft = { wrapId: cos.wrapId }
+        applyRot()
+        if (resetCam) frameCamera(handle.root)
+        console.info(`[Steel] Customize preview ${id} wrap=${cos.wrapId}`)
+      }
     } catch (err) {
       console.warn('[Steel] Customize preview load failed', id, err)
     } finally {
@@ -157,9 +196,17 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
     async applyDraft(cos, opts) {
       const wrapChanged = cos.wrapId !== draft.wrapId
       draft = { wrapId: cos.wrapId }
-      if (!tankRoot || tankId === null || wrapChanged || opts?.reloadChassis) {
-        if (tankId) await mount(tankId, draft, false)
+      if (!tankId) return
+      if (tankOptionById(tankId).aircraft) {
+        // Aircraft hangar ignores wraps for now
         return
+      }
+      if (opts?.reloadChassis || !tankRoot) {
+        await mount(tankId, cos, false)
+        return
+      }
+      if (wrapChanged && tankRoot) {
+        await applyTankWrap(tankRoot, cos.wrapId)
       }
     },
     setRotation(x, y, z) {
@@ -175,8 +222,6 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
       ro.disconnect()
       clearTank()
       controls.dispose()
-      ground.geometry.dispose()
-      ;(ground.material as THREE.Material).dispose()
       renderer.dispose()
       canvas.remove()
     },

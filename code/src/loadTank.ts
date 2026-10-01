@@ -149,6 +149,228 @@ function prepareChaffee(root: THREE.Object3D): boolean {
 }
 
 /**
+ * Cromwell IV — named hull001 / turret001 / weapon001 (Three.js strips dots).
+ * Pack faces +X; bake −90° so nose is game +Z.
+ */
+function prepareCromwell(root: THREE.Object3D): boolean {
+  const turret =
+    root.getObjectByName('turret001') ?? root.getObjectByName('turret.001')
+  const barrel =
+    root.getObjectByName('weapon001') ?? root.getObjectByName('weapon.001')
+  const hull = root.getObjectByName('hull001') ?? root.getObjectByName('hull.001')
+  if (!turret || !barrel) return false
+  let isCromwell = false
+  root.traverse((o) => {
+    if (/cromwell/i.test(o.name)) isCromwell = true
+  })
+  if (!isCromwell) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  for (const n of [
+    'mount001',
+    'mount.001',
+    'turret_lens',
+    'turret lens',
+    'interior_turret',
+    'interior turret',
+    'hatch2b',
+    'hatch2001',
+    'hatch2.001',
+    'hatchb',
+    'hatch001',
+    'hatch.001',
+    'weapon2001',
+    'weapon2.001',
+  ]) {
+    const extra = root.getObjectByName(n)
+    if (extra && extra !== turret && extra !== barrel) turret.attach(extra)
+  }
+  barrel.name = 'Barrel'
+  console.info('[Steel] Cromwell IV: hull001 + turret001 + weapon001 (−90° Y)')
+  return true
+}
+
+/**
+ * Churchill VII — named Hull/Turret/Barrel. Pack faces +X; bake −90° → +Z.
+ */
+function prepareChurchill(root: THREE.Object3D): boolean {
+  if (!root.getObjectByName('Churchill_VII')) return false
+  const turret = root.getObjectByName('Churchill_VII_Turret')
+  const barrel = root.getObjectByName('Churchill_VII_Barrel')
+  const hull = root.getObjectByName('Churchill_VII_Hull')
+  if (!turret || !barrel) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+  console.info('[Steel] Churchill VII: Hull/Turret/Barrel (−90° Y)')
+  return true
+}
+
+/**
+ * Conqueror (FV214) — Object_48 turret + Object_51 120mm tube + Object_45 hull.
+ * Gun tip at −Z; bake 180° so nose is game +Z.
+ */
+function prepareConqueror(root: THREE.Object3D): boolean {
+  let isConqueror = false
+  root.traverse((o) => {
+    if (/conqueror/i.test(o.name)) isConqueror = true
+  })
+  if (!isConqueror) return false
+  const turret = root.getObjectByName('Object_48')
+  const barrel = root.getObjectByName('Object_51')
+  const hull = root.getObjectByName('Object_45')
+  if (!(turret instanceof THREE.Mesh) || !(barrel instanceof THREE.Mesh)) return false
+
+  root.rotation.y = Math.PI
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+  console.info('[Steel] Conqueror: Object_45 hull + Object_48 turret + Object_51 barrel (180° Y)')
+  return true
+}
+
+/**
+ * Challenger 3 — named hull/turret/weapon (+RWS weapon2). Gun tip +X → −90° Y.
+ * Must run before prepareAbrams (same turret/weapon names).
+ */
+function prepareChallenger3(root: THREE.Object3D): boolean {
+  let isC3 = false
+  root.traverse((o) => {
+    if (/challenger[_\s.-]*3/i.test(o.name)) isC3 = true
+  })
+  if (!isC3) return false
+  const turret = root.getObjectByName('turret')
+  const weapon = root.getObjectByName('weapon')
+  const hull = root.getObjectByName('hull')
+  if (!turret || !weapon) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  weapon.name = 'Barrel'
+
+  for (const n of [
+    'smokej-model',
+    'smokeh-model',
+    'smokei-model',
+    'smokeg-model',
+    'smokef-model',
+    'smoke-model',
+    'smokec-model',
+    'smokeb-model',
+    'smoked-model',
+    'smokee-model',
+    'trophy',
+    'stand',
+    'mount2',
+    'weapon2',
+    'ammobox',
+    'clip',
+    'turret_interior',
+    'basegranades',
+    'antenna',
+    'antenna2',
+    'antenna3',
+    'periscopes',
+    'mount',
+    'weapon3',
+    'sensorfront',
+    'sensorback',
+    'hatch',
+    'hatch2',
+  ]) {
+    const o = root.getObjectByName(n)
+    if (o && o !== turret && o !== weapon) turret.attach(o)
+  }
+  if (hull) {
+    for (const n of [
+      'skirts',
+      'bowobjects',
+      'guard',
+      'frontlights',
+      'back_len',
+      'back_len2',
+      'toolbox',
+      'toolbox2',
+      'fireexting',
+      'track',
+      'track2',
+      'fueltank2',
+      'hull_lens',
+      'cable2',
+      'exhaust_model',
+      'exhaust_model2',
+      'interior-hull',
+      'hatch3',
+      'wheel',
+      'wheel2',
+      'wheel3',
+      'wheel4',
+      'wheel5',
+      'wheel6',
+      'wheel7',
+      'wheel8',
+      'wheel9',
+      'wheel10',
+      'wheel11',
+      'wheel12',
+      'wheel13',
+      'wheel14',
+      'wheel15',
+      'wheel16',
+    ]) {
+      const o = root.getObjectByName(n)
+      if (o && o !== hull) hull.attach(o)
+    }
+  }
+
+  console.info('[Steel] Challenger 3: hull + turret + weapon (−90° Y)')
+  return true
+}
+
+/**
+ * Challenger 2 Mk.3 — Object_5 turret + Object_6 L30 tube (gun tip −X).
+ * Bake +90° so nose is game +Z.
+ * Three.js sanitizes Sketchfab titles to Challenger_2_Mk3_… (underscore).
+ */
+function prepareChallenger2(root: THREE.Object3D): boolean {
+  let isC2 = false
+  root.traverse((o) => {
+    if (/challenger[_\s.-]*2/i.test(o.name)) isC2 = true
+  })
+  if (!isC2) return false
+  const turret = root.getObjectByName('Object_5')
+  const barrel = root.getObjectByName('Object_6')
+  const hull = root.getObjectByName('Object_3')
+  if (!(turret instanceof THREE.Mesh) || !(barrel instanceof THREE.Mesh)) return false
+
+  root.rotation.y = Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  const cupola = root.getObjectByName('Object_15')
+  if (cupola) turret.attach(cupola)
+  const upper = root.getObjectByName('Object_14')
+  if (upper) turret.attach(upper)
+  barrel.name = 'Barrel'
+  console.info('[Steel] Challenger 2: Object_5 turret + Object_6 barrel (+90° Y)')
+  return true
+}
+
+/**
  * Peel triangles matching `keep` into a sibling mesh (same local xform).
  */
 function extractMeshRegion(
@@ -733,12 +955,12 @@ function prepareAbrams(root: THREE.Object3D): boolean {
   const turret = root.getObjectByName('turret')
   const weapon = root.getObjectByName('weapon')
   if (!turret || !weapon) return false
-  // T-72 Ural uses the same node names — leave that path alone.
-  let isT72 = false
+  // T-72 Ural / Challenger 3 share turret+weapon names — leave those paths alone.
+  let skip = false
   root.traverse((o) => {
-    if (/t-?72|ural/i.test(o.name)) isT72 = true
+    if (/t-?72|ural|challenger/i.test(o.name)) skip = true
   })
-  if (isT72) return false
+  if (skip) return false
   // Old free Sketchfab pack used Object_* only — leave that path alone.
   if (root.getObjectByName('Object_5') instanceof THREE.Mesh) return false
 
@@ -1299,10 +1521,15 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareT3476(model) ||
       prepareT44(model) ||
       prepareT34(model) ||
+      prepareChallenger3(model) ||
       prepareAbrams(model) ||
       prepareDuster(model) ||
       preparePershing(model) ||
       prepareShermanFirefly(model) ||
+      prepareChallenger2(model) ||
+      prepareConqueror(model) ||
+      prepareChurchill(model) ||
+      prepareCromwell(model) ||
       prepareChaffee(model) ||
       prepareToshueyiPz4(model)
   }
@@ -1337,9 +1564,14 @@ function loadGltfSceneClone(url: string): Promise<THREE.Object3D> {
   return cloneGltfScene(url)
 }
 
-/** Chassis only — stock paint. Used by AI and MP remotes. */
+/** Chassis only — stock paint. Used by AI and MP remotes. Not for aircraft. */
 export async function loadTankChassis(id: TankId): Promise<PlayerTankHandle> {
   const option = tankOptionById(id)
+  if (option.aircraft) {
+    throw new Error(
+      `[Steel] loadTankChassis refused for aircraft "${id}" — use loadPlayerAircraft`,
+    )
+  }
   try {
     return await loadGltf(option.url, option.targetWidth, !!option.rigidRig)
   } catch (err) {

@@ -14,6 +14,15 @@ PzH 2000
     M1 Abrams
     P-51 Mustang
     F-16A Fighting Falcon
+Britain:
+ Cromwell IV
+ Churchill VII
+ Conqueror
+ Challenger 2
+ Challenger 3
+ Spitfire Mk.IIa
+ F-35B Lightning II
+ Tornado GR4
 Soviet:
  T-34-76
  T-34-85

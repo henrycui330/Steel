@@ -4,6 +4,7 @@ import { loadGltfCached } from './loadGltf'
 import { ammoById, cloneAmmoStock, DEFAULT_AMMO_STOCK, type AmmoId, type WeaponId, type AmmoDef, type AmmoStock } from './ammo'
 import {
   integrateShell,
+  SHELL_GRAVITY,
   SHELL_RADIUS,
   SHELL_SPEED,
   type HeightSampler,
@@ -79,7 +80,11 @@ type RocketTrailPuff = {
 const ROCKET_TRAIL_SPACING = 3.2
 const ROCKET_TRAIL_LIFE = 1.55
 const ROCKET_TRAIL_BURST = 2
-const ROCKET_MAX_TRAIL = 56
+/** Boom1 — thinner spaced trail for tank AP/HE (shared puff pool). */
+const SHELL_TRAIL_SPACING = 5.2
+const SHELL_TRAIL_LIFE = 0.95
+const SHELL_TRAIL_BURST = 1
+const PROJECTILE_MAX_TRAIL = 64
 
 type PendingShot = {
   remaining: number
@@ -271,6 +276,22 @@ export function createFireSystem(
     opacity: 0.78,
     depthWrite: false,
   })
+  /** Cooler / thinner trail for AP; HE can use a warm tint. */
+  const shellTrailSmokeMat = new THREE.MeshBasicMaterial({
+    color: 0xc8c4b8,
+    transparent: true,
+    opacity: 0.48,
+    depthWrite: false,
+  })
+  const shellTrailHotMat = new THREE.MeshBasicMaterial({
+    color: 0xffb060,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  })
+
+  console.info(`[Steel] Boom1 · gravity=${SHELL_GRAVITY} · AP/HE trail`)
+
   const _rocketBack = new THREE.Vector3()
   const _rocketSide = new THREE.Vector3()
   let shellTemplate: THREE.Group | null = null
@@ -395,7 +416,7 @@ export function createFireSystem(
   }
 
   function emitRocketTrail(shell: Shell, hot: boolean): void {
-    while (rocketTrails.length >= ROCKET_MAX_TRAIL) {
+    while (rocketTrails.length >= PROJECTILE_MAX_TRAIL) {
       killRocketTrail(rocketTrails[0]!)
       rocketTrails.shift()
     }
@@ -407,7 +428,7 @@ export function createFireSystem(
     else _rocketSide.normalize()
 
     for (let i = 0; i < ROCKET_TRAIL_BURST; i++) {
-      if (rocketTrails.length >= ROCKET_MAX_TRAIL) break
+      if (rocketTrails.length >= PROJECTILE_MAX_TRAIL) break
       const matInst = (hot ? rocketTrailHotMat : rocketTrailSmokeMat).clone()
       const mesh = new THREE.Mesh(rocketTrailGeo, matInst)
       const aft = 0.55 + Math.random() * 1.2 + i * 0.4
@@ -431,6 +452,49 @@ export function createFireSystem(
         mesh,
         age: 0,
         life: ROCKET_TRAIL_LIFE * (0.7 + Math.random() * 0.45),
+        drift,
+      })
+    }
+  }
+
+  /** Boom1 — lighter aft smoke for tank AP/HE (not MG). */
+  function emitShellTrail(shell: Shell, hot: boolean): void {
+    while (rocketTrails.length >= PROJECTILE_MAX_TRAIL) {
+      killRocketTrail(rocketTrails[0]!)
+      rocketTrails.shift()
+    }
+    _rocketBack.copy(shell.velocity)
+    if (_rocketBack.lengthSq() < 1e-8) _rocketBack.set(0, 0, -1)
+    else _rocketBack.normalize().multiplyScalar(-1)
+    _rocketSide.set(_rocketBack.z, 0, -_rocketBack.x)
+    if (_rocketSide.lengthSq() < 1e-8) _rocketSide.set(1, 0, 0)
+    else _rocketSide.normalize()
+
+    for (let i = 0; i < SHELL_TRAIL_BURST; i++) {
+      if (rocketTrails.length >= PROJECTILE_MAX_TRAIL) break
+      const matInst = (hot ? shellTrailHotMat : shellTrailSmokeMat).clone()
+      const mesh = new THREE.Mesh(rocketTrailGeo, matInst)
+      const aft = 0.35 + Math.random() * 0.55
+      const spray = (Math.random() - 0.5) * 0.35
+      mesh.position
+        .copy(shell.mesh.position)
+        .addScaledVector(_rocketBack, aft)
+        .addScaledVector(_rocketSide, spray)
+      mesh.position.y += (Math.random() - 0.4) * 0.2
+      mesh.scale.setScalar((hot ? 0.28 : 0.38) + Math.random() * 0.22)
+      mesh.frustumCulled = true
+      scene.add(mesh)
+
+      const drift = _rocketBack
+        .clone()
+        .multiplyScalar(0.6 + Math.random() * 1.2)
+        .addScaledVector(_rocketSide, (Math.random() - 0.5) * 0.8)
+      drift.y += 0.15 + Math.random() * 0.45
+
+      rocketTrails.push({
+        mesh,
+        age: 0,
+        life: SHELL_TRAIL_LIFE * (0.75 + Math.random() * 0.35),
         drift,
       })
     }
@@ -546,6 +610,9 @@ export function createFireSystem(
     if (isRocket) {
       emitRocketTrail(shell, true)
       emitRocketTrail(shell, true)
+    } else if (!isMg) {
+      // Boom1 — one muzzle puff so the shell path reads immediately.
+      emitShellTrail(shell, shell.ammoId === 'he')
     }
   }
 
@@ -1053,13 +1120,14 @@ export function createFireSystem(
         shell.age += dt
         shell.accum += dt
         const isRocket = shell.mesh.name === 'rocket'
+        const wantsTrail = isRocket || shell.ammoId !== 'mg'
         let stepDist = 0
 
         let removed = false
         while (shell.accum >= SHELL_SUBSTEP) {
           shell.accum -= SHELL_SUBSTEP
           integrateShell(shell.mesh.position, shell.velocity, SHELL_SUBSTEP)
-          if (isRocket) stepDist += shell.velocity.length() * SHELL_SUBSTEP
+          if (wantsTrail) stepDist += shell.velocity.length() * SHELL_SUBSTEP
 
           if (hitGround(shell.mesh.position, shell.hitRadius)) {
             if (isRocket) detonateRocket(shell.mesh.position)
@@ -1089,11 +1157,18 @@ export function createFireSystem(
         }
         if (removed) continue
 
-        if (isRocket && stepDist > 0) {
+        if (wantsTrail && stepDist > 0) {
           shell.trailBudget += stepDist
-          while (shell.trailBudget >= ROCKET_TRAIL_SPACING) {
-            shell.trailBudget -= ROCKET_TRAIL_SPACING
-            emitRocketTrail(shell, Math.random() < 0.4)
+          if (isRocket) {
+            while (shell.trailBudget >= ROCKET_TRAIL_SPACING) {
+              shell.trailBudget -= ROCKET_TRAIL_SPACING
+              emitRocketTrail(shell, Math.random() < 0.4)
+            }
+          } else {
+            while (shell.trailBudget >= SHELL_TRAIL_SPACING) {
+              shell.trailBudget -= SHELL_TRAIL_SPACING
+              emitShellTrail(shell, shell.ammoId === 'he' && Math.random() < 0.35)
+            }
           }
         }
 
@@ -1153,6 +1228,8 @@ export function createFireSystem(
       rocketTrailGeo.dispose()
       rocketTrailSmokeMat.dispose()
       rocketTrailHotMat.dispose()
+      shellTrailSmokeMat.dispose()
+      shellTrailHotMat.dispose()
       if (shellTemplate) {
         disposeObject(shellTemplate)
         shellTemplate = null

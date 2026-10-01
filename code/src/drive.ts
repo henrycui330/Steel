@@ -12,6 +12,10 @@ export type DriveControls = {
 
 export type DriveController = {
   getSpeed: () => number
+  /** Smoothed throttle −1…+1 (for engine / immersion). */
+  getThrottle: () => number
+  /** Vertical ride velocity (m/s) — bumps / landings. */
+  getRideVel: () => number
   /** True while crest-flying / hang above terrain. */
   isAirborne: () => boolean
   /** Instant zero speed (prop / wall hard-stop). */
@@ -44,29 +48,36 @@ const RELIEF_AMP = 0.045
 /** How much corner-sample pitch/roll reaches the hull (0–1). */
 const TERRAIN_TILT_BLEND = 0.45
 /** TP1b — max bank into a turn (rad), scaled by speed. */
-const TURN_LEAN_MAX = (3.2 * Math.PI) / 180
+const TURN_LEAN_MAX = (4.8 * Math.PI) / 180
 /** Brake dive stronger than throttle squat (multiplies catalog tiltFromAccel). */
-const BRAKE_DIVE_MUL = 2.1
-const THROTTLE_SQUAT_MUL = 1.15
+const BRAKE_DIVE_MUL = 2.55
+const THROTTLE_SQUAT_MUL = 1.35
 /** Extra pitch clamp headroom for dive/squat vs catalog tiltMax. */
-const ACCEL_PITCH_HEADROOM = 1.25
+const ACCEL_PITCH_HEADROOM = 1.35
 /** How fast turn-lean eases in/out (slightly snappier than terrain). */
-const LEAN_SMOOTH = 9
+const LEAN_SMOOTH = 8
 /** TP1c — throttle catches power (1/s exp rate). */
-const THROTTLE_ENGAGE = 6.5
+const THROTTLE_ENGAGE = 5.2
 /** TP1c — throttle falls off slower → coast inertia. */
-const THROTTLE_RELEASE = 3.2
+const THROTTLE_RELEASE = 2.15
 /** TP1c — brake snuffs throttle fast (still responsive). */
-const THROTTLE_BRAKE = 14
+const THROTTLE_BRAKE = 12
 /** TP1c — coast drag multiplier (<1 = longer glide). */
-const COAST_INERTIA = 0.68
+const COAST_INERTIA = 0.42
 /** Deadzone on smoothed throttle. */
 const THROTTLE_EPS = 0.03
 /**
  * Global arcade pace — catalog maxSpeed/accel stay relative; this is the
  * “feel like SPEED” knob without retuning every chassis.
  */
-export const SPEED_FEEL = 1.48
+export const SPEED_FEEL = 1.42
+/**
+ * At full speed, turn authority falls toward this fraction of catalog turnRate
+ * (WT: heavy chassis won't pivot at pace).
+ */
+const TURN_AT_SPEED = 0.32
+/** Exponent on speedRatio for turn falloff (>1 = stays agile longer, then dumps). */
+const TURN_SPEED_EXP = 1.55
 /** Airborne gravity (m/s²) while crest-flying. */
 const AIR_GRAVITY = 26
 /** Max meters above terrain while airborne. */
@@ -140,11 +151,13 @@ export function createDriveController(profile: DriveProfile): DriveController {
   }
 
   console.info(
-    `[Steel] Drive — SPEED_FEEL×${SPEED_FEEL} · crest hop · throttle engage=${THROTTLE_ENGAGE} release=${THROTTLE_RELEASE} · coast×${COAST_INERTIA}`,
+    `[Steel] Drive — WT mass · SPEED_FEEL×${SPEED_FEEL} · coast×${COAST_INERTIA} · turn@speed×${TURN_AT_SPEED}`,
   )
 
   return {
     getSpeed: () => speed,
+    getThrottle: () => throttle,
+    getRideVel: () => rideVel,
     isAirborne: () => airborne,
     killSpeed() {
       speed = 0
@@ -214,7 +227,9 @@ export function createDriveController(profile: DriveProfile): DriveController {
         speed = 0
       }
       const speedRatio = Math.min(1, Math.abs(speed) / Math.max(capFwd, 0.01))
-      const turnAuthority = THREE.MathUtils.lerp(turnInPlace, 1, speedRatio)
+      // Heavy at pace — agile when crawling / neutral steer.
+      const turnSpeedT = Math.pow(speedRatio, TURN_SPEED_EXP)
+      const turnAuthority = THREE.MathUtils.lerp(turnInPlace, TURN_AT_SPEED, turnSpeedT)
       // Rain: slightly less grip when turning
       const turnGrip = slip > 0 ? 1 - slip * 0.25 : 1
       if (turn !== 0) {

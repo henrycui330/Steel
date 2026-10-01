@@ -3,7 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { estimatePropCollider, type PropCollider } from '../collision'
 import { assetUrl } from '../assetUrl'
 import { loadGltfCached, preloadUrls } from '../loadGltf'
-import { createAsphaltTexture, createPineForestFloorTexture } from '../textures'
+import { createAsphaltTexture, createGravelShoulderTexture, createPineForestFloorMaps, sampleForestGroundTint } from '../textures'
 
 /** Playable arena — width (X) × depth/height (Z). */
 export const FOREST_OVERWATCH_WIDTH = 750
@@ -65,23 +65,27 @@ export type ForestMapLoadResult = {
 
 const PINE_URL = assetUrl('maps/props/pine_tree.glb')
 const RUIN_HOUSE_URL = assetUrl('maps/props/ruined_house_low_poly.glb')
+const WORN_SHED_URL = assetUrl('maps/props/worn_shed.glb')
 const FANCY_CAR_URL = assetUrl('maps/props/fancy_cardestroyed.glb')
+const DESTROYED_CAR_URL = assetUrl('maps/props/destroyed_car.glb')
 const ROCKS_URL = assetUrl('maps/props/stylised_rocks_asset_pack.glb')
-const SANDBAGS_URL = assetUrl('maps/props/sandbags_defense_line.glb')
 
 export const FOREST_PROP_URLS: readonly string[] = [
   PINE_URL,
   RUIN_HOUSE_URL,
+  WORN_SHED_URL,
   FANCY_CAR_URL,
+  DESTROYED_CAR_URL,
   ROCKS_URL,
-  SANDBAGS_URL,
 ]
 /** Kept moderate — pines share 1–2 merged meshes via InstancedMesh. */
-const TREE_COUNT = 144
-/** Individual rock instances (clustered into small cliff piles). */
-const ROCK_COUNT = 56
+const TREE_COUNT = 168
+/** Individual rock instances (clustered into small cliff piles + field scatter). */
+const ROCK_COUNT = 120
 /** How many unique Plain_Rock meshes to keep as instance templates. */
 const ROCK_TEMPLATE_COUNT = 8
+/** Cap mid-distance wrecks (fancy + destroyed). */
+const WRECK_CAP = 14
 const CLEAR_SPAWN_HALF_X = 70
 const CLEAR_SPAWN_Z = 820
 
@@ -138,6 +142,106 @@ const ROAD_CTRL: readonly (readonly RoadPt[])[] = [
 ]
 
 const ROAD_WIDTH = 14
+/** Gravel shoulder wider than asphalt (Vision V5a). */
+const ROAD_SKIRT_WIDTH = ROAD_WIDTH + 10
+/** Tire track half-spacing from centerline (Vision V5b). */
+const ROAD_RUT_HALF = 1.15
+const ROAD_RUT_WIDTH = 0.55
+
+type ContactSpot = { x: number; z: number; radius: number }
+
+/** Soft radial disc under props — read as contact AO without real shadow maps. */
+function createContactBlobTexture(): THREE.CanvasTexture {
+  const size = 64
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const ctx = c.getContext('2d')!
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  g.addColorStop(0, 'rgba(0,0,0,0.62)')
+  g.addColorStop(0.28, 'rgba(0,0,0,0.32)')
+  g.addColorStop(0.62, 'rgba(0,0,0,0.1)')
+  g.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+  const tex = new THREE.CanvasTexture(c)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.magFilter = THREE.LinearFilter
+  tex.minFilter = THREE.LinearFilter
+  return tex
+}
+
+function placeContactBlobs(root: THREE.Group, spots: ContactSpot[]): number {
+  if (spots.length === 0) return 0
+  const geo = new THREE.PlaneGeometry(1, 1)
+  geo.rotateX(-Math.PI / 2)
+  const mat = new THREE.MeshBasicMaterial({
+    map: createContactBlobTexture(),
+    transparent: true,
+    opacity: 0.9,
+    depthWrite: false,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  })
+  const mesh = new THREE.InstancedMesh(geo, mat, spots.length)
+  mesh.name = 'forestContactBlobs'
+  mesh.renderOrder = 2
+  mesh.frustumCulled = true
+  mesh.matrixAutoUpdate = false
+  mesh.castShadow = false
+  mesh.receiveShadow = false
+
+  for (let i = 0; i < spots.length; i++) {
+    const s = spots[i]!
+    const y = forestHeightAt(s.x, s.z) + 0.06
+    const d = s.radius * 2
+    _dummy.position.set(s.x, y, s.z)
+    _dummy.rotation.set(0, 0, 0)
+    _dummy.scale.set(d, 1, d)
+    _dummy.updateMatrix()
+    mesh.setMatrixAt(i, _dummy.matrix)
+  }
+  mesh.instanceMatrix.needsUpdate = true
+  root.add(mesh)
+  console.info(`[Steel] V3 contact blobs — ${spots.length} discs`)
+  return spots.length
+}
+
+/**
+ * V3b — darken shoulders / town pads in vertex tint (worn vs deep forest).
+ * Returns 0.75–1 multiplier.
+ */
+function sampleWearMul(x: number, z: number): number {
+  let mul = 1
+
+  const dRoad = distToRoads(x, z)
+  const asphalt = ROAD_WIDTH * 0.5
+  const outer = ROAD_FLAT_HALF + 24
+  if (dRoad < outer) {
+    let wear: number
+    if (dRoad <= asphalt + 1.5) wear = 0.2
+    else {
+      const u = (dRoad - asphalt) / (outer - asphalt)
+      const s = u * u * (3 - 2 * u)
+      wear = 0.2 * (1 - s)
+    }
+    mul *= 1 - wear
+  }
+
+  for (const town of FOREST_TOWNS) {
+    const d = Math.hypot(x - town.x, z - town.z)
+    const outerT = town.radius * 1.02
+    const innerT = town.radius * 0.28
+    if (d < outerT) {
+      const u = d <= innerT ? 1 : 1 - (d - innerT) / (outerT - innerT)
+      mul *= 1 - 0.16 * Math.max(0, u)
+    }
+  }
+
+  return THREE.MathUtils.clamp(mul, 0.72, 1)
+}
 
 function catmull1(p0: number, p1: number, p2: number, p3: number, t: number): number {
   const t2 = t * t
@@ -380,6 +484,7 @@ function bakePineParts(root: THREE.Object3D): PinePart[] {
 async function placePineTrees(
   root: THREE.Group,
   colliders: PropCollider[],
+  contacts: ContactSpot[],
 ): Promise<number> {
   const gltf = await loadGltfCached(PINE_URL)
   const src = gltf.scene
@@ -441,6 +546,11 @@ async function placePineTrees(
       z: pl.z,
       radius: shape.radius,
       maxY: shape.maxY,
+    })
+    contacts.push({
+      x: pl.x,
+      z: pl.z,
+      radius: Math.max(1.8, shape.radius * 1.35),
     })
   }
 
@@ -530,6 +640,7 @@ function bakeRockTemplates(src: THREE.Object3D): RockTemplate[] {
 async function placeCliffRocks(
   root: THREE.Group,
   colliders: PropCollider[],
+  contacts: ContactSpot[],
 ): Promise<number> {
   const gltf = await loadGltfCached(ROCKS_URL)
   const templates = bakeRockTemplates(gltf.scene)
@@ -593,27 +704,30 @@ async function placeCliffRocks(
     }
   }
 
-  // Fill remaining budget with lone mid-size rocks
+  // Fill remaining budget with lone mid/small rocks (plains + hills)
   attempts = 0
-  while (placements.length < ROCK_COUNT && attempts < ROCK_COUNT * 14) {
+  while (placements.length < ROCK_COUNT && attempts < ROCK_COUNT * 16) {
     attempts++
     const x = (rand() - 0.5) * 2 * halfX
     const z = (rand() - 0.5) * 2 * halfZ
     if (blockedForRock(x, z)) continue
-    if (rawRelief(x, z) < 2.0 && rand() > 0.5) continue
+    // V4a: allow flatter plains so chase view isn’t empty between roads
+    const relief = rawRelief(x, z)
+    if (relief < 1.0 && rand() > 0.7) continue
     let ok = true
     for (const p of placements) {
-      if (Math.hypot(x - p.x, z - p.z) < 14) {
+      if (Math.hypot(x - p.x, z - p.z) < 11) {
         ok = false
         break
       }
     }
     if (!ok) continue
+    const small = relief < 2.5 && rand() > 0.4
     placements.push({
       x,
       z,
       yaw: rand() * Math.PI * 2,
-      height: 2.4 + rand() * 3.2,
+      height: small ? 1.1 + rand() * 1.6 : 2.4 + rand() * 3.2,
       template: Math.floor(rand() * templates.length),
       cliff: false,
     })
@@ -662,6 +776,11 @@ async function placeCliffRocks(
       radius: shape.radius,
       maxY: shape.maxY,
     })
+    contacts.push({
+      x: pl.x,
+      z: pl.z,
+      radius: Math.max(2.0, Math.min(5.5, shape.radius * 1.25)),
+    })
   }
 
   console.info(
@@ -676,9 +795,12 @@ function makeRoadRibbon(
   width: number,
   mat: THREE.Material,
   name: string,
+  opts?: { y?: number; lateral?: number },
 ): THREE.Mesh | null {
   if (pts.length < 2) return null
   const half = width * 0.5
+  const y0 = opts?.y ?? ROAD_Y
+  const lateral = opts?.lateral ?? 0
   const n = pts.length
   const positions = new Float32Array(n * 2 * 3)
   const uvs = new Float32Array(n * 2 * 2)
@@ -694,20 +816,25 @@ function makeRoadRibbon(
     const tl = Math.hypot(tx, tz) || 1
     tx /= tl
     tz /= tl
-    const lx = -tz * half
-    const lz = tx * half
+    // Left normal in XZ
+    const nx = -tz
+    const nz = tx
+    const cx = nx * lateral
+    const cz = nz * lateral
+    const lx = nx * half
+    const lz = nz * half
     if (i > 0) dist += Math.hypot(p.x - prev.x, p.z - prev.z)
 
     const iL = i * 2
     const iR = i * 2 + 1
-    positions[iL * 3] = p.x + lx
-    positions[iL * 3 + 1] = ROAD_Y
-    positions[iL * 3 + 2] = p.z + lz
-    positions[iR * 3] = p.x - lx
-    positions[iR * 3 + 1] = ROAD_Y
-    positions[iR * 3 + 2] = p.z - lz
+    positions[iL * 3] = p.x + cx + lx
+    positions[iL * 3 + 1] = y0
+    positions[iL * 3 + 2] = p.z + cz + lz
+    positions[iR * 3] = p.x + cx - lx
+    positions[iR * 3 + 1] = y0
+    positions[iR * 3 + 2] = p.z + cz - lz
 
-    // ~1 tile across width, ~1 tile per 16 m along path (procedural asphalt)
+    // ~1 tile across width, ~1 tile per 16 m along path
     const v = dist / 16
     uvs[iL * 2] = 0
     uvs[iL * 2 + 1] = v
@@ -750,14 +877,46 @@ function loadRoadAsphaltMaterial(): THREE.MeshStandardMaterial {
   })
 }
 
+function loadRoadSkirtMaterial(): THREE.MeshStandardMaterial {
+  const map = createGravelShoulderTexture(1, 1)
+  map.anisotropy = 4
+  return new THREE.MeshStandardMaterial({
+    map,
+    color: 0xb8a890,
+    roughness: 0.97,
+    metalness: 0.02,
+    envMapIntensity: 0,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  })
+}
+
+function loadRoadRutMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0x2a241c,
+    roughness: 0.98,
+    metalness: 0.02,
+    envMapIntensity: 0,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+  })
+}
+
 /**
  * Smooth curved road ribbons (Catmull-Rom densified). Climbable — no colliders.
+ * V5: gravel skirts under asphalt + dual tire ruts.
  */
 async function placeRoads(root: THREE.Group): Promise<{
   tileCount: number
   paths: Array<{ points: Array<{ x: number; z: number }> }>
 }> {
   const mat = loadRoadAsphaltMaterial()
+  const skirtMat = loadRoadSkirtMaterial()
+  const rutMat = loadRoadRutMaterial()
   const edgeMat = new THREE.MeshStandardMaterial({
     color: 0x2a2a2a,
     roughness: 0.96,
@@ -770,25 +929,57 @@ async function placeRoads(root: THREE.Group): Promise<{
   root.add(roads)
 
   let ribbonCount = 0
+  let skirtCount = 0
+  let rutCount = 0
   for (let i = 0; i < ROAD_POLYLINES.length; i++) {
     const line = ROAD_POLYLINES[i]!
+
+    // V5a — gravel/dirt skirt under asphalt (wider, slightly lower)
+    const skirt = makeRoadRibbon(line, ROAD_SKIRT_WIDTH, skirtMat, `roadSkirt_${i}`, {
+      y: ROAD_Y - 0.025,
+    })
+    if (skirt) {
+      roads.add(skirt)
+      skirtCount++
+    }
+
     const ribbon = makeRoadRibbon(line, ROAD_WIDTH, mat, `roadRibbon_${i}`)
     if (ribbon) {
       roads.add(ribbon)
       ribbonCount++
     }
+
     // Narrow darker center stripe
-    const stripe = makeRoadRibbon(line, ROAD_WIDTH * 0.08, edgeMat, `roadStripe_${i}`)
+    const stripe = makeRoadRibbon(line, ROAD_WIDTH * 0.08, edgeMat, `roadStripe_${i}`, {
+      y: ROAD_Y + 0.01,
+    })
     if (stripe) {
-      stripe.position.y = 0.01
       roads.add(stripe)
+    }
+
+    // V5b — soft dual tire ruts (no z-fight vs asphalt via slight lift + polygonOffset)
+    const rutL = makeRoadRibbon(line, ROAD_RUT_WIDTH, rutMat, `roadRutL_${i}`, {
+      y: ROAD_Y + 0.014,
+      lateral: -ROAD_RUT_HALF,
+    })
+    const rutR = makeRoadRibbon(line, ROAD_RUT_WIDTH, rutMat, `roadRutR_${i}`, {
+      y: ROAD_Y + 0.014,
+      lateral: ROAD_RUT_HALF,
+    })
+    if (rutL) {
+      roads.add(rutL)
+      rutCount++
+    }
+    if (rutR) {
+      roads.add(rutR)
+      rutCount++
     }
   }
 
   roads.updateMatrixWorld(true)
   _box.setFromObject(roads)
   console.info(
-    `[Steel] Forest roads — ${ribbonCount} curved ribbons · width ${ROAD_WIDTH}m · bbox ` +
+    `[Steel] Forest roads — ${ribbonCount} asphalt · ${skirtCount} skirts · ${rutCount} ruts · width ${ROAD_WIDTH}m · V5 · bbox ` +
       `x[${_box.min.x.toFixed(0)}…${_box.max.x.toFixed(0)}] z[${_box.min.z.toFixed(0)}…${_box.max.z.toFixed(0)}]`,
   )
 
@@ -901,227 +1092,198 @@ function houseSpots(): PropSpot[] {
 }
 
 /**
- * Ruined houses in all three clearings (Midwood densest).
+ * Town buildings — mix of ruin / brick / low-poly house / worn shed.
  */
 async function placeTownHouses(
   root: THREE.Group,
   colliders: PropCollider[],
+  contacts: ContactSpot[],
 ): Promise<number> {
   const group = new THREE.Group()
   group.name = 'TownHouses'
   root.add(group)
 
-  let count = 0
-  try {
-    const houseGltf = await loadGltfCached(RUIN_HOUSE_URL)
-    const house = prepareRuinPiece(houseGltf.scene)
-    for (const spot of houseSpots()) {
-      if (onAsphalt(spot.x, spot.z)) continue
-      plantRuin(house, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-      count++
+  type HouseTpl = {
+    piece: ReturnType<typeof prepareRuinPiece>
+    label: string
+    h: number
+  }
+  const templates: HouseTpl[] = []
+  const loads: Array<{ url: string; label: string; h: number }> = [
+    { url: RUIN_HOUSE_URL, label: 'ruin', h: 13 },
+    { url: WORN_SHED_URL, label: 'shed', h: 4.6 },
+  ]
+  for (const L of loads) {
+    try {
+      const gltf = await loadGltfCached(L.url)
+      templates.push({
+        piece: prepareRuinPiece(gltf.scene),
+        label: L.label,
+        h: L.h,
+      })
+    } catch (err) {
+      console.warn(`[Steel] House load failed (${L.label})`, err)
     }
-  } catch (err) {
-    console.warn('[Steel] Ruined house failed', err)
+  }
+  if (templates.length === 0) {
+    console.warn('[Steel] Town houses — no templates loaded')
+    return 0
   }
 
-  console.info(`[Steel] Town houses — ${count} ruins (South + Midwood + North)`)
+  let count = 0
+  const spots = houseSpots()
+  for (let i = 0; i < spots.length; i++) {
+    const spot = spots[i]!
+    if (onAsphalt(spot.x, spot.z)) continue
+    const pick = templates[i % templates.length]!
+    // Sheds stay short; houses use ring height scaled to template.
+    const targetH =
+      pick.label === 'shed'
+        ? pick.h + (i % 3) * 0.2
+        : spot.h * (pick.h / 13)
+    plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, targetH)
+    contacts.push({
+      x: spot.x,
+      z: spot.z,
+      radius: Math.max(
+        pick.label === 'shed' ? 3.2 : 4.5,
+        pick.piece.hx * (targetH / pick.piece.height) * 1.05 + 1.0,
+      ),
+    })
+    count++
+  }
+
+  console.info(
+    `[Steel] Town houses — ${count} · templates ${templates.map((t) => t.label).join('+')}`,
+  )
   return count
 }
 
 /**
- * Cut sandbags + guard towers from the labeled defense-line pack (not the whole scene).
- * Parts: Sandbags_Line_*, Sandbags_Cover_*, Sandbags_Watchtower, Sandbags_Defencetower.
+ * Sample road-shoulder spots for wrecks (off asphalt, capped).
  */
-type DefensePiece = {
-  label: string
-  piece: ReturnType<typeof prepareRuinPiece>
-}
-
-function extractDefensePieces(src: THREE.Object3D): {
-  bags: DefensePiece[]
-  towers: DefensePiece[]
-} {
-  const bags: DefensePiece[] = []
-  const towers: DefensePiece[] = []
-  const seen = new Set<string>()
-
-  src.updateMatrixWorld(true)
-  src.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
-    const name = obj.name || ''
-    if (seen.has(name)) return
-
-    let kind: 'bag' | 'tower' | null = null
-    if (/Watchtower|Defencetower/i.test(name)) kind = 'tower'
-    else if (/Sandbags_(Line|Cover)_/i.test(name)) kind = 'bag'
-    if (!kind) return
-    seen.add(name)
-
-    // Detach from pack layout — plant from local geometry alone
-    const holder = new THREE.Group()
-    holder.name = name
-    const clone = obj.clone(true)
-    clone.position.set(0, 0, 0)
-    clone.rotation.set(0, 0, 0)
-    clone.scale.set(1, 1, 1)
-    clone.updateMatrix()
-    holder.add(clone)
-    const piece = prepareRuinPiece(holder)
-    const entry = { label: name, piece }
-    if (kind === 'tower') towers.push(entry)
-    else bags.push(entry)
-  })
-
-  bags.sort((a, b) => a.label.localeCompare(b.label))
-  towers.sort((a, b) => a.label.localeCompare(b.label))
-  console.info(
-    `[Steel] Defense pack cut — bags: ${bags.map((b) => b.label).join(', ') || 'none'} · towers: ${towers.map((t) => t.label).join(', ') || 'none'}`,
-  )
-  return { bags, towers }
-}
-
-/**
- * A few sandbag segments + guard towers at clearing edges / road shoulders.
- */
-async function placeDefenseCuts(
-  root: THREE.Group,
-  colliders: PropCollider[],
-): Promise<{ bags: number; towers: number }> {
-  const group = new THREE.Group()
-  group.name = 'DefenseCuts'
-  root.add(group)
-
-  const south = FOREST_TOWNS.find((t) => t.id === 'south')!
-  const mid = FOREST_TOWNS.find((t) => t.id === 'mid')!
-  const north = FOREST_TOWNS.find((t) => t.id === 'north')!
-
-  let bagN = 0
-  let towerN = 0
-  try {
-    const gltf = await loadGltfCached(SANDBAGS_URL)
-    const { bags, towers } = extractDefensePieces(gltf.scene)
-    if (bags.length === 0 && towers.length === 0) {
-      console.warn('[Steel] Defense pack — no labeled Line/Cover/tower meshes')
-      return { bags: 0, towers: 0 }
+function roadShoulderSpots(
+  count: number,
+  offsetM: number,
+  h: number,
+  seed: number,
+): PropSpot[] {
+  const rand = mulberry32(seed)
+  const spots: PropSpot[] = []
+  const lines = ROAD_POLYLINES
+  if (lines.length === 0) return spots
+  const perLine = Math.max(1, Math.ceil(count / lines.length))
+  for (const line of lines) {
+    if (line.length < 3) continue
+    const step = Math.max(1, Math.floor(line.length / (perLine + 1)))
+    for (let i = step; i < line.length - 1 && spots.length < count; i += step) {
+      const a = line[i]!
+      const b = line[Math.min(i + 1, line.length - 1)]!
+      const dx = b.x - a.x
+      const dz = b.z - a.z
+      const len = Math.hypot(dx, dz) || 1
+      const px = -dz / len
+      const pz = dx / len
+      const sign = spots.length % 2 === 0 ? 1 : -1
+      const off = offsetM * (0.85 + rand() * 0.35) * sign
+      const x = a.x + px * off
+      const z = a.z + pz * off
+      if (onAsphalt(x, z)) continue
+      if (Math.abs(x) > FOREST_OVERWATCH_WIDTH * 0.46) continue
+      if (Math.abs(z) > FOREST_OVERWATCH_DEPTH * 0.46) continue
+      // Skip deep town centers — keep edges / shoulders
+      let deepTown = false
+      for (const town of FOREST_TOWNS) {
+        if (Math.hypot(x - town.x, z - town.z) < town.radius * 0.45) {
+          deepTown = true
+          break
+        }
+      }
+      if (deepTown) continue
+      spots.push({
+        x,
+        z,
+        yaw: Math.atan2(dx, dz) + (rand() - 0.5) * 0.9,
+        h: h * (0.92 + rand() * 0.16),
+      })
     }
-
-    // Sandbag lines / covers — short walls near towns, off asphalt
-    const bagSpots: PropSpot[] = [
-      { x: south.x - 42, z: south.z + 28, yaw: 0.9, h: 1.45 },
-      { x: south.x + 48, z: south.z - 18, yaw: -1.1, h: 1.35 },
-      { x: mid.x + 62, z: mid.z - 38, yaw: 0.35, h: 1.5 },
-      { x: mid.x - 70, z: mid.z + 32, yaw: 2.0, h: 1.4 },
-      { x: mid.x + 22, z: mid.z + 72, yaw: -0.5, h: 1.35 },
-      { x: north.x + 40, z: north.z + 22, yaw: 1.2, h: 1.45 },
-      { x: north.x - 46, z: north.z - 30, yaw: -2.0, h: 1.4 },
-      { x: 72, z: -120, yaw: 0.2, h: 1.3 },
-      { x: -78, z: 140, yaw: 1.7, h: 1.35 },
-    ]
-    for (let i = 0; i < bagSpots.length; i++) {
-      const spot = bagSpots[i]!
-      if (onAsphalt(spot.x, spot.z) || bags.length === 0) continue
-      const pick = bags[i % bags.length]!
-      plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-      bagN++
-    }
-
-    // Guard / defence towers — one-ish per clearing + one roadside
-    const towerSpots: PropSpot[] = [
-      { x: south.x - 68, z: south.z - 8, yaw: 0.4, h: 5.5 },
-      { x: mid.x + 88, z: mid.z + 12, yaw: -1.0, h: 6.2 },
-      { x: north.x - 62, z: north.z + 28, yaw: 2.2, h: 5.8 },
-      { x: -95, z: -280, yaw: 0.8, h: 5.2 },
-    ]
-    for (let i = 0; i < towerSpots.length; i++) {
-      const spot = towerSpots[i]!
-      if (onAsphalt(spot.x, spot.z) || towers.length === 0) continue
-      const pick = towers[i % towers.length]!
-      plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-      towerN++
-    }
-  } catch (err) {
-    console.warn('[Steel] Defense sandbags/towers failed', err)
   }
-
-  console.info(`[Steel] Defense cuts — ${bagN} sandbags, ${towerN} towers`)
-  return { bags: bagN, towers: towerN }
+  return spots
 }
 
 /**
- * Fancy wrecks only — a few on shoulders + town edges.
+ * Wreck scatter on shoulders + town edges (fancy + destroyed, capped).
  */
 async function placeAbandonedCars(
   root: THREE.Group,
   colliders: PropCollider[],
+  contacts: ContactSpot[],
 ): Promise<number> {
   const group = new THREE.Group()
   group.name = 'FancyWrecks'
   root.add(group)
 
-  let piece: ReturnType<typeof prepareRuinPiece>
+  type WreckPiece = { piece: ReturnType<typeof prepareRuinPiece>; h: number }
+  const pieces: WreckPiece[] = []
   try {
-    const gltf = await loadGltfCached(FANCY_CAR_URL)
-    piece = prepareRuinPiece(gltf.scene)
+    const fancy = await loadGltfCached(FANCY_CAR_URL)
+    pieces.push({ piece: prepareRuinPiece(fancy.scene), h: 2.5 })
   } catch (err) {
     console.warn(`[Steel] Fancy car load failed`, err)
-    return 0
   }
+  try {
+    const wreck = await loadGltfCached(DESTROYED_CAR_URL)
+    pieces.push({ piece: prepareRuinPiece(wreck.scene), h: 2.35 })
+  } catch (err) {
+    console.warn(`[Steel] Destroyed car load failed`, err)
+  }
+  if (pieces.length === 0) return 0
 
   const spots: PropSpot[] = [
     { x: 55, z: 35, yaw: -1.2, h: 2.5 },
     { x: -48, z: 508, yaw: 1.4, h: 2.6 },
     { x: 38, z: -508, yaw: 0.6, h: 2.4 },
+    { x: -70, z: -40, yaw: 2.1, h: 2.45 },
+    { x: 82, z: 480, yaw: -0.7, h: 2.4 },
+    ...roadShoulderSpots(10, 17, 2.45, 0xc4a5),
   ]
 
-  const main = ROAD_POLYLINES[0]
-  if (main && main.length > 8) {
-    const a = main[Math.floor(main.length * 0.28)]!
-    const b = main[Math.floor(main.length * 0.28) + 1] ?? a
-    const dx = b.x - a.x
-    const dz = b.z - a.z
-    const len = Math.hypot(dx, dz) || 1
-    const px = -dz / len
-    const pz = dx / len
-    spots.push({
-      x: a.x + px * 16,
-      z: a.z + pz * 16,
-      yaw: Math.atan2(dx, dz) + 0.35,
-      h: 2.5,
-    })
-    const c = main[Math.floor(main.length * 0.72)]!
-    spots.push({
-      x: c.x - px * 16,
-      z: c.z - pz * 16,
-      yaw: Math.atan2(dx, dz) - 0.5,
-      h: 2.45,
-    })
-  }
-
   let count = 0
-  for (const spot of spots) {
+  for (let i = 0; i < spots.length && count < WRECK_CAP; i++) {
+    const spot = spots[i]!
     if (Math.abs(spot.x) > FOREST_OVERWATCH_WIDTH * 0.46) continue
     if (Math.abs(spot.z) > FOREST_OVERWATCH_DEPTH * 0.46) continue
-    plantRuin(piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
+    if (onAsphalt(spot.x, spot.z)) continue
+    const pick = pieces[i % pieces.length]!
+    plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, pick.h)
+    contacts.push({ x: spot.x, z: spot.z, radius: 3.6 })
     count++
   }
 
-  console.info(`[Steel] Fancy wrecks — ${count}`)
+  console.info(`[Steel] Fancy wrecks — ${count}/${WRECK_CAP} · ${pieces.length} templates · V4b`)
   return count
 }
 
 function applyForestFloorMaterial(mat: THREE.MeshStandardMaterial): void {
-  const floor = createPineForestFloorTexture(
+  const floor = createPineForestFloorMaps(
     Math.max(48, FOREST_OVERWATCH_WIDTH / 8),
     Math.max(64, FOREST_OVERWATCH_DEPTH / 12),
   )
-  if (mat.map && mat.map !== floor) {
-    mat.map.dispose()
+  if (mat.map && mat.map !== floor.map) mat.map.dispose()
+  if (mat.normalMap && mat.normalMap !== floor.normalMap) mat.normalMap.dispose()
+  if (mat.roughnessMap && mat.roughnessMap !== floor.roughnessMap) {
+    mat.roughnessMap.dispose()
   }
-  mat.map = floor
-  // Tint toward pine duff (texture carries most of the look)
-  mat.color.setHex(0xc4b89a)
-  mat.roughness = 0.98
-  mat.metalness = 0.0
+  mat.map = floor.map
+  mat.normalMap = floor.normalMap
+  mat.normalScale = new THREE.Vector2(0.78, 0.78)
+  mat.roughnessMap = floor.roughnessMap
+  // Vertex colors multiply this — keep near white so world tint reads.
+  mat.color.setHex(0xffffff)
+  mat.vertexColors = true
+  mat.roughness = 1
+  mat.metalness = 0
+  mat.envMapIntensity = 0.4
   mat.needsUpdate = true
 }
 
@@ -1135,6 +1297,8 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
   )
   geo.rotateX(-Math.PI / 2)
   const pos = geo.attributes.position as THREE.BufferAttribute
+  const colors = new Float32Array(pos.count * 3)
+  const tint = new THREE.Color()
   let minY = Infinity
   let maxY = -Infinity
   for (let i = 0; i < pos.count; i++) {
@@ -1144,14 +1308,21 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
     pos.setY(i, y)
     if (y < minY) minY = y
     if (y > maxY) maxY = y
+    sampleForestGroundTint(x, z, tint)
+    const wear = sampleWearMul(x, z)
+    colors[i * 3] = tint.r * wear
+    colors[i * 3 + 1] = tint.g * wear
+    colors[i * 3 + 2] = tint.b * wear
   }
   pos.needsUpdate = true
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3))
   geo.computeVertexNormals()
 
   const mat = new THREE.MeshStandardMaterial({
-    color: 0xc4b89a,
-    roughness: 0.98,
+    color: 0xffffff,
+    roughness: 1,
     metalness: 0,
+    vertexColors: true,
   })
   applyForestFloorMaterial(mat)
 
@@ -1162,7 +1333,7 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
   root.add(mesh)
 
   console.info(
-    `[Steel] Forest terrain — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH} · ${TERRAIN_SEG_X}×${TERRAIN_SEG_Z} · y[${minY.toFixed(2)}…${maxY.toFixed(2)}] · clearings ${FOREST_TOWNS.map((t) => t.name).join(', ')}`,
+    `[Steel] Forest terrain — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH} · ${TERRAIN_SEG_X}×${TERRAIN_SEG_Z} · y[${minY.toFixed(2)}…${maxY.toFixed(2)}] · V1 floor+vertexTint · V3b road/town wear · clearings ${FOREST_TOWNS.map((t) => t.name).join(', ')}`,
   )
   return mesh
 }
@@ -1185,6 +1356,7 @@ export async function loadForestOverwatch(
   buildForestTerrain(root)
 
   const colliders: PropCollider[] = []
+  const contacts: ContactSpot[] = []
   let paths: ForestMapLoadResult['paths']
   let roadTiles = 0
   try {
@@ -1195,32 +1367,30 @@ export async function loadForestOverwatch(
     console.warn('[Steel] Forest roads failed to load', err)
   }
 
-  const [treeCount, rockCount, ruinCount, defense, carCount] =
+  const [treeCount, rockCount, ruinCount, carCount] =
     await Promise.all([
-      placePineTrees(root, colliders).catch((err) => {
+      placePineTrees(root, colliders, contacts).catch((err) => {
         console.warn('[Steel] Forest pine trees failed to load', err)
         return 0
       }),
-      placeCliffRocks(root, colliders).catch((err) => {
+      placeCliffRocks(root, colliders, contacts).catch((err) => {
         console.warn('[Steel] Forest cliff rocks failed to load', err)
         return 0
       }),
-      placeTownHouses(root, colliders).catch((err) => {
+      placeTownHouses(root, colliders, contacts).catch((err) => {
         console.warn('[Steel] Town houses failed', err)
         return 0
       }),
-      placeDefenseCuts(root, colliders).catch((err) => {
-        console.warn('[Steel] Defense cuts failed', err)
-        return { bags: 0, towers: 0 }
-      }),
-      placeAbandonedCars(root, colliders).catch((err) => {
+      placeAbandonedCars(root, colliders, contacts).catch((err) => {
         console.warn('[Steel] Fancy wrecks failed', err)
         return 0
       }),
     ])
 
+  const blobCount = placeContactBlobs(root, contacts)
+
   console.info(
-    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${defense.bags} sandbags, ${defense.towers} towers, ${carCount} fancy wrecks, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders`,
+    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${carCount} wrecks, ${blobCount} contact blobs, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders · no sandbag pack`,
   )
   return {
     root,

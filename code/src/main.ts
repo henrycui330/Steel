@@ -14,7 +14,7 @@ import {
 } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
 import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
-import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, updatePlayerCamera } from './camera'
+import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, resetCameraShake, setTerrainCameraRumble, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
 import './cosmetics'
@@ -66,7 +66,7 @@ import { createEjectAlert } from './ejectAlert'
 import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
 import { onGltfProgress, preloadUrls } from './loadGltf'
-import { showMainMenu, type MenuSelection, type TeamId } from './menu'
+import { showMainMenu, showRespawnHangar, pickLoadingTip, type MenuSelection, type TeamId } from './menu'
 import { nationByTeam } from './nations'
 import { getMpSession } from './net/mpSession'
 import type { MpInput, MpTankPose } from './net/mpProtocol'
@@ -287,12 +287,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
     resetAimPitchLimits()
   }
   resetShotRecoil()
+  resetCameraShake()
 
   const env = createEnvironment(
     scene,
     renderer,
     { ambient, hemi, sun },
-    { timeOfDay, season, weather },
+    { timeOfDay, season, weather, mapId },
   )
   const nvg = createNvg({
     night: timeOfDay === 'night',
@@ -306,9 +307,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
   const loading = document.createElement('div')
   loading.id = 'loading-overlay'
-  loading.innerHTML = `<p class="loading-brand">Steel</p><p class="loading-msg">Loading ${mapOpt.name}…</p>`
+  const tip = pickLoadingTip()
+  loading.innerHTML = `
+    <p class="loading-brand">Steel</p>
+    <div class="loading-silhouette" aria-hidden="true"></div>
+    <p class="loading-msg">Loading ${mapOpt.name}…</p>
+    <p class="loading-tip">${tip}</p>
+  `
   document.body.appendChild(loading)
   const loadingMsg = loading.querySelector('.loading-msg') as HTMLElement
+  console.info(`[Steel] Loading tip — ${tip}`)
   const stopProgress = onGltfProgress((p) => {
     const mb = p.bytes > 0 ? ` · ${(p.bytes / 1_048_576).toFixed(0)} MB` : ''
     loadingMsg.textContent =
@@ -857,11 +865,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
       heightAt: sampleY,
       bounds: playable,
       velocity: flight.velocity,
+      bombCount: option.aircraftBombCount,
     })
     bombs.setOnKill((victim) => {
       airBoard.noteKill(air.root)
-      console.info(`[Steel] Corsair bomb destroyed ${victim.name || 'target'}`)
+      console.info(`[Steel] Bomb destroyed ${victim.name || 'target'}`)
     })
+    if (option.aircraftBombCount && option.aircraftBombCount > 2) {
+      console.info(
+        `[Steel] ${option.name} armed — bombs ×${option.aircraftBombCount} · press B`,
+      )
+    }
 
     const rockets =
       tankId === 'corsair'
@@ -1838,11 +1852,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       console.info(`[Steel] Kill cam — impact in ${shot.flightTime.toFixed(2)}s`)
     })
 
-    let cameraMode: CameraMode = 'turret'
+    let cameraMode: CameraMode = 'hull'
+    console.info('[Steel] Camera default → hull (C cycles turret / chase / hull)')
     let aiming = false
     let wasAirborne = false
     let matchOver = false
-    let playerDeadFor = 0
     if (mpSess) {
       mpSess.client.onPeerLeft((message) => {
         console.warn('[Steel] MP peer left during match:', message)
@@ -1954,8 +1968,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
       return n
     }
 
+    let playerDeadFor = 0
+    let respawnUiOpen = false
+    let liveTankId = tankId
+    let liveSpawnIndex = spawnIndex
+
     function respawnPlayer(): void {
-      const pos = spawnAt(team, spawnIndex)
+      const pos = spawnAt(team, liveSpawnIndex)
       const yaw = Math.atan2(-pos.x, -pos.z)
       tank.position.copy(pos)
       tank.rotation.y = yaw
@@ -1974,17 +1993,70 @@ async function startMission(sel: MenuSelection): Promise<void> {
         }),
       )
       playerDeadFor = 0
+      respawnUiOpen = false
       hud.setRespawn(null)
       dieselEngine.setIntensity(0.2)
-      console.info('[Steel] Player KOTH respawn')
+      console.info(`[Steel] Player KOTH respawn · ${liveTankId} · spawn ${liveSpawnIndex + 1}`)
+    }
+
+    async function openRespawnHangarFlow(): Promise<void> {
+      if (respawnUiOpen || matchOver) return
+      respawnUiOpen = true
+      hud.setRespawn(null)
+      hud.setVisible(false)
+      document.exitPointerLock()
+      try {
+        const pick = await showRespawnHangar({
+          mapId,
+          gameMode,
+          team,
+          groundOnly: true,
+          redAi,
+          blueAi,
+          timeOfDay,
+          season,
+          weather,
+        })
+        liveSpawnIndex = pick.spawnIndex
+        if (pick.tankId !== liveTankId) {
+          // Full remount — restart mission as the new chassis (same briefing).
+          console.info(
+            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting match`,
+          )
+          sessionStorage.setItem(
+            'steel.rematch',
+            JSON.stringify({
+              mapId,
+              tankId: pick.tankId,
+              team,
+              spawnIndex: pick.spawnIndex,
+              redAi,
+              blueAi,
+              timeOfDay,
+              season,
+              weather,
+              gameMode,
+            } satisfies MenuSelection),
+          )
+          window.location.reload()
+          return
+        }
+        respawnPlayer()
+        hud.setVisible(true)
+      } catch (err) {
+        console.warn('[Steel] Respawn hangar failed — default respawn', err)
+        respawnPlayer()
+        hud.setVisible(true)
+      }
     }
 
     function tickRespawns(dt: number): void {
       if (!isKoth || matchOver) return
       if (!playerCombat.alive) {
+        if (respawnUiOpen) return
         playerDeadFor += dt
         hud.setRespawn(Math.max(0, KOTH_RESPAWN_SEC - playerDeadFor))
-        if (playerDeadFor >= KOTH_RESPAWN_SEC) respawnPlayer()
+        if (playerDeadFor >= KOTH_RESPAWN_SEC) void openRespawnHangarFlow()
       } else {
         playerDeadFor = 0
         hud.setRespawn(null)
@@ -2154,8 +2226,18 @@ async function startMission(sel: MenuSelection): Promise<void> {
         )
         const airNow = drive.isAirborne()
         if (wasAirborne && !airNow) {
-          punchCameraShake(0.18)
-          cabinBed.thump(0.55)
+          const impact = Math.min(1, Math.abs(drive.getRideVel()) / 8)
+          punchCameraShake(0.2 + impact * 0.35)
+          cabinBed.thump(0.45 + impact * 0.5)
+        } else if (!airNow) {
+          // Rolling terrain chatter — ride spring velocity feeds cam + soft thumps.
+          const rv = Math.abs(drive.getRideVel())
+          if (rv > 0.55) {
+            setTerrainCameraRumble(Math.min(1.2, (rv - 0.4) * 0.35))
+            if (rv > 2.4 && Math.random() < 0.08) cabinBed.thump(Math.min(0.45, rv * 0.08))
+          } else {
+            setTerrainCameraRumble(0)
+          }
         }
         wasAirborne = airNow
         if (wheels) {
@@ -2378,27 +2460,31 @@ async function startMission(sel: MenuSelection): Promise<void> {
         tank.localToWorld(_exhaust)
         smoke.engineExhaust(_exhaust, 0.35 + Math.min(1, speed / 14) * 0.35)
         const maxSp = Math.max(1, option.drive.maxSpeed * SPEED_FEEL)
-        dieselEngine.setIntensity(0.18 + Math.min(1, speed / maxSp) * 0.82)
-        cabinBed.setDrive(
-          Math.min(1, speed / maxSp),
-          Math.min(1, Math.abs(turn)),
-          aiming,
-        )
+        const speed01 = Math.min(1, speed / maxSp)
+        const thr = Math.abs(drive.getThrottle())
+        // Diesel follows throttle + speed — revs climb before the hull does.
+        dieselEngine.setIntensity(0.16 + Math.min(1, speed01 * 0.55 + thr * 0.5) * 0.84)
+        cabinBed.setDrive(speed01, Math.min(1, Math.abs(turn)), aiming)
 
-        // Track grit — only while rolling on the ground.
-        if (speed > 1.2 && !drive.isAirborne()) {
-          const speed01 = Math.min(1, speed / maxSp)
+        // Track grit — denser when turning / accelerating.
+        if (speed > 0.9 && !drive.isAirborne()) {
           const turnAbs = Math.min(1, Math.abs(turn))
-          const dustI = speed01 * 0.55 + turnAbs * 0.45 * speed01
-          // Rear contact patches, left / right of hull.
-          _dustL.set(-1.15, 0.06, -1.1)
-          _dustR.set(1.15, 0.06, -1.1)
+          const dustI = speed01 * 0.65 + turnAbs * 0.55 * speed01 + thr * 0.15
+          _dustL.set(-1.15, 0.06, -1.15)
+          _dustR.set(1.15, 0.06, -1.15)
           tank.localToWorld(_dustL)
           tank.localToWorld(_dustR)
           _dustOut.set(-1, 0, 0).transformDirection(tank.matrixWorld)
           smoke.trackDust(_dustL, _dustOut, dustI)
           _dustOut.set(1, 0, 0).transformDirection(tank.matrixWorld)
           smoke.trackDust(_dustR, _dustOut, dustI)
+          // Extra rear rooster when turning hard.
+          if (turnAbs > 0.45 && speed01 > 0.25) {
+            _dustL.set(0, 0.05, -1.55)
+            tank.localToWorld(_dustL)
+            _dustOut.set(0, 0.2, -1).transformDirection(tank.matrixWorld)
+            smoke.trackDust(_dustL, _dustOut, dustI * 0.7)
+          }
         }
       } else {
         dieselEngine.setIntensity(0)
@@ -2572,7 +2658,19 @@ async function main(): Promise<void> {
   }
   const idleId = window.setInterval(idle, 100)
 
-  const selection = await showMainMenu()
+  let selection: MenuSelection
+  const rematchRaw = sessionStorage.getItem('steel.rematch')
+  if (rematchRaw) {
+    sessionStorage.removeItem('steel.rematch')
+    try {
+      selection = JSON.parse(rematchRaw) as MenuSelection
+      console.info(`[Steel] Remount after vehicle change → ${selection.tankId}`)
+    } catch {
+      selection = await showMainMenu()
+    }
+  } else {
+    selection = await showMainMenu()
+  }
   window.clearInterval(idleId)
   await startMission(selection)
 }

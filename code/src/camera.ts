@@ -10,22 +10,22 @@ const AIM_CAM_BACK = 1.4
 /** Look-at distance along the shoot/aim line (reticle converge). */
 const AIM_LOOK_DISTANCE = 72
 
-const CHASE_DISTANCE = 12
-const CHASE_HEIGHT = 5.5
-const CHASE_LOOK_AHEAD = 48
-const CHASE_LERP = 8
+const CHASE_DISTANCE = 11.5
+const CHASE_HEIGHT = 5.2
+const CHASE_LOOK_AHEAD = 42
+const CHASE_LERP = 6.5
 /** Extra chase trail (m) at full speed — sells pace. */
-const CHASE_SPEED_PULL = 3.2
+const CHASE_SPEED_PULL = 4.2
 
 /** Close rear-quarter / over-engine — “in the tank” without a full cabin. */
-const HULL_DISTANCE = 5.4
-const HULL_HEIGHT = 2.15
-const HULL_LOOK_AHEAD = 26
-const HULL_LERP = 11
-const HULL_SPEED_PULL = 1.6
-const HULL_FOV = 62
+const HULL_DISTANCE = 4.85
+const HULL_HEIGHT = 1.95
+const HULL_LOOK_AHEAD = 22
+const HULL_LERP = 9.5
+const HULL_SPEED_PULL = 2.1
+const HULL_FOV = 58
 
-export const DEFAULT_FOV = 70
+export const DEFAULT_FOV = 68
 /**
  * Discrete optic zoom steps (wide → tight). Scroll snaps one notch at a time
  * so aim FOV feels steadier than continuous scrub.
@@ -39,20 +39,28 @@ const AIM_STEP_DEFAULT = 1
 /** Accumulate wheel delta before stepping one notch. */
 const ZOOM_STEP_THRESHOLD = 55
 /** Faster settle onto stepped FOV so notches feel crisp. */
-const FOV_LERP = 18
+const FOV_LERP = 16
 const AIM_FOV_LERP = 22
 /** Extra FOV at full drive speed (chase / turret, not while aiming). */
-const SPEED_FOV_SPAN = 9
+const SPEED_FOV_SPAN = 11
 
 /** Peak positional shake (m) from stacked kicks. */
-const SHAKE_CAP = 0.18
-/** Speed rumble amplitude at full pace (m) — keep tiny; high-freq offset feels huge. */
-const RUMBLE_MAX = 0.006
+const SHAKE_CAP = 0.22
+/** Speed rumble amplitude at full pace (m). */
+const RUMBLE_MAX = 0.011
 /** No drive rumble below this speed fraction. */
-const RUMBLE_SPEED_GATE = 0.35
+const RUMBLE_SPEED_GATE = 0.22
 /** Aim mode: no rumble; kicks decay fast. */
 const AIM_SHAKE_DECAY = 16
-const DRIVE_SHAKE_DECAY = 3.2
+const DRIVE_SHAKE_DECAY = 2.6
+/**
+ * Chase/hull yaw spring — camera lags the hull like WT third-person weight.
+ * Higher = snappier catch-up.
+ */
+const YAW_LAG_SPRING = 5.4
+const YAW_LAG_DAMP = 7.2
+/** How much hull pitch bleeds into chase/hull cam height (m per rad). */
+const PITCH_CAM_BLEED = 1.35
 
 const desiredPos = new THREE.Vector3()
 const lookTarget = new THREE.Vector3()
@@ -71,6 +79,12 @@ let zoomWheelAcc = 0
 let shakeAmp = 0
 let rumblePhase = 0
 let kickPhase = 0
+/** Lagged camera yaw (radians) for chase / hull. */
+let lagYaw = 0
+let lagYawVel = 0
+let lagYawReady = false
+/** Soft terrain chatter fed from drive rideVel. */
+let terrainRumble = 0
 
 export function getAimFov(): number {
   return aimFov
@@ -81,7 +95,6 @@ export function getAimZoomStep(): number {
 }
 
 export function getAimZoomLabel(): string {
-  // Relative to default step — ×1.0 at 36°, higher when tighter.
   const base = AIM_FOV_STEPS[AIM_STEP_DEFAULT]
   const mag = base / aimFov
   return `×${mag.toFixed(1)}`
@@ -115,14 +128,26 @@ export function resetAimFov(): void {
 /** Impulse camera kick (gun fire, landing). Stacks softly up to a cap. */
 export function punchCameraShake(amount: number): void {
   const a = THREE.MathUtils.clamp(amount, 0, 1)
-  shakeAmp = Math.min(SHAKE_CAP, shakeAmp + a * 0.16)
+  shakeAmp = Math.min(SHAKE_CAP, shakeAmp + a * 0.18)
   kickPhase = 0
+}
+
+/**
+ * Continuous terrain chatter (0–1-ish). Call each frame from drive rideVel.
+ * Decays on its own when quiet.
+ */
+export function setTerrainCameraRumble(amount: number): void {
+  const a = THREE.MathUtils.clamp(amount, 0, 1.5)
+  terrainRumble = Math.max(terrainRumble * 0.85, a)
 }
 
 export function resetCameraShake(): void {
   shakeAmp = 0
   rumblePhase = 0
   kickPhase = 0
+  terrainRumble = 0
+  lagYawReady = false
+  lagYawVel = 0
 }
 
 export function nextCameraMode(mode: CameraMode): CameraMode {
@@ -131,10 +156,36 @@ export function nextCameraMode(mode: CameraMode): CameraMode {
   return 'turret'
 }
 
+function wrapPi(a: number): number {
+  let x = a
+  while (x > Math.PI) x -= Math.PI * 2
+  while (x < -Math.PI) x += Math.PI * 2
+  return x
+}
+
+/** Spring chase/hull yaw toward hull yaw — mass lag. */
+function stepYawLag(targetYaw: number, dt: number): number {
+  if (!lagYawReady) {
+    lagYaw = targetYaw
+    lagYawVel = 0
+    lagYawReady = true
+    return lagYaw
+  }
+  const err = wrapPi(targetYaw - lagYaw)
+  lagYawVel += err * YAW_LAG_SPRING * dt
+  lagYawVel *= Math.exp(-YAW_LAG_DAMP * dt)
+  lagYaw += lagYawVel * dt
+  lagYaw = wrapPi(lagYaw + Math.PI) - Math.PI
+  if (Math.abs(err) < 0.001 && Math.abs(lagYawVel) < 0.001) {
+    lagYaw = targetYaw
+    lagYawVel = 0
+  }
+  return lagYaw
+}
+
 /**
  * Camera sits behind the turret and looks at a point ON the shoot/aim line
- * (from muzzle), so screen-center matches where shells go — not a parallel
- * ray from a higher eye (that made shells look high/low vs the reticle).
+ * (from muzzle), so screen-center matches where shells go.
  */
 export function updateTurretCamera(
   camera: THREE.PerspectiveCamera,
@@ -175,7 +226,7 @@ export function updateTurretCamera(
   camera.lookAt(lookTarget)
 }
 
-/** Third-person chase: behind hull, look along aim so reticle ≈ shoot line. */
+/** Third-person chase: behind hull with yaw lag (WT mass). */
 export function updateChaseCamera(
   camera: THREE.PerspectiveCamera,
   tank: THREE.Object3D,
@@ -184,10 +235,11 @@ export function updateChaseCamera(
   speed01 = 0,
 ): void {
   const trail = CHASE_DISTANCE + CHASE_SPEED_PULL * THREE.MathUtils.clamp(speed01, 0, 1)
-  const yaw = tank.rotation.y
+  const yaw = stepYawLag(tank.rotation.y, dt)
+  const pitchBleed = tank.rotation.x * PITCH_CAM_BLEED
   desiredPos.set(
     tank.position.x - Math.sin(yaw) * trail,
-    tank.position.y + CHASE_HEIGHT,
+    tank.position.y + CHASE_HEIGHT + pitchBleed,
     tank.position.z - Math.cos(yaw) * trail,
   )
 
@@ -202,13 +254,13 @@ export function updateChaseCamera(
   }
   getAimDirection(_aimDir)
   if (_aimDir.lengthSq() < 1e-8) {
-    _aimDir.set(Math.sin(yaw), 0, Math.cos(yaw))
+    _aimDir.set(Math.sin(tank.rotation.y), 0, Math.cos(tank.rotation.y))
   }
   lookTarget.copy(_muzzlePos).addScaledVector(_aimDir, CHASE_LOOK_AHEAD)
   camera.lookAt(lookTarget)
 }
 
-/** Tight hull cam — lower, closer, sells mass without blocking the gun sight. */
+/** Tight hull cam — lower, closer, yaw-lagged. */
 export function updateHullCamera(
   camera: THREE.PerspectiveCamera,
   tank: THREE.Object3D,
@@ -217,12 +269,12 @@ export function updateHullCamera(
   speed01 = 0,
 ): void {
   const trail = HULL_DISTANCE + HULL_SPEED_PULL * THREE.MathUtils.clamp(speed01, 0, 1)
-  const yaw = tank.rotation.y
-  // Slight starboard bias so the turret cupola reads in frame.
-  const side = 0.85
+  const yaw = stepYawLag(tank.rotation.y, dt)
+  const side = 0.72
+  const pitchBleed = tank.rotation.x * PITCH_CAM_BLEED * 0.85
   desiredPos.set(
     tank.position.x - Math.sin(yaw) * trail + Math.cos(yaw) * side,
-    tank.position.y + HULL_HEIGHT,
+    tank.position.y + HULL_HEIGHT + pitchBleed,
     tank.position.z - Math.cos(yaw) * trail - Math.sin(yaw) * side,
   )
 
@@ -237,10 +289,10 @@ export function updateHullCamera(
   }
   getAimDirection(_aimDir)
   if (_aimDir.lengthSq() < 1e-8) {
-    _aimDir.set(Math.sin(yaw), 0, Math.cos(yaw))
+    _aimDir.set(Math.sin(tank.rotation.y), 0, Math.cos(tank.rotation.y))
   }
   lookTarget.copy(_muzzlePos).addScaledVector(_aimDir, HULL_LOOK_AHEAD)
-  lookTarget.y += 0.35
+  lookTarget.y += 0.28
   camera.lookAt(lookTarget)
 }
 
@@ -270,16 +322,18 @@ function applyCameraWeight(
   speed01: number,
 ): void {
   const s01 = THREE.MathUtils.clamp(speed01, 0, 1)
-  // Low frequency only — high-freq sin on the camera reads as seizure.
-  rumblePhase += dt * (2.2 + s01 * 3.5)
+  rumblePhase += dt * (2.0 + s01 * 4.2 + terrainRumble * 3.5)
   kickPhase += dt
 
   const decay = aiming ? AIM_SHAKE_DECAY : DRIVE_SHAKE_DECAY
   shakeAmp = Math.max(0, shakeAmp * Math.exp(-decay * dt))
+  terrainRumble *= Math.exp(-3.8 * dt)
 
   const rumbleGate = THREE.MathUtils.smoothstep(s01, RUMBLE_SPEED_GATE, 1)
-  const rumble = aiming ? 0 : rumbleGate * rumbleGate * RUMBLE_MAX
-  const kick = shakeAmp * (aiming ? 0.15 : 1)
+  const rumble = aiming
+    ? 0
+    : rumbleGate * rumbleGate * RUMBLE_MAX + terrainRumble * 0.014
+  const kick = shakeAmp * (aiming ? 0.12 : 1)
 
   camera.getWorldDirection(_aimDir)
   _up.set(0, 1, 0)
@@ -292,13 +346,15 @@ function applyCameraWeight(
     .set(0, 0, 0)
     .addScaledVector(
       _right,
-      Math.sin(rumblePhase) * rumble + Math.sin(kickPhase * 28) * kick * 0.35,
+      Math.sin(rumblePhase) * rumble + Math.sin(kickPhase * 26) * kick * 0.38,
     )
     .addScaledVector(
       _up,
-      Math.cos(rumblePhase * 0.85) * rumble * 0.55 + Math.cos(kickPhase * 19) * kick * 0.22,
+      Math.cos(rumblePhase * 0.85) * rumble * 0.65 +
+        Math.cos(kickPhase * 17) * kick * 0.28 +
+        terrainRumble * Math.sin(rumblePhase * 1.7) * 0.01,
     )
-    .addScaledVector(_aimDir, -kick * 0.12)
+    .addScaledVector(_aimDir, -kick * 0.14)
 
   camera.position.add(_shake)
 }
@@ -318,6 +374,7 @@ export function updatePlayerCamera(
   updateFov(camera, aiming, mode, dt, speed01)
   // Aim mode forces gun-sight cam even if chase/hull was selected with C.
   if (aiming || mode === 'turret') {
+    if (aiming) lagYawReady = false
     updateTurretCamera(camera, tank, turretMount, dt, aiming, muzzle)
   } else if (mode === 'hull') {
     updateHullCamera(camera, tank, dt, muzzle, speed01)
