@@ -15,9 +15,14 @@ PzH 2000
     P-51 Mustang
     F-16A Fighting Falcon
 Soviet:
- T-34
+ T-34-76
+ T-34-85
+ BM-13 Katyusha
  T-44-100
  T-55
+ T-64
+    BTR-82A
+    9P157 Khrizantema-S
     ZSU-23-4 Shilka
     Pantsir-S2
     T-72 Ural

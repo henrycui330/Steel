@@ -1,4 +1,4 @@
-/** Keyboard: WASD drive, Shift brake, Space fire, C camera, U arty map; ↑/↓ ammo; 1/2 gun; RMB aim. */
+/** Keyboard: WASD drive, Shift brake, Space fire, C camera (turret/chase/hull), U arty map; ↑/↓ ammo; 1/2 gun; RMB aim. */
 export type DriveInput = {
   forward: number
   turn: number

@@ -1,5 +1,6 @@
 import type { AmmoId } from './ammo'
 import { AMMO_ORDER, AMMO_TYPES } from './ammo'
+import { getAimZoomLabel } from './camera'
 import type { FireHudState } from './fire'
 import { nationByTeam, nationFlagSrc } from './nations'
 import * as THREE from 'three'
@@ -295,6 +296,31 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const aimMask = document.createElement('div')
   aimMask.className = 'aim-mask'
   aimMask.setAttribute('aria-hidden', 'true')
+  aimMask.innerHTML = `
+    <div class="optic-tunnel"></div>
+    <div class="optic-glass">
+      <div class="optic-mils" aria-hidden="true">
+        <i class="mil-cross mil-h"></i>
+        <i class="mil-cross mil-v"></i>
+        <i class="mil-tick mil-h mil-n1"></i>
+        <i class="mil-tick mil-h mil-n2"></i>
+        <i class="mil-tick mil-h mil-n3"></i>
+        <i class="mil-tick mil-h mil-p1"></i>
+        <i class="mil-tick mil-h mil-p2"></i>
+        <i class="mil-tick mil-h mil-p3"></i>
+        <i class="mil-tick mil-v mil-n1"></i>
+        <i class="mil-tick mil-v mil-n2"></i>
+        <i class="mil-tick mil-v mil-n3"></i>
+        <i class="mil-tick mil-v mil-p1"></i>
+        <i class="mil-tick mil-v mil-p2"></i>
+        <i class="mil-tick mil-v mil-p3"></i>
+        <i class="mil-stadia"></i>
+        <span class="mil-center"></span>
+      </div>
+      <div class="optic-zoom-tag">×1.0</div>
+    </div>
+  `
+  const opticZoomTag = aimMask.querySelector('.optic-zoom-tag') as HTMLElement
 
   const mapSizeX = Math.max(1, minimap?.mapSizeX ?? minimap?.mapSize ?? 150)
   const mapSizeZ = Math.max(1, minimap?.mapSizeZ ?? minimap?.mapSize ?? mapSizeX)
@@ -503,9 +529,17 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       </div>
     </div>
     <div class="combat-ammo" role="list"></div>
+    <div class="hud-plate combat-magazine" hidden>
+      <div class="hud-plate-head">
+        <span class="combat-label">Rack</span>
+        <span class="combat-value magazine-text">0</span>
+      </div>
+    </div>
   `
 
   const ammoBox = weapon.querySelector('.combat-ammo') as HTMLDivElement
+  const magazinePlate = weapon.querySelector('.combat-magazine') as HTMLElement
+  const magazineText = weapon.querySelector('.magazine-text') as HTMLElement
   for (const id of AMMO_ORDER) {
     const def = AMMO_TYPES[id]
     const btn = document.createElement('div')
@@ -591,6 +625,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     },
     setAiming(aiming) {
       root.classList.toggle('is-aiming', aiming)
+      if (aiming) opticZoomTag.textContent = getAimZoomLabel()
     },
     updateCrosshairs(camera, mouseHit, barrelHit, gunSynced = false) {
       const mousePt = projectToScreen(camera, mouseHit)
@@ -600,6 +635,9 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       barrel.classList.toggle('is-synced', gunSynced)
     },
     updateCombat(state) {
+      if (root.classList.contains('is-aiming')) {
+        opticZoomTag.textContent = getAimZoomLabel()
+      }
       const hpPct = THREE.MathUtils.clamp(state.hp / state.maxHp, 0, 1)
       hpFill.style.transform = `scaleX(${hpPct})`
       hpText.textContent = `${Math.round(state.hp)}`
@@ -618,7 +656,12 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
       const { fire } = state
       const onMg = fire.weapon === 'mg'
-      weaponText.textContent = onMg ? 'MG · 2' : 'MAIN · 1'
+      const rackMode = !!(fire.magazineSize && fire.magazineSize > 0)
+      weaponText.textContent = onMg
+        ? `MG · ${fire.stock?.mg ?? 0}`
+        : rackMode
+          ? 'ROCKETS'
+          : 'MAIN · 1'
       weaponText.classList.toggle('is-mg', onMg)
       root.classList.toggle('is-mg', onMg)
 
@@ -629,23 +672,52 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
       if (onMg) {
         isReady = fire.ready
-        readyLabel = fire.ready ? 'READY' : '…'
-        shellLabel = 'MG'
+        readyLabel = fire.ready ? 'READY' : fire.stock && fire.stock.mg <= 0 ? 'EMPTY' : '…'
+        shellLabel = fire.stock ? `MG ${fire.stock.mg}` : 'MG'
         progress = 1
+      } else if (fire.magazineSize && fire.magazineSize > 0) {
+        const left = fire.magazineLeft ?? 0
+        const size = fire.magazineSize
+        if (left > 0 && fire.ready) {
+          isReady = true
+          readyLabel = 'READY'
+          shellLabel = `RKT ${left}/${size}`
+          progress = 1
+        } else {
+          isReady = false
+          progress =
+            fire.reloadTotal > 0 ? 1 - fire.reloadLeft / fire.reloadTotal : 0
+          progress = THREE.MathUtils.clamp(progress, 0, 1)
+          shellLabel = `RKT 0/${size}`
+          readyLabel =
+            fire.reloadLeft > 0.05 ? fire.reloadLeft.toFixed(1) : 'READY'
+        }
       } else if (fire.ready && fire.chambered) {
         isReady = true
         readyLabel = 'READY'
-        shellLabel = AMMO_TYPES[fire.chambered].name
+        const left = fire.stock?.[fire.chambered]
+        shellLabel =
+          left != null
+            ? `${AMMO_TYPES[fire.chambered].name} ${left}`
+            : AMMO_TYPES[fire.chambered].name
         progress = 1
       } else {
         isReady = false
-        progress =
-          fire.reloadTotal > 0 ? 1 - fire.reloadLeft / fire.reloadTotal : 0
+        const left = fire.stock?.[fire.loading] ?? 0
+        const empty = left <= 0
+        progress = empty
+          ? 0
+          : fire.reloadTotal > 0
+            ? 1 - fire.reloadLeft / fire.reloadTotal
+            : 0
         progress = THREE.MathUtils.clamp(progress, 0, 1)
         const name = AMMO_TYPES[fire.loading].name
-        shellLabel = name
-        readyLabel =
-          fire.reloadLeft > 0.05 ? fire.reloadLeft.toFixed(1) : 'READY'
+        shellLabel = empty ? `${name} 0` : `${name} ${left}`
+        readyLabel = empty
+          ? 'EMPTY'
+          : fire.reloadLeft > 0.05
+            ? fire.reloadLeft.toFixed(1)
+            : 'READY'
       }
 
       sightReady.textContent = readyLabel
@@ -654,6 +726,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       sight.classList.toggle('is-ready', isReady)
       sight.classList.toggle('is-loading', !isReady)
       sight.classList.toggle('is-mg', onMg)
+      sight.classList.toggle('is-empty', readyLabel === 'EMPTY')
 
       const range = state.rangeM
       if (range != null && Number.isFinite(range) && range > 0) {
@@ -699,19 +772,32 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         artyRow.classList.remove('is-warn', 'is-ok')
       }
 
+      // ATGM-only chassis: hide empty HE/AP slots (MG + lock/M shown elsewhere).
+      ammoBox.hidden = rackMode || !!fire.noMainGun
+      magazinePlate.hidden = !rackMode
+      if (rackMode) {
+        const left = fire.magazineLeft ?? 0
+        magazineText.textContent = `${left}/${fire.magazineSize}`
+        magazinePlate.classList.toggle('is-empty', left <= 0)
+      }
+
       for (const slot of ammoBox.querySelectorAll('.ammo-slot')) {
         const id = slot.getAttribute('data-ammo') as AmmoId
-        const loading = !onMg && fire.loading === id
-        const chambered = !onMg && fire.chambered === id && fire.ready
+        const count = fire.stock?.[id] ?? 0
+        const empty = !rackMode && count <= 0
+        const loading = !onMg && !rackMode && fire.loading === id && !empty
+        const chambered = !onMg && !rackMode && fire.chambered === id && fire.ready
         slot.classList.toggle('is-loading', loading)
         slot.classList.toggle('is-chambered', chambered)
-        slot.classList.toggle('is-dim', onMg)
+        slot.classList.toggle('is-dim', onMg || empty)
+        slot.classList.toggle('is-empty', empty)
         const stateEl = slot.querySelector('.ammo-state')
         if (stateEl) {
-          if (onMg) stateEl.textContent = ''
-          else if (chambered) stateEl.textContent = 'RDY'
-          else if (loading) stateEl.textContent = 'LOAD'
-          else stateEl.textContent = ''
+          if (rackMode) stateEl.textContent = ''
+          else if (empty) stateEl.textContent = '0'
+          else if (chambered) stateEl.textContent = `${count} RDY`
+          else if (loading) stateEl.textContent = `${count} LOAD`
+          else stateEl.textContent = String(count)
         }
       }
 

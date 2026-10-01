@@ -1,7 +1,13 @@
 import * as THREE from 'three'
 import { createAircraftFlight, type AircraftFlight } from './aircraftFlight'
 import { createAircraftGuns, type AircraftGuns } from './aircraftGuns'
-import type { AiEnemy, AiHostile, AiSpawnOptions, AiUpdateContext } from './aiEnemy'
+import {
+  isPlayerCombatRoot,
+  type AiEnemy,
+  type AiHostile,
+  type AiSpawnOptions,
+  type AiUpdateContext,
+} from './aiEnemy'
 import { createCombatant } from './combatant'
 import type { FlightInput } from './input'
 import { loadPlayerAircraft } from './loadAircraft'
@@ -192,6 +198,14 @@ export async function spawnAiCorsair(
     velocity: flight.velocity,
   })
   guns.setOnKill(() => opts.onKill?.())
+  guns.setOnStrike((victim, _destroyed) => {
+    if (!isPlayerCombatRoot(victim)) return
+    opts.onStrikePlayer?.({
+      root,
+      tankId: chassis.id,
+      name: chassis.name,
+    })
+  })
 
   let passTimer = 0
 

@@ -7,7 +7,6 @@ import {
 } from './forestOverwatch'
 import type { PropCollider } from '../collision'
 
-/** Only Forest Overwatch is playable for now. */
 export type MapId = 'forest'
 
 export type TeamSpawns = {

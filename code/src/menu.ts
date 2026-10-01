@@ -5,8 +5,13 @@ import { FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { preloadUrls, warmLoaders } from './loadGltf'
 import type { Season, TimeOfDay, WeatherKind } from './environment'
 import {
+  getTankCosmetics,
+  setTankCosmetics,
+  type TankCosmetics,
+} from './cosmetics'
+import { createCustomizePreview } from './customizePreview'
+import {
   WRAP_OPTIONS,
-  getSelectedWrapId,
   setSelectedWrapId,
   syncWrapFromProfile,
   wrapOptionById,
@@ -339,7 +344,7 @@ function showMpLobby(
       `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} team=${me.team} peers=${peers.length}`,
     )
     resolve({
-      mapId: (match.mapId as MapId) || 'forest',
+      mapId: 'forest',
       tankId,
       team: me.team,
       spawnIndex: me.spawnIndex,
@@ -525,73 +530,190 @@ function showCustomize(
   clearRoot(root)
   root.classList.add('menu-screen-customize')
 
-  let selected: WrapId = getSelectedWrapId()
+  const groundTanks = TANK_OPTIONS.filter((t) => !t.aircraft)
+  let tankId: TankId = groundTanks[0]?.id ?? 'pz3'
+  let draft: TankCosmetics = getTankCosmetics(tankId)
+  /** Preview rotation in degrees (−180…180). */
+  let rotDeg = { x: 0, y: 36, z: 0 }
+  let preview: ReturnType<typeof createCustomizePreview> | null = null
+  let previewReady: Promise<void> = Promise.resolve()
 
-  function render(): void {
-    const opt = wrapOptionById(selected)
-    const applied = getSelectedWrapId()
-    const previewHtml = opt.url
-      ? `<img class="wrap-preview-img" src="${opt.url}" alt="${opt.name}" />`
-      : `<div class="wrap-preview-stock">Factory dunkelgrau</div>`
+  function degToRad(d: number): number {
+    return (d * Math.PI) / 180
+  }
 
-    const cards = WRAP_OPTIONS.map((w) => {
+  function syncRotation(): void {
+    preview?.setRotation(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z))
+  }
+
+  function queueShow(): void {
+    const id = tankId
+    const cos = { wrapId: draft.wrapId }
+    previewReady = previewReady.then(async () => {
+      await preview?.show(id, cos)
+      syncRotation()
+    })
+  }
+
+  function queueApplyDraft(): void {
+    const cos = { wrapId: draft.wrapId }
+    previewReady = previewReady.then(
+      () => preview?.applyDraft(cos, { reloadChassis: true }) ?? Promise.resolve(),
+    )
+  }
+
+  function tankChipsHtml(): string {
+    return groundTanks
+      .map((t) => {
+        const active = t.id === tankId ? ' is-selected' : ''
+        return `<button type="button" class="customize-tank-chip${active}" data-tank="${t.id}">${t.name}</button>`
+      })
+      .join('')
+  }
+
+  function wrapCardsHtml(): string {
+    return WRAP_OPTIONS.map((w) => {
       const thumb = w.url
         ? `<img src="${w.url}" alt="" loading="lazy" />`
         : `<span class="wrap-thumb-stock">Stock</span>`
-      const active = w.id === selected ? ' is-selected' : ''
-      const isApplied = w.id === applied ? ' is-applied' : ''
+      const active = w.id === draft.wrapId ? ' is-selected' : ''
       return `
-        <button type="button" class="wrap-card${active}${isApplied}" data-wrap="${w.id}">
+        <button type="button" class="wrap-card${active}" data-wrap="${w.id}">
           <span class="wrap-thumb">${thumb}</span>
           <span class="wrap-card-name">${w.name}</span>
         </button>`
     }).join('')
-
-    root.innerHTML = `
-      <div class="menu-panel menu-panel-wide">
-        <p class="menu-brand">Steel</p>
-        <h1 class="menu-title">Customize</h1>
-        <p class="menu-sub">Pick a wrap · preview · Apply saves to your account + Deploy.</p>
-        <div class="wrap-preview">
-          ${previewHtml}
-          <div class="wrap-preview-meta">
-            <p class="wrap-preview-name">${opt.name}</p>
-            <p class="wrap-preview-blurb">${opt.blurb}</p>
-          </div>
-        </div>
-        <div class="wrap-grid">${cards}</div>
-        <div class="wrap-actions">
-          <button type="button" class="deploy-btn wrap-apply" data-apply>Apply</button>
-          <button type="button" class="deploy-btn menu-back">Back</button>
-        </div>
-        <p class="wrap-status" data-status></p>
-      </div>
-    `
-
-    root.querySelectorAll('[data-wrap]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        selected = (btn as HTMLButtonElement).dataset.wrap as WrapId
-        render()
-      })
-    })
-    root.querySelector('[data-apply]')!.addEventListener('click', () => {
-      void (async () => {
-        setSelectedWrapId(selected)
-        const user = await updateProfile({ wrapId: selected })
-        render()
-        const status = root.querySelector('[data-status]') as HTMLParagraphElement
-        if (user) {
-          status.textContent = `Saved to account: ${wrapOptionById(selected).name} — used on Deploy.`
-          console.info('[Steel] Wrap saved to profile:', selected)
-        } else {
-          status.textContent = `Applied locally: ${wrapOptionById(selected).name} (not signed in).`
-        }
-      })()
-    })
-    root.querySelector('.menu-back')!.addEventListener('click', () => goHome(root, resolve))
   }
 
-  render()
+  function axisSlidersHtml(): string {
+    return `
+      <label class="customize-slider">
+        <span>X</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.x}" data-axis="x" />
+        <span class="customize-axis-val" data-axis-val="x">${rotDeg.x}°</span>
+      </label>
+      <label class="customize-slider">
+        <span>Y</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.y}" data-axis="y" />
+        <span class="customize-axis-val" data-axis-val="y">${rotDeg.y}°</span>
+      </label>
+      <label class="customize-slider">
+        <span>Z</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.z}" data-axis="z" />
+        <span class="customize-axis-val" data-axis-val="z">${rotDeg.z}°</span>
+      </label>`
+  }
+
+  function metaHtml(): string {
+    const t = tankOptionById(tankId)
+    return `<p class="wrap-preview-name">${t.name}</p>
+      <p class="wrap-preview-blurb">${wrapOptionById(draft.wrapId).name} · drag to orbit · XYZ to rotate</p>`
+  }
+
+  function refreshChrome(): void {
+    const tankRow = root.querySelector('[data-tank-row]')
+    const wrapGrid = root.querySelector('[data-wrap-grid]')
+    const axisRow = root.querySelector('[data-axis-sliders]')
+    const meta = root.querySelector('[data-preview-meta]')
+    if (tankRow) tankRow.innerHTML = tankChipsHtml()
+    if (wrapGrid) wrapGrid.innerHTML = wrapCardsHtml()
+    if (axisRow) axisRow.innerHTML = axisSlidersHtml()
+    if (meta) meta.innerHTML = metaHtml()
+    bindSelectors()
+    bindAxisSliders()
+  }
+
+  function bindAxisSliders(): void {
+    root.querySelectorAll('[data-axis]').forEach((el) => {
+      el.addEventListener('input', () => {
+        const axis = (el as HTMLInputElement).dataset.axis as 'x' | 'y' | 'z'
+        const v = Number((el as HTMLInputElement).value)
+        rotDeg = { ...rotDeg, [axis]: v }
+        const label = root.querySelector(`[data-axis-val="${axis}"]`)
+        if (label) label.textContent = `${v}°`
+        syncRotation()
+      })
+    })
+  }
+
+  function bindSelectors(): void {
+    root.querySelectorAll('[data-tank]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = (btn as HTMLButtonElement).dataset.tank as TankId
+        if (id === tankId) return
+        tankId = id
+        draft = getTankCosmetics(tankId)
+        rotDeg = { x: 0, y: 36, z: 0 }
+        refreshChrome()
+        queueShow()
+      })
+    })
+    root.querySelectorAll('[data-wrap]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const wrapId = (btn as HTMLButtonElement).dataset.wrap as WrapId
+        if (wrapId === draft.wrapId) return
+        draft = { wrapId }
+        refreshChrome()
+        queueApplyDraft()
+      })
+    })
+  }
+
+  root.innerHTML = `
+    <div class="menu-panel menu-panel-wide customize-panel">
+      <p class="menu-brand">Steel</p>
+      <h1 class="menu-title">Customize</h1>
+      <p class="menu-sub">Pick a tank · orbit · rotate with XYZ · wrap · Apply (this tank only).</p>
+
+      <p class="menu-section">Tank</p>
+      <div class="customize-tank-row" data-tank-row>${tankChipsHtml()}</div>
+
+      <div class="customize-stage">
+        <div class="customize-viewport" data-viewport>
+          <p class="customize-loading" data-loading-label>Loading model…</p>
+        </div>
+        <div class="customize-stage-meta" data-preview-meta>${metaHtml()}</div>
+      </div>
+
+      <p class="menu-section">Rotation</p>
+      <div class="customize-axis-sliders" data-axis-sliders>${axisSlidersHtml()}</div>
+
+      <p class="menu-section">Wrap</p>
+      <div class="wrap-grid" data-wrap-grid>${wrapCardsHtml()}</div>
+
+      <div class="wrap-actions">
+        <button type="button" class="deploy-btn wrap-apply" data-apply>Apply</button>
+        <button type="button" class="deploy-btn menu-back">Back</button>
+      </div>
+      <p class="wrap-status" data-status></p>
+    </div>
+  `
+
+  bindSelectors()
+  bindAxisSliders()
+  root.querySelector('[data-apply]')!.addEventListener('click', () => {
+    void (async () => {
+      setTankCosmetics(tankId, draft)
+      setSelectedWrapId(draft.wrapId)
+      const user = await updateProfile({ wrapId: draft.wrapId })
+      const status = root.querySelector('[data-status]') as HTMLParagraphElement
+      const tankName = tankOptionById(tankId).name
+      const wrapName = wrapOptionById(draft.wrapId).name
+      status.textContent = user
+        ? `Saved ${tankName}: ${wrapName} (account + Deploy).`
+        : `Saved ${tankName}: ${wrapName} (local).`
+      console.info('[Steel] Customize applied', tankId, draft)
+    })()
+  })
+  root.querySelector('.menu-back')!.addEventListener('click', () => {
+    preview?.dispose()
+    preview = null
+    goHome(root, resolve)
+  })
+
+  const viewport = root.querySelector('[data-viewport]') as HTMLElement
+  preview = createCustomizePreview(viewport)
+  queueShow()
 }
 
 function showMatchSetup(
@@ -623,7 +745,10 @@ function showMatchSetup(
       <p class="menu-hint" data-mode-hint>Hold Midwood for 90s. Infinite respawns until a nation wins.</p>
 
       <p class="menu-section">Map</p>
-      <p class="menu-hint menu-map-fixed">Forest Overwatch — curved roads · North ruins · abandoned cars</p>
+      <div class="env-row" data-env="map">
+        <button type="button" class="env-chip is-selected" data-val="forest">Forest Overwatch</button>
+      </div>
+      <p class="menu-hint" data-map-hint>750×2000 pine hills · road clearings · 3 towns</p>
 
       <p class="menu-section">Time of day</p>
       <div class="env-row" data-env="time">
@@ -659,7 +784,7 @@ function showMatchSetup(
   `
 
   function wireEnvRow(
-    key: 'time' | 'season' | 'weather' | 'mode',
+    key: 'time' | 'season' | 'weather' | 'mode' | 'map',
     apply: (v: string) => void,
   ): void {
     const row = root.querySelector(`[data-env="${key}"]`)!
@@ -681,12 +806,19 @@ function showMatchSetup(
     weather = v as WeatherKind
   })
   const modeHint = root.querySelector('[data-mode-hint]') as HTMLElement
+  const mapHint = root.querySelector('[data-map-hint]') as HTMLElement
   wireEnvRow('mode', (v) => {
     gameMode = v === 'skirmish' ? 'skirmish' : 'koth'
     modeHint.textContent =
       gameMode === 'koth'
         ? 'Hold Midwood for 90s. Infinite respawns until a nation wins.'
         : 'Wipe the enemy team. You lose if your tank is destroyed.'
+  })
+  wireEnvRow('map', (v) => {
+    mapId = 'forest'
+    void v
+    const opt = mapOptionById(mapId)
+    mapHint.textContent = opt.blurb
   })
 
   function renderTeamAi(team: 'red' | 'blue'): void {

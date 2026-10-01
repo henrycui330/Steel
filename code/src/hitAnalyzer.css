@@ -1,0 +1,123 @@
+/* War Thunder–style armor hit view */
+
+.hit-analyzer {
+  --ha-ink: #e8ece2;
+  --ha-muted: rgba(200, 208, 190, 0.7);
+  --ha-ok: #7dff4a;
+  --ha-warn: #c4a35a;
+  --ha-bad: #c8c8c8;
+  --ha-kill: #ff4a3a;
+  position: fixed;
+  left: 1rem;
+  bottom: 18%;
+  z-index: 28;
+  width: min(20.5rem, 46vw);
+  padding: 0.45rem 0.5rem 0.5rem;
+  pointer-events: none;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  color: var(--ha-ink);
+  background: linear-gradient(
+    180deg,
+    rgba(10, 14, 10, 0.92) 0%,
+    rgba(18, 24, 18, 0.88) 100%
+  );
+  border: 1px solid rgba(170, 185, 150, 0.3);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transform: translateY(10px);
+  transition:
+    opacity 0.14s ease,
+    transform 0.2s ease;
+}
+
+.hit-analyzer.is-on {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.hit-analyzer.is-off {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.hit-analyzer[hidden] {
+  display: none;
+}
+
+.ha-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.3rem;
+  padding: 0 0.15rem;
+}
+
+.ha-title {
+  margin: 0;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ha-muted);
+}
+
+.ha-outcome {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.hit-analyzer[data-kind='ricochet'] .ha-outcome,
+.hit-analyzer[data-kind='stopped'] .ha-outcome {
+  color: var(--ha-bad);
+}
+
+.hit-analyzer[data-kind='blast'] .ha-outcome {
+  color: var(--ha-warn);
+}
+
+.hit-analyzer[data-kind='penetrated'] .ha-outcome {
+  color: var(--ha-ok);
+}
+
+.hit-analyzer[data-kind='kill'] .ha-outcome,
+.hit-analyzer[data-kind='crit'] .ha-outcome {
+  color: var(--ha-kill);
+}
+
+.ha-view {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 320 / 220;
+  border: 1px solid rgba(140, 160, 120, 0.25);
+  background:
+    radial-gradient(ellipse at 50% 55%, rgba(40, 55, 40, 0.55), rgba(8, 10, 8, 0.9));
+}
+
+.ha-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  margin: 0.35rem 0.1rem 0;
+}
+
+.ha-target {
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ha-stats {
+  font-size: 0.62rem;
+  font-weight: 550;
+  color: var(--ha-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}

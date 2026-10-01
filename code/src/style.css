@@ -527,6 +527,17 @@ canvas {
 }
 
 /* Optic reticle — PNG with black keyed out via screen blend */
+:root {
+  /* Shared HUD zones (tank #hud overrides; flight .fhud inherits) */
+  --hud-pad-x: max(0.85rem, env(safe-area-inset-left, 0px) + 0.55rem);
+  --hud-pad-y: max(0.85rem, env(safe-area-inset-top, 0px) + 0.45rem);
+  --hud-pad-bottom: max(0.85rem, env(safe-area-inset-bottom, 0px) + 0.55rem);
+  --hud-koth-h: 0px;
+  --hud-compass-h: 4.35rem;
+  --hud-corner-w: min(240px, calc(42vw - 1.25rem));
+  --hud-bottom-reserve: min(46vh, 17.5rem);
+}
+
 #hud {
   position: fixed;
   inset: 0;
@@ -542,44 +553,254 @@ canvas {
   font-family: "Barlow Condensed", "IBM Plex Sans", sans-serif;
 }
 
+/* KOTH bar reserves top strip so compass / minimap drop below it */
+#hud:has(.hud-koth:not([hidden])),
+.fhud:has(.hud-koth:not([hidden])) {
+  --hud-koth-h: 3.15rem;
+}
+
 .aim-mask {
   position: absolute;
   inset: 0;
   opacity: 0;
-  transition: opacity 0.18s ease;
-  background:
-    radial-gradient(
-      ellipse 42% 48% at 50% 48%,
-      transparent 0%,
-      transparent 55%,
-      rgba(8, 10, 8, 0.55) 78%,
-      rgba(4, 5, 4, 0.88) 100%
-    );
+  transition: opacity 0.2s ease;
+  pointer-events: none;
 }
 
 #hud.is-aiming .aim-mask {
   opacity: 1;
 }
 
+/* Dense circular tunnel — reads as a tank optic, not a soft vignette */
+.optic-tunnel {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      circle 34vmin at 50% 48%,
+      transparent 0%,
+      transparent 58%,
+      rgba(2, 3, 2, 0.55) 68%,
+      rgba(0, 0, 0, 0.88) 78%,
+      #000 92%
+    ),
+    radial-gradient(
+      ellipse 55% 62% at 50% 48%,
+      transparent 0%,
+      transparent 40%,
+      rgba(6, 8, 6, 0.35) 70%,
+      rgba(0, 0, 0, 0.75) 100%
+    );
+  box-shadow: inset 0 0 80px 24px rgba(0, 0, 0, 0.55);
+}
+
+.optic-glass {
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  width: min(68vmin, 520px);
+  height: min(68vmin, 520px);
+  transform: translate(-50%, -50%);
+}
+
+.optic-mils {
+  position: absolute;
+  inset: 0;
+  color: rgba(210, 220, 190, 0.88);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95));
+}
+
+.mil-cross {
+  position: absolute;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.mil-cross.mil-h {
+  left: 8%;
+  right: 8%;
+  top: 50%;
+  height: 1px;
+  transform: translateY(-50%);
+  /* gap at center so the pip reads */
+  background: linear-gradient(
+    90deg,
+    currentColor 0%,
+    currentColor calc(50% - 10px),
+    transparent calc(50% - 10px),
+    transparent calc(50% + 10px),
+    currentColor calc(50% + 10px),
+    currentColor 100%
+  );
+}
+
+.mil-cross.mil-v {
+  top: 8%;
+  bottom: 8%;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(
+    180deg,
+    currentColor 0%,
+    currentColor calc(50% - 10px),
+    transparent calc(50% - 10px),
+    transparent calc(50% + 10px),
+    currentColor calc(50% + 10px),
+    currentColor 100%
+  );
+}
+
+.mil-tick {
+  position: absolute;
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.mil-tick.mil-h {
+  width: 1px;
+  height: 9px;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.mil-tick.mil-h.mil-n1,
+.mil-tick.mil-h.mil-p1 {
+  height: 7px;
+}
+
+.mil-tick.mil-h.mil-n2,
+.mil-tick.mil-h.mil-p2 {
+  height: 11px;
+}
+
+.mil-tick.mil-h.mil-n3,
+.mil-tick.mil-h.mil-p3 {
+  height: 14px;
+}
+
+.mil-tick.mil-v {
+  width: 9px;
+  height: 1px;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.mil-tick.mil-v.mil-n1,
+.mil-tick.mil-v.mil-p1 {
+  width: 7px;
+}
+
+.mil-tick.mil-v.mil-n2,
+.mil-tick.mil-v.mil-p2 {
+  width: 11px;
+}
+
+.mil-tick.mil-v.mil-n3,
+.mil-tick.mil-v.mil-p3 {
+  width: 14px;
+}
+
+/* ~mil spacing as % of optic diameter */
+.mil-tick.mil-h.mil-n1 { left: calc(50% - 7%); }
+.mil-tick.mil-h.mil-n2 { left: calc(50% - 14%); }
+.mil-tick.mil-h.mil-n3 { left: calc(50% - 21%); }
+.mil-tick.mil-h.mil-p1 { left: calc(50% + 7%); }
+.mil-tick.mil-h.mil-p2 { left: calc(50% + 14%); }
+.mil-tick.mil-h.mil-p3 { left: calc(50% + 21%); }
+
+.mil-tick.mil-v.mil-n1 { top: calc(50% - 7%); }
+.mil-tick.mil-v.mil-n2 { top: calc(50% - 14%); }
+.mil-tick.mil-v.mil-n3 { top: calc(50% - 21%); }
+.mil-tick.mil-v.mil-p1 { top: calc(50% + 7%); }
+.mil-tick.mil-v.mil-p2 { top: calc(50% + 14%); }
+.mil-tick.mil-v.mil-p3 { top: calc(50% + 21%); }
+
+/* Stadia chevron under center — quick ranging cue */
+.mil-stadia {
+  position: absolute;
+  left: 50%;
+  top: calc(50% + 14px);
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  opacity: 0.8;
+}
+
+.mil-stadia::before,
+.mil-stadia::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 14px;
+  background: currentColor;
+  transform-origin: top center;
+}
+
+.mil-stadia::before {
+  transform: rotate(-32deg);
+}
+
+.mil-stadia::after {
+  transform: rotate(32deg);
+}
+
+.mil-center {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  transform: translate(-50%, -50%);
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  opacity: 0.95;
+  box-sizing: border-box;
+}
+
+.optic-zoom-tag {
+  position: absolute;
+  right: 12%;
+  bottom: 14%;
+  font-family: "Share Tech Mono", ui-monospace, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  color: rgba(200, 214, 180, 0.7);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
 #hud.is-aiming .xhair-mouse {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
+  opacity: 0.55;
+}
+
+#hud.is-aiming .xhair-mouse .xhair-dot {
+  width: 8px;
+  height: 8px;
+  margin: 3px;
+  border-width: 1px;
 }
 
 #hud.is-aiming .hud-sight {
-  margin-top: 7.2rem;
+  /* Aim optic needs more clearance under the mil glass */
+  bottom: max(calc(var(--hud-bottom-reserve) + 0.35rem), 26vh);
 }
 
-/* Compass strip (U3) */
+/* Compass strip (U3) — sits under KOTH when present */
 .hud-compass {
   --compass-tick-w: 28px;
   position: absolute;
   left: 50%;
-  top: 0.85rem;
-  width: min(420px, 72vw);
+  top: calc(var(--hud-pad-y) + var(--hud-koth-h));
+  width: min(380px, calc(100vw - 2 * var(--hud-corner-w) - 2.5rem));
+  max-width: calc(100vw - 2 * var(--hud-pad-x) - 2rem);
   transform: translateX(-50%);
   pointer-events: none;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  z-index: 3;
 }
 
 .compass-frame {
@@ -711,19 +932,22 @@ canvas {
   text-align: right;
 }
 
-/* Sight-centric gun ready (U2) — under optic */
+/* Sight-centric gun ready — anchored above bottom corner reserve */
 .hud-sight {
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: auto;
+  bottom: max(var(--hud-bottom-reserve), 22vh);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.15rem;
-  margin-top: 5.6rem;
+  margin-top: 0;
   transform: translate(-50%, 0);
   pointer-events: none;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  z-index: 4;
+  max-width: min(12rem, calc(100vw - 2 * var(--hud-corner-w) - 2rem));
 }
 
 .sight-ready {
@@ -879,22 +1103,25 @@ canvas {
   position: absolute;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  width: min(260px, calc(50vw - 1.5rem));
+  gap: 0.4rem;
+  width: var(--hud-corner-w);
+  max-height: var(--hud-bottom-reserve);
+  overflow: hidden;
   color: var(--hud-ink);
   pointer-events: none;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+  z-index: 5;
 }
 
 .hud-bl {
-  left: 1rem;
-  bottom: 1rem;
+  left: var(--hud-pad-x);
+  bottom: var(--hud-pad-bottom);
   align-items: stretch;
 }
 
 .hud-br {
-  right: 1rem;
-  bottom: 1rem;
+  right: max(0.85rem, env(safe-area-inset-right, 0px) + 0.55rem);
+  bottom: var(--hud-pad-bottom);
   align-items: stretch;
 }
 
@@ -1043,19 +1270,23 @@ canvas {
 
 .hud-koth {
   position: fixed;
-  top: max(0.45rem, env(safe-area-inset-top, 0px) + 0.35rem);
+  top: max(0.35rem, env(safe-area-inset-top, 0px) + 0.25rem);
   left: 50%;
   transform: translateX(-50%);
   z-index: 12;
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  min-width: min(520px, calc(100vw - 2rem));
-  padding: 0.35rem 0.55rem;
+  gap: 0.55rem;
+  /* Leave side gutters for minimap / safe edges — never force full width */
+  width: min(480px, calc(100vw - 2 * var(--hud-corner-w, 140px) - 2.5rem));
+  min-width: 0;
+  max-width: calc(100vw - 2rem);
+  padding: 0.3rem 0.5rem;
   background: rgba(8, 12, 14, 0.72);
   border: 1px solid rgba(230, 232, 226, 0.18);
   font-family: 'Share Tech Mono', ui-monospace, monospace;
   pointer-events: none;
+  box-sizing: border-box;
 }
 
 .hud-koth[hidden],
@@ -1179,14 +1410,16 @@ canvas {
   filter: drop-shadow(0 0 6px rgba(0, 0, 0, 0.55));
 }
 
-/* Top-right tactical minimap */
+/* Top-right tactical minimap — always below KOTH + compass band */
 .hud-minimap {
   position: absolute;
-  top: max(3.6rem, env(safe-area-inset-top, 0px) + 3.2rem);
-  right: max(0.85rem, env(safe-area-inset-right, 0px) + 0.6rem);
+  top: calc(var(--hud-pad-y) + var(--hud-koth-h) + var(--hud-compass-h) + 0.35rem);
+  right: max(0.85rem, env(safe-area-inset-right, 0px) + 0.55rem);
   z-index: 2;
   pointer-events: none;
   transition: opacity 0.15s ease;
+  max-height: calc(100vh - var(--hud-bottom-reserve) - 6rem);
+  overflow: hidden;
 }
 
 .minimap-frame {
@@ -1423,15 +1656,22 @@ canvas {
 
 .combat-ammo {
   display: grid;
-  gap: 0.28rem;
+  gap: 0.22rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.combat-magazine.is-empty .magazine-text {
+  color: #c45c3a;
 }
 
 .ammo-slot {
   display: grid;
   grid-template-columns: 1.4rem 1fr auto;
-  gap: 0.4rem;
+  gap: 0.35rem;
   align-items: center;
-  padding: 0.35rem 0.5rem;
+  padding: 0.28rem 0.45rem;
   background: var(--hud-panel);
   border: 1px solid rgba(180, 210, 160, 0.18);
   opacity: 0.58;
@@ -1489,7 +1729,7 @@ canvas {
   font-size: 0.65rem;
   letter-spacing: 0.08em;
   color: var(--hud-muted);
-  min-width: 2.2rem;
+  min-width: 3.4rem;
   text-align: right;
 }
 
@@ -1501,21 +1741,53 @@ canvas {
   color: #8aa0b8;
 }
 
+.ammo-slot.is-empty {
+  border-color: rgba(196, 92, 58, 0.35);
+}
+
+.ammo-slot.is-empty .ammo-state {
+  color: #c45c3a;
+}
+
+.hud-sight.is-loading .sight-ready-text {
+  letter-spacing: 0.12em;
+}
+
+.hud-sight.is-empty .sight-ready {
+  color: #c45c3a;
+}
+
+.hud-sight.is-empty .sight-shell {
+  color: #c45c3a;
+}
+
 @media (max-width: 640px) {
+  :root {
+    --hud-corner-w: min(42vw, 168px);
+    --hud-bottom-reserve: min(40vh, 14rem);
+    --hud-compass-h: 3.85rem;
+  }
+
   .hud-corner {
-    width: min(46vw, 200px);
+    width: var(--hud-corner-w);
+    gap: 0.28rem;
+  }
+
+  .hud-plate {
+    padding: 0.4rem 0.5rem 0.45rem;
   }
 
   .hud-minimap {
-    top: max(3.2rem, env(safe-area-inset-top, 0px) + 2.8rem);
-    right: max(0.5rem, env(safe-area-inset-right, 0px) + 0.35rem);
+    top: calc(var(--hud-pad-y) + var(--hud-koth-h) + var(--hud-compass-h) + 0.25rem);
+    right: max(0.45rem, env(safe-area-inset-right, 0px) + 0.3rem);
   }
 
   .minimap-svg {
-    width: min(28vw, 120px);
+    width: min(26vw, 100px);
   }
 
-  .minimap-town-label {
+  .minimap-town-label,
+  .minimap-legend {
     display: none;
   }
 
@@ -1524,6 +1796,33 @@ canvas {
   }
 
   .ammo-state {
+    min-width: 2rem;
+  }
+
+  .hud-sight {
+    bottom: max(calc(var(--hud-bottom-reserve) + 0.25rem), 20vh);
+  }
+
+  .koth-name {
+    display: none;
+  }
+}
+
+@media (max-height: 560px) {
+  :root {
+    --hud-bottom-reserve: min(36vh, 11.5rem);
+    --hud-compass-h: 3.5rem;
+  }
+
+  .hud-chips {
+    display: none;
+  }
+
+  .ammo-role {
+    display: none;
+  }
+
+  .minimap-legend {
     display: none;
   }
 }
@@ -1627,6 +1926,31 @@ canvas {
   margin-top: 1rem;
 }
 
+.match-end-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: center;
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.match-end-actions .match-end-btn {
+  width: auto;
+  min-width: 8.5rem;
+  margin-top: 0;
+  flex: 1 1 auto;
+}
+
+.match-end-watch {
+  background: #c4a35a !important;
+  color: #1a1408 !important;
+}
+
+.match-end-watch:hover {
+  background: #d4b56a !important;
+}
+
 /* 3D victory stage: overlay only, scene renders behind */
 .match-end.has-stage {
   display: flex;
@@ -1691,6 +2015,10 @@ canvas {
 }
 
 .match-end.has-stage .match-end-btn {
+  margin-top: 0.75rem;
+}
+
+.match-end.has-stage .match-end-actions {
   margin-top: 0.75rem;
 }
 
@@ -1895,6 +2223,109 @@ canvas {
 }
 
 /* ——— Customize / wraps ——— */
+.customize-panel {
+  max-width: min(920px, 96vw);
+}
+
+.customize-tank-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0 0 1rem;
+  max-height: 7.5rem;
+  overflow-y: auto;
+}
+
+.customize-tank-chip {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid rgba(215, 224, 210, 0.22);
+  background: rgba(8, 12, 16, 0.45);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.customize-tank-chip:hover {
+  border-color: rgba(196, 163, 90, 0.55);
+}
+
+.customize-tank-chip.is-selected {
+  border-color: rgba(196, 163, 90, 0.85);
+  box-shadow: inset 0 0 0 1px rgba(196, 163, 90, 0.35);
+}
+
+.customize-stage {
+  margin: 0 0 1.15rem;
+}
+
+.customize-viewport {
+  position: relative;
+  width: 100%;
+  height: min(42vh, 360px);
+  min-height: 220px;
+  border: 1px solid rgba(215, 224, 210, 0.28);
+  background: #1a2228;
+  overflow: hidden;
+}
+
+.customize-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.customize-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  background: rgba(12, 16, 20, 0.45);
+  color: #e6e8e2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 0.8rem;
+}
+
+.customize-viewport[data-loading='1'] .customize-loading {
+  opacity: 1;
+}
+
+.customize-stage-meta {
+  margin-top: 0.55rem;
+}
+
+.customize-axis-sliders {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0 0 1.15rem;
+}
+
+.customize-slider {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr 3rem;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.customize-slider input[type='range'] {
+  width: 100%;
+}
+
+.customize-axis-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 .wrap-preview {
   display: grid;
   gap: 0.75rem;

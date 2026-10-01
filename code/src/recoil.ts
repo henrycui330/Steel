@@ -23,15 +23,18 @@ const SETTLE = 3.4 // how fast target returns to 0
 const SLIDE_SETTLE = 4.2 // barrel returns a bit quicker than hull
 const POS_DECAY = 6
 
-export function punchShotRecoil(): void {
-  hullTarget += HULL_IMPULSE
-  barrelPitchTarget += BARREL_PITCH_IMPULSE
-  slideTarget += SLIDE_IMPULSE
-  // Cap so spam-fire doesn’t stack absurdly
-  hullTarget = THREE.MathUtils.clamp(hullTarget, -0.05, 0.02)
-  barrelPitchTarget = THREE.MathUtils.clamp(barrelPitchTarget, -0.06, 0.02)
-  slideTarget = Math.min(0.45, slideTarget)
-  posKick = Math.min(0.35, posKick + POS_IMPULSE)
+/** @param scale 1 = tank gun; ~0.1 = rocket truck (avoids tipping the chassis). */
+export function punchShotRecoil(scale = 1): void {
+  const s = THREE.MathUtils.clamp(scale, 0, 1.5)
+  hullTarget += HULL_IMPULSE * s
+  barrelPitchTarget += BARREL_PITCH_IMPULSE * s
+  slideTarget += SLIDE_IMPULSE * s
+  // Cap so spam-fire doesn’t stack absurdly (tighter when soft recoiling)
+  const hullCap = 0.02 + 0.03 * s
+  hullTarget = THREE.MathUtils.clamp(hullTarget, -hullCap, 0.02 * s)
+  barrelPitchTarget = THREE.MathUtils.clamp(barrelPitchTarget, -0.04 * s - 0.01, 0.02 * s)
+  slideTarget = Math.min(0.2 + 0.25 * s, slideTarget)
+  posKick = Math.min(0.12 + 0.23 * s, posKick + POS_IMPULSE * s)
 }
 
 export function updateShotRecoil(

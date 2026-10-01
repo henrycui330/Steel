@@ -5,6 +5,7 @@ import { spawnAiCorsair, isAircraftTankId } from './aiAircraft'
 import {
   unlockAudio,
   createDieselEngine,
+  createCabinBed,
   createPropEngine,
   createJetEngine,
   createEjectSiren,
@@ -13,12 +14,16 @@ import {
 } from './audio'
 import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
 import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
-import { type CameraMode, adjustAimZoom, updatePlayerCamera } from './camera'
+import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
+import './cosmetics'
 import type { DummyTarget } from './dummy'
-import { createDriveController } from './drive'
+import { createDriveController, SPEED_FEEL } from './drive'
+import { createGermanCrewVoice } from './germanCrew'
+import { createSovietCrewVoice } from './sovietCrew'
 import { createFireSystem } from './fire'
+import { defaultAmmoRacks } from './ammo'
 import { createHud } from './hud'
 import {
   bindDriveInput,
@@ -41,9 +46,10 @@ import { createLockOnHud } from './lockOnHud'
 import { aimAaAtLockedTarget, clearAaAimTracking } from './aaAutoAim'
 import { createMissileLockStub, noteMissileLockChange } from './missileStub'
 import { createSamMissiles } from './samMissiles'
+import { createHitAnalyzer } from './hitAnalyzer'
 import { createCountermeasures, readPublishedDecoys } from './countermeasures'
 import { createArtilleryController, type ArtilleryController } from './artillery'
-import { loadPlayerTank } from './loadTank'
+import { loadPlayerTank, loadTankChassis } from './loadTank'
 import { loadPlayerAircraft, type AircraftHandle } from './loadAircraft'
 import { createAircraftFlight } from './aircraftFlight'
 import { createAircraftChaseCamera } from './aircraftCamera'
@@ -52,6 +58,9 @@ import { createAircraftGuns } from './aircraftGuns'
 import { createAircraftBombs } from './aircraftBombs'
 import { createAircraftRockets } from './aircraftRockets'
 import { createImpactCinematic, KILL_SHOT } from './impactCinematic'
+import { createDeathCam, type DeathKiller } from './deathCam'
+import { createMatchTape } from './matchTape'
+import { createMatchReview, type MatchReview } from './matchReview'
 import { createEjectCinematic } from './ejectCinematic'
 import { createEjectAlert } from './ejectAlert'
 import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
@@ -202,6 +211,8 @@ const fire = createFireSystem(scene, playable.x)
 let mapColliders: readonly PropCollider[] = []
 /** When set, the render loop shows the victory stage instead of the battle. */
 let podiumStage: Podium3d | null = null
+/** Post-match highlight reel — takes priority over the podium stage. */
+let matchReview: MatchReview | null = null
 
 function onResize(): void {
   const width = window.innerWidth
@@ -257,7 +268,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const mapOpt = mapOptionById(mapId)
   const option = tankOptionById(tankId)
   fire.setReloadSec(option.reloadSec)
+  fire.setMagazine(option.magazineSize ?? 0, option.reloadSec)
+  fire.setNoMainGun(!!option.noMainGun)
   fire.setGunProfile(option.gun)
+  fire.setAmmoStock(
+    defaultAmmoRacks({
+      reloadSec: option.reloadSec,
+      magazineSize: option.magazineSize,
+      antiAir: option.antiAir,
+      noMainGun: option.noMainGun,
+    }),
+  )
   fire.setPlayableBounds(playable)
   setAimRates(option.gun.traverseRadPerSec, option.gun.elevateRadPerSec)
   if (option.antiAir || option.aimPitchMinDeg != null || option.aimPitchMaxDeg != null) {
@@ -308,7 +329,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   let mapPaths: Array<{ points: Array<{ x: number; z: number }> }> | undefined
   let mapSpawns = mapOpt.spawns
   let playerHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
-  let remoteHandlesEarly: Awaited<ReturnType<typeof loadPlayerTank>>[] = []
+  let remoteHandlesEarly: Awaited<ReturnType<typeof loadTankChassis>>[] = []
   let airHandleEarly: AircraftHandle | null = null
   let smokeEarly: Awaited<ReturnType<typeof createSmokeSystem>> | null = null
   const isAir = option.aircraft === true
@@ -320,7 +341,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     ]
     const peerLoadAt = loads.length
     if (mp && !isAir) {
-      for (const peer of mp.peers) loads.push(loadPlayerTank(peer.tankId))
+      for (const peer of mp.peers) loads.push(loadTankChassis(peer.tankId))
     }
     const settled = await Promise.allSettled(loads)
     const mapRes = settled[0]!
@@ -349,7 +370,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       for (let i = 0; i < mp.peers.length; i++) {
         const remoteRes = settled[peerLoadAt + i]
         if (remoteRes?.status === 'fulfilled') {
-          remoteHandlesEarly.push(remoteRes.value as Awaited<ReturnType<typeof loadPlayerTank>>)
+          remoteHandlesEarly.push(remoteRes.value as Awaited<ReturnType<typeof loadTankChassis>>)
         } else if (remoteRes?.status === 'rejected') {
           console.warn('[Steel] Remote tank load failed', remoteRes.reason)
         }
@@ -402,12 +423,21 @@ async function startMission(sel: MenuSelection): Promise<void> {
     air.root.position.set(base.x, sampleY(base.x, base.z) + AIR_SPAWN_ALT, base.z)
     air.root.rotation.y = Math.atan2(-base.x, -base.z)
     air.root.userData.air = true
+    air.root.userData.isPlayer = true
+    air.root.name = 'playerTank'
     scene.add(air.root)
+
+    const airTape = createMatchTape()
 
     // Plane never captures the hill — only ground units do. In KOTH a crash
     // or eject respawns; in Skirmish either one ends the match.
     let airCrashed = false
     let airDeadFor = 0
+    let lastAirKiller: DeathKiller | null = null
+    let pendingAirDeathCam = false
+    const creditAirStrike = (k: DeathKiller): void => {
+      lastAirKiller = k
+    }
     // Jets: turbine loop (no prop spin). Props: prop-idle.
     const propEngine = option.jet ? createJetEngine() : createPropEngine()
     const ejectSiren = createEjectSiren()
@@ -439,6 +469,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       stallAlarm.setActive(false)
       propEngine.setIntensity(0)
       airBoard.noteDeath(air.root)
+      airTape.mark('death')
       if (reason === 'eject') {
         console.info(`[Steel] Corsair ejected at ${speed.toFixed(0)} m/s`)
       } else {
@@ -658,7 +689,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: air.root,
     })
     killInd = createKillIndicator()
-    const unsubAirKill = airBoard.onPlayerKill((n) => killInd!.noteKill(n))
+    const unsubAirKill = airBoard.onPlayerKill((n) => {
+      killInd!.noteKill(n)
+      airTape.mark('kill')
+    })
     killInd.setKills(0)
     killInd.setVisible(false)
 
@@ -674,12 +708,37 @@ async function startMission(sel: MenuSelection): Promise<void> {
         // for the 5s respawn timer). Crit just sinks harder; wreck waits for deck.
         flight.beginFlameout(info.severe ? 'hard' : 'normal')
         propEngine.setIntensity(0)
+        airTape.mark('death')
+        if (lastAirKiller) pendingAirDeathCam = true
         console.info(
           `[Steel] Player aircraft shot down — flame-out${info.severe ? ' (catastrophic sink)' : ''}`,
         )
       },
     })
     const airPlayerHostile = playerAsHostile(airPlayerCombat)
+    const airDeathCam = createDeathCam({
+      heightAt: sampleY,
+      onShow: (showing) => {
+        flightHud.setVisible(!showing)
+        killInd?.setVisible(!showing)
+      },
+    })
+    matchReview?.dispose()
+    matchReview = createMatchReview({
+      scene,
+      heightAt: sampleY,
+      tape: airTape,
+      tankId,
+      aircraft: true,
+      onShow: (showing) => {
+        const endEl = document.getElementById('match-end')
+        if (endEl) endEl.style.display = showing ? 'none' : ''
+      },
+      onDone: () => {
+        const endEl = document.getElementById('match-end')
+        if (endEl) endEl.style.display = ''
+      },
+    })
     const _flameEng = new THREE.Vector3()
     const _flameNose = new THREE.Vector3()
     const _mapNose = new THREE.Vector3()
@@ -709,6 +768,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           persistMesh: isKoth,
           onKill: () => airBoard.noteKillById(id),
           onDeath: () => airBoard.noteDeathById(id),
+          onStrikePlayer: creditAirStrike,
         } as const
         airJobs.push(
           (isAircraftTankId(chassisId)
@@ -826,6 +886,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const scopeLook = new THREE.Vector3()
 
     let airEnded = false
+    let deferredAirEnd: {
+      kind: 'win' | 'lose'
+      title: string
+      sub: string
+      endTeam: TeamId
+    } | null = null
 
     function presentAirMatchEnd(
       kind: 'win' | 'lose',
@@ -840,6 +906,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
       lowAltAlarm.stop()
       stallAlarm.stop()
       ejectCam.cancel()
+      airDeathCam.dispose()
+      pendingAirDeathCam = false
+      lastAirKiller = null
       ejectAlert.dispose()
       document.exitPointerLock?.()
       flightHud.setVisible(false)
@@ -856,7 +925,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       countermeasures.dispose()
       airLockHud?.setVisible(false)
       airLockHud?.dispose()
-      // Death is recorded in onCrash / eject (and KOTH can crash more than once).
+      airTape.seal()
       const rows = airBoard.ranked()
       const reward = kind === 'win' ? grantMatchWin('air-victory') : null
       showMatchEnd({
@@ -867,6 +936,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         leaderboard: rows,
         podium3d: true,
         reward,
+        onWatchReplay: () => {
+          if (!matchReview) return
+          if (matchReview.active()) matchReview.reroll()
+          else matchReview.begin()
+        },
       })
       void startVictoryStage(rows, kind === 'win', endTeam)
     }
@@ -880,6 +954,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
     ): void {
       if (airEnded) return
       airEnded = true
+      if (airDeathCam.active() || pendingAirDeathCam) {
+        deferredAirEnd = { kind, title, sub, endTeam }
+        return
+      }
       presentAirMatchEnd(kind, title, sub, endTeam)
     }
 
@@ -903,6 +981,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
       rockets?.refill()
       airPlayerCombat.revive()
       chase.reset()
+      airDeathCam.cancel()
+      pendingAirDeathCam = false
+      lastAirKiller = null
       airCrashed = false
       airDeadFor = 0
       flightHud.setRespawn(null)
@@ -936,6 +1017,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       requestAnimationFrame(flyLoop)
       timer.update(now)
       const realDt = Math.min(timer.getDelta(), 0.05)
+      if (matchReview?.active()) {
+        matchReview.update(realDt, camera)
+        renderer.render(scene, camera)
+        return
+      }
       if (podiumStage) {
         podiumStage.update(realDt)
         renderer.render(podiumStage.scene, podiumStage.camera)
@@ -999,6 +1085,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
             }
           : raw
       const tm = flight.update(dt, input)
+      airTape.tick(dt)
+      if (!airCrashed) {
+        airTape.sample({
+          position: air.root.position,
+          yaw: air.root.rotation.y,
+          pitch: air.root.rotation.x,
+          roll: air.root.rotation.z,
+          speed: tm.speed,
+        })
+        // Event marks are sparse — tape.mark itself is cheap; throttle via time gaps in tape? 
+        // mark() always pushes — limit boost/maneuver spam with last marks
+        if (tm.speed > 95) airTape.mark('boost')
+        if (Math.abs(tm.bank) > 55 || Math.abs(tm.pitch) > 35) airTape.mark('maneuver')
+      }
       if (!tm.crashed && !tm.flameout) air.spinProp(dt, tm.throttle)
       else if (tm.flameout) air.spinProp(dt, 0)
       // Prop idle: throttle + airspeed; silent while crashed / flame-out / match over.
@@ -1035,13 +1135,33 @@ async function startMission(sel: MenuSelection): Promise<void> {
         smokeEarly.wreckBurn(_flameEng)
         if (Math.random() < 0.08) smokeEarly.wreckFire(_flameEng)
       }
-      // Chase cam keeps real dt so it isn't sluggish, and yields to the bomb
-      // cam — it re-acquires by lerping back from wherever the shot ended.
-      // Stay on the airframe during flame-out so you watch the dive in.
-      if (!ejectCam.active() && !airCrashed) {
+      // Chase cam keeps real dt so it isn't sluggish. Yield to death / eject cams.
+      if (
+        (airDeathCam.active() || pendingAirDeathCam) &&
+        consumeCameraToggle()
+      ) {
+        airDeathCam.cancel()
+        pendingAirDeathCam = false
+      }
+      if (
+        pendingAirDeathCam &&
+        lastAirKiller &&
+        !airDeathCam.active() &&
+        !ejectCam.active()
+      ) {
+        pendingAirDeathCam = false
+        airDeathCam.begin(lastAirKiller)
+      }
+      if (!ejectCam.active() && !airCrashed && !airDeathCam.active()) {
         chase.update(realDt, tm)
       }
       ejectCam.update(realDt, camera)
+      airDeathCam.update(realDt, camera)
+      if (deferredAirEnd && !airDeathCam.active() && !pendingAirDeathCam) {
+        const end = deferredAirEnd
+        deferredAirEnd = null
+        presentAirMatchEnd(end.kind, end.title, end.sub, end.endTeam)
+      }
 
       if (!airEnded) {
         const neighbors = airEnemies.concat(airFriendlies).map((a) => a.root)
@@ -1274,6 +1394,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
     []
   const board = createMatchScoreboard()
   let aiSeq = 0
+  /** Last unit that damaged the player — feeds the death cam. */
+  let lastKiller: DeathKiller | null = null
+  let pendingDeathCam = false
+  const creditPlayerStrike = (k: DeathKiller): void => {
+    lastKiller = k
+  }
   try {
     if (!playerHandleEarly) {
       throw new Error(`[Steel] Failed to load tank ${tankId} — check network / Pages assets`)
@@ -1305,6 +1431,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             persistMesh: isKoth,
             onKill: () => board.noteKillById(id),
             onDeath: () => board.noteDeathById(id),
+            onStrikePlayer: creditPlayerStrike,
           }
           jobs.push(
             (isAircraftTankId(tankForAi)
@@ -1346,6 +1473,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             persistMesh: isKoth,
             onKill: () => board.noteKillById(id),
             onDeath: () => board.noteDeathById(id),
+            onStrikePlayer: creditPlayerStrike,
           }
           jobs.push(
             (isAircraftTankId(tankForAi)
@@ -1396,13 +1524,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
     tank.rotation.y = playerYaw
     scene.add(tank)
     resetAim(tank.rotation.y)
+    const tankTape = createMatchTape()
 
     /** Remote human tanks (MP — host sims guests; guests apply snaps). */
     type MpRemoteUnit = {
       userId: string
       tankId: TankId
       team: TeamId
-      handle: Awaited<ReturnType<typeof loadPlayerTank>>
+      handle: Awaited<ReturnType<typeof loadTankChassis>>
       drive: ReturnType<typeof createDriveController> | null
       input: MpInput
       inputAge: number
@@ -1504,6 +1633,28 @@ async function startMission(sel: MenuSelection): Promise<void> {
       })
     }
 
+    const germanCrew =
+      option.nation === 'germany' && !option.noCrewVoice
+        ? createGermanCrewVoice()
+        : null
+    // Soviet land chassis — rocket trucks skip VO (no READY/FIRE).
+    const sovietCrew =
+      option.nation === 'soviet' && !option.aircraft && !option.noCrewVoice
+        ? createSovietCrewVoice()
+        : null
+    const crew = germanCrew ?? sovietCrew
+    // Arm under the Deploy gesture immediately (don't wait for opening parade).
+    crew?.start()
+    if (crew) {
+      console.info(
+        `[Steel] Crew voice — ${option.id} · nation=${option.nation ?? '—'} · ${
+          option.antiAir ? 'SPAAG (HIT only)' : 'full load/fire callouts'
+        }`,
+      )
+    } else if (option.noCrewVoice) {
+      console.info(`[Steel] Crew voice — ${option.id} · muted (rockets)`)
+    }
+
     const playerCombat = createCombatant(tank, {
       maxHp: option.maxHp,
       armor: option.armor,
@@ -1512,6 +1663,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
         board.noteDeath(r)
         console.info('[Steel] Player destroyed')
         spawnDestroyedWreck(scene, r, smoke, isKoth)
+        tankTape.mark('death')
+        if (lastKiller) pendingDeathCam = true
+      },
+      onDamaged: () => {
+        // German only — “We've been hit!” (Soviet HIT THEM is outbound confirm)
+        germanCrew?.announceHit()
       },
     })
     const playerName = getSession()?.username?.trim() || 'Commander'
@@ -1525,8 +1682,28 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: tank,
     })
     fire.setOnKill(() => board.noteKill(tank))
+    const hitAnalyzer = createHitAnalyzer()
+    fire.setOnHitAnalyze((report) => hitAnalyzer.show(report))
+    // SPAAG: skip Load/Loaded spam + fire-gate delay (0.2s reload); keep HIT THEM.
+    const sovietRapid = !!option.antiAir
+    fire.setVoiceHooks(
+      crew
+        ? {
+            onBeginLoad: (id) => {
+              if (!sovietRapid) crew.announceLoad(id)
+            },
+            onChambered: () => {
+              if (!sovietRapid) crew.announceLoaded()
+            },
+            onEnemyHit: () => sovietCrew?.announceHitThem(),
+          }
+        : null,
+    )
     const killInd = createKillIndicator()
-    const unsubKill = board.onPlayerKill((n) => killInd.noteKill(n))
+    const unsubKill = board.onPlayerKill((n) => {
+      killInd.noteKill(n)
+      tankTape.mark('kill')
+    })
     killInd.setKills(0)
     killInd.setVisible(false)
     const playerHostile = playerAsHostile(playerCombat)
@@ -1571,19 +1748,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
     hud.setVisible(true)
 
-    // L1 lock-on: Duster / Shilka (auto-aim in L2).
-    const groundLock = option.antiAir ? createLockOn() : null
-    const groundLockHud = option.antiAir ? createLockOnHud() : null
+    // L1 lock-on: SPAAG / ATGM (auto-aim in L2 for AA).
+    const groundLock = option.antiAir || option.samMissiles ? createLockOn() : null
+    const groundLockHud = option.antiAir || option.samMissiles ? createLockOnHud() : null
     groundLockHud?.setVisible(false)
     const _gLockOrigin = new THREE.Vector3()
     const _gLockLook = new THREE.Vector3()
+    const samLabel = option.samLabel ?? 'SAM'
     const sam =
       option.samMissiles && groundLock
         ? createSamMissiles({
             scene,
             getLaunchOrigin: (out) => {
               muzzle.getWorldPosition(out)
-              out.y += 0.6
+              out.y += 0.35
             },
             getLaunchDir: (out) => {
               getAimDirection(out)
@@ -1592,10 +1770,19 @@ async function startMission(sel: MenuSelection): Promise<void> {
             getHostiles: () => enemies,
             getDecoys: () => readPublishedDecoys(),
             heightAt: sampleY,
+            maxAmmo: option.samAmmo,
+            reloadSec: option.samReloadSec,
+            speed: option.samSpeed,
+            damage: option.samDamage,
+            pen: option.samPen,
+            // Flat ATGM flight when not a SPAAG loft profile.
+            airLaunch: !option.antiAir,
+            logTag: samLabel,
             onKill: (victim) => {
               board.noteKill(tank)
-              console.info(`[Steel] Pantsir SAM destroyed ${victim.name || 'target'}`)
+              console.info(`[Steel] ${samLabel} destroyed ${victim.name || 'target'}`)
             },
+            onHitAnalyze: (report) => hitAnalyzer.show(report),
           })
         : null
 
@@ -1621,14 +1808,39 @@ async function startMission(sel: MenuSelection): Promise<void> {
         groundLockHud?.setVisible(!showing)
       },
     })
+    const deathCam = createDeathCam({
+      heightAt: sampleY,
+      onShow: (showing) => {
+        hud.setVisible(!showing)
+        killInd.setVisible(!showing)
+        groundLockHud?.setVisible(!showing)
+      },
+    })
+    matchReview?.dispose()
+    matchReview = createMatchReview({
+      scene,
+      heightAt: sampleY,
+      tape: tankTape,
+      tankId,
+      aircraft: false,
+      onShow: (showing) => {
+        const endEl = document.getElementById('match-end')
+        if (endEl) endEl.style.display = showing ? 'none' : ''
+      },
+      onDone: () => {
+        const endEl = document.getElementById('match-end')
+        if (endEl) endEl.style.display = ''
+      },
+    })
     fire.setOnLethalShot((shot) => {
-      if (matchOver || killCam.active()) return
+      if (matchOver || killCam.active() || deathCam.active()) return
       killCam.begin(shot)
       console.info(`[Steel] Kill cam — impact in ${shot.flightTime.toFixed(2)}s`)
     })
 
     let cameraMode: CameraMode = 'turret'
     let aiming = false
+    let wasAirborne = false
     let matchOver = false
     let playerDeadFor = 0
     if (mpSess) {
@@ -1656,8 +1868,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const _exhaust = new THREE.Vector3()
     const _muzzleWorld = new THREE.Vector3()
     const _fwd = new THREE.Vector3()
+    const _dustL = new THREE.Vector3()
+    const _dustR = new THREE.Vector3()
+    const _dustOut = new THREE.Vector3()
 
     const dieselEngine = createDieselEngine()
+    const cabinBed = createCabinBed()
 
     stopProgress()
     loading.remove()
@@ -1693,7 +1909,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
         lockPointer(renderer.domElement)
         dieselEngine.start()
         dieselEngine.setIntensity(0.2)
-        updatePlayerCamera(cameraMode, camera, tank, turretMount, 1, aiming, muzzle)
+        cabinBed.start()
+        germanCrew?.start()
+        sovietCrew?.start()
+        updatePlayerCamera(
+          cameraMode,
+          camera,
+          tank,
+          turretMount,
+          1,
+          aiming,
+          muzzle,
+          0,
+          option.drive.maxSpeed * SPEED_FEEL,
+        )
       },
     })
     // MP: skip parade so both clients start sending/receiving input immediately.
@@ -1733,6 +1962,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
       drive.killSpeed()
       resetAim(yaw)
       playerCombat.revive()
+      deathCam.cancel()
+      pendingDeathCam = false
+      lastKiller = null
+      fire.setAmmoStock(
+        defaultAmmoRacks({
+          reloadSec: option.reloadSec,
+          magazineSize: option.magazineSize,
+          antiAir: option.antiAir,
+          noMainGun: option.noMainGun,
+        }),
+      )
       playerDeadFor = 0
       hud.setRespawn(null)
       dieselEngine.setIntensity(0.2)
@@ -1775,6 +2015,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
       matchOpening.dispose()
       nvg.dispose()
       dieselEngine.stop()
+      cabinBed.stop()
+      germanCrew?.stop()
+      sovietCrew?.stop()
       document.exitPointerLock()
       hud.setVisible(false)
       killInd.setVisible(false)
@@ -1784,10 +2027,24 @@ async function startMission(sel: MenuSelection): Promise<void> {
       groundLockHud?.setVisible(false)
       groundLockHud?.dispose()
       sam?.dispose()
+      hitAnalyzer.dispose()
+      fire.setOnHitAnalyze(null)
       disposeExplosions()
+      deathCam.dispose()
+      tankTape.seal()
       const rows = board.ranked()
       const reward = end.kind === 'win' ? grantMatchWin('tank-victory') : null
-      showMatchEnd({ ...end, leaderboard: rows, podium3d: true, reward })
+      showMatchEnd({
+        ...end,
+        leaderboard: rows,
+        podium3d: true,
+        reward,
+        onWatchReplay: () => {
+          if (!matchReview) return
+          if (matchReview.active()) matchReview.reroll()
+          else matchReview.begin()
+        },
+      })
       void startVictoryStage(rows, end.kind === 'win', end.team)
     }
 
@@ -1800,7 +2057,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     function requestMatchEnd(end: MatchEndSpec): void {
       if (matchOver) return
       matchOver = true
-      if (killCam.active()) {
+      if (killCam.active() || deathCam.active() || pendingDeathCam) {
         deferredEnd = end
         return
       }
@@ -1847,7 +2104,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
 
       if (consumeCameraToggle()) {
-        cameraMode = cameraMode === 'turret' ? 'chase' : 'turret'
+        cameraMode = nextCameraMode(cameraMode)
         console.info(`[Steel] Camera → ${cameraMode}`)
       }
 
@@ -1860,7 +2117,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
       const zoomDelta = consumeZoomDelta()
       if (aiming && zoomDelta !== 0) {
+        const before = getAimFov()
         adjustAimZoom(zoomDelta)
+        const after = getAimFov()
+        if (after !== before) {
+          console.info(`[Steel] Optic zoom · FOV ${after}°`)
+        }
       }
 
       const ammoPick = consumeAmmoSelect()
@@ -1890,6 +2152,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
             if (blocked) drive.killSpeed()
           },
         )
+        const airNow = drive.isAirborne()
+        if (wasAirborne && !airNow) {
+          punchCameraShake(0.18)
+          cabinBed.thump(0.55)
+        }
+        wasAirborne = airNow
         if (wheels) {
           updateWheels(
             wheels,
@@ -1911,6 +2179,18 @@ async function startMission(sel: MenuSelection): Promise<void> {
         playerCombat.tickMobility(dt)
         env.update(dt, camera, 0, option.vintageCrew)
         arty?.update(0)
+      }
+
+      tankTape.tick(dt)
+      if (playerCombat.alive) {
+        const spd = drive.getSpeed()
+        tankTape.sample({
+          position: tank.position,
+          yaw: tank.rotation.y,
+          speed: Math.abs(spd),
+        })
+        if (Math.abs(spd) > option.drive.maxSpeed * 0.82) tankTape.mark('boost')
+        if (Math.abs(turn) > 0.75 && Math.abs(spd) > 4) tankTape.mark('maneuver')
       }
 
       // Host sims every guest tank from networked input (authoritative).
@@ -2047,9 +2327,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
       const useMg = fire.getWeapon() === 'mg'
       const activeMuzzle = useMg ? mgMuzzle : muzzle
       const canFire = (!arty || arty.isDeployed()) && !mpGuest
+      const hudReady = fire.getHudState().ready
+      let fireWanted = alive && wantsFire && canFire
+      if (crew && !useMg && !option.antiAir) {
+        fireWanted = crew.gateFire(fireWanted, hudReady)
+      }
       const fired = fire.update(
         dt,
-        alive && wantsFire && canFire,
+        fireWanted,
         activeMuzzle,
         dummies,
         camera,
@@ -2059,7 +2344,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
         sam.update(dt, alive && !matchOver && isSamFire())
       }
       if (fired) {
-        if (!useMg) punchShotRecoil()
+        const rocketRack = fire.isMagazineMode()
+        if (!useMg) {
+          const recoil = rocketRack ? 0.1 : (option.recoilScale ?? 1)
+          punchShotRecoil(recoil)
+          punchCameraShake(rocketRack ? 0.06 : 0.28 * Math.min(1, recoil))
+        }
         activeMuzzle.updateMatrixWorld(true)
         activeMuzzle.getWorldPosition(_muzzleWorld)
         if (useMg) {
@@ -2074,7 +2364,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           } else {
             _fwd.set(0, 0, 1).applyQuaternion(q).normalize()
           }
-          smoke.gunBlastCloud(_muzzleWorld, _fwd)
+          if (!rocketRack) smoke.gunBlastCloud(_muzzleWorld, _fwd)
           smoke.muzzleBurst(_muzzleWorld, _fwd)
         }
       }
@@ -2087,10 +2377,32 @@ async function startMission(sel: MenuSelection): Promise<void> {
         _exhaust.set(0, 1.35, -2.4)
         tank.localToWorld(_exhaust)
         smoke.engineExhaust(_exhaust, 0.35 + Math.min(1, speed / 14) * 0.35)
-        const maxSp = Math.max(1, option.drive.maxSpeed)
+        const maxSp = Math.max(1, option.drive.maxSpeed * SPEED_FEEL)
         dieselEngine.setIntensity(0.18 + Math.min(1, speed / maxSp) * 0.82)
+        cabinBed.setDrive(
+          Math.min(1, speed / maxSp),
+          Math.min(1, Math.abs(turn)),
+          aiming,
+        )
+
+        // Track grit — only while rolling on the ground.
+        if (speed > 1.2 && !drive.isAirborne()) {
+          const speed01 = Math.min(1, speed / maxSp)
+          const turnAbs = Math.min(1, Math.abs(turn))
+          const dustI = speed01 * 0.55 + turnAbs * 0.45 * speed01
+          // Rear contact patches, left / right of hull.
+          _dustL.set(-1.15, 0.06, -1.1)
+          _dustR.set(1.15, 0.06, -1.1)
+          tank.localToWorld(_dustL)
+          tank.localToWorld(_dustR)
+          _dustOut.set(-1, 0, 0).transformDirection(tank.matrixWorld)
+          smoke.trackDust(_dustL, _dustOut, dustI)
+          _dustOut.set(1, 0, 0).transformDirection(tank.matrixWorld)
+          smoke.trackDust(_dustR, _dustOut, dustI)
+        }
       } else {
         dieselEngine.setIntensity(0)
+        cabinBed.setDrive(0, 0, aiming)
       }
 
       if (allAi.length > 0) {
@@ -2150,6 +2462,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       requestAnimationFrame(animate)
       timer.update(now)
       const realDt = Math.min(timer.getDelta(), 0.05)
+      if (matchReview?.active()) {
+        matchReview.update(realDt, camera)
+        renderer.render(scene, camera)
+        return
+      }
       if (podiumStage) {
         podiumStage.update(realDt)
         renderer.render(podiumStage.scene, podiumStage.camera)
@@ -2160,21 +2477,46 @@ async function startMission(sel: MenuSelection): Promise<void> {
         renderer.render(scene, camera)
         return
       }
-      // C skips the kill cam rather than toggling camera mode — consuming the
+      // C skips kill / death cam rather than toggling camera mode — consuming the
       // key here keeps it away from updateTank for this frame.
-      if (killCam.active() && consumeCameraToggle()) killCam.cancel()
-      const dt = killCam.active()
-        ? Math.min(realDt * killCam.timeScale(), MAX_SIM_DT)
+      if ((killCam.active() || deathCam.active()) && consumeCameraToggle()) {
+        killCam.cancel()
+        deathCam.cancel()
+        pendingDeathCam = false
+      }
+      if (
+        pendingDeathCam &&
+        lastKiller &&
+        !killCam.active() &&
+        !deathCam.active()
+      ) {
+        pendingDeathCam = false
+        deathCam.begin(lastKiller)
+      }
+      const camCinematic = killCam.active() || deathCam.active()
+      const dt = camCinematic
+        ? Math.min(realDt * (killCam.active() ? killCam.timeScale() : 0.55), MAX_SIM_DT)
         : realDt
 
       const aim = updateTank(dt)
       // Camera smoothing stays on real time so it never feels sluggish, and
-      // yields to the kill cam, which it then lerps back from.
-      if (!killCam.active()) {
-        updatePlayerCamera(cameraMode, camera, tank, turretMount, realDt, aiming, muzzle)
+      // yields to kill / death cam, which it then lerps back from.
+      if (!camCinematic) {
+        updatePlayerCamera(
+          cameraMode,
+          camera,
+          tank,
+          turretMount,
+          realDt,
+          aiming,
+          muzzle,
+          drive.getSpeed(),
+          option.drive.maxSpeed * SPEED_FEEL,
+        )
       }
       killCam.update(realDt, camera)
-      if (deferredEnd && !killCam.active()) {
+      deathCam.update(realDt, camera)
+      if (deferredEnd && !killCam.active() && !deathCam.active() && !pendingDeathCam) {
         const end = deferredEnd
         deferredEnd = null
         finishMatch(end)
@@ -2187,7 +2529,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         tracksDisableLeft: playerCombat.getTracksDisableLeft(),
         envStatus: env.getDriveMods().status,
         artilleryStatus: sam
-          ? `SAM ${sam.ammo()} · P lock · M fire`
+          ? `${samLabel} ${sam.ammo()} · P lock · M fire`
           : arty?.getHud().status,
         headingRad: tank.rotation.y,
         speedU: drive.getSpeed(),

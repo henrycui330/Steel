@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { cloneGltfScene } from './loadGltf'
 import { tankOptionById, type TankId } from './tankCatalog'
 import { paintTankDunkelgrau } from './paint'
+import { getTankCosmetics } from './cosmetics'
 import { applyTankWrap } from './wraps'
 import { createShermanTank, type TankHandle } from './tank'
 
@@ -420,10 +421,39 @@ function prepareT72(root: THREE.Object3D): boolean {
 }
 
 /**
+ * BM-13 Katyusha HD — hull_0 / turret_0 / gun_0 + chassis_0/1.
+ * Same part names as T-55 — fingerprint chassis_* and run before prepareT55.
+ * Authored nose −Z → 180° Y so cab/rails face game +Z.
+ */
+function prepareKatyusha(root: THREE.Object3D): boolean {
+  const chassis0 = root.getObjectByName('chassis_0')
+  const chassis1 = root.getObjectByName('chassis_1')
+  const hull = root.getObjectByName('hull_0')
+  const turret = root.getObjectByName('turret_0')
+  const gun = root.getObjectByName('gun_0')
+  if (!chassis0 || !chassis1 || !hull || !turret || !gun) return false
+
+  root.rotation.y = Math.PI
+  root.updateMatrixWorld(true)
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  gun.name = 'Barrel'
+  hull.attach(chassis0)
+  hull.attach(chassis1)
+  turret.attach(gun)
+
+  console.info('[Steel] BM-13 Katyusha: hull_0 + turret_0 + gun_0 rails (180° Y)')
+  return true
+}
+
+/**
  * T-55 (`t_55_sp01.glb`) — hull_0 / turret_0 / gun_0.
  * Authored gun toward −Z; rotate 180° Y to face game +Z.
  */
 function prepareT55(root: THREE.Object3D): boolean {
+  // Katyusha shares hull_0/turret_0/gun_0 — leave it to prepareKatyusha.
+  if (root.getObjectByName('chassis_0')) return false
   const turret = root.getObjectByName('turret_0')
   const gun = root.getObjectByName('gun_0')
   if (!turret || !gun) return false
@@ -500,7 +530,175 @@ function preparePzh2000(root: THREE.Object3D): boolean {
 }
 
 /**
- * T-34 (`tank_t34.glb`) — simple 4-mesh Sketchfab pack.
+ * 9P157 Khrizantema-S — named BMP-3 ATGM pack.
+ * hull001 Hull; mount2 Turret (yaw pedestal); mount001 Barrel (elevate + twin tubes).
+ * Authored +X tubes → −90° Y → +Z.
+ *
+ * Only the launcher (mount2/mount001/tubes) yaws. Deck radar dish (`sensor`),
+ * extras, and other packs stay on Hull — they look fused if attached to Turret.
+ */
+function prepareKhrizantema(root: THREE.Object3D): boolean {
+  const hull = root.getObjectByName('hull001')
+  const turret = root.getObjectByName('mount2')
+  const barrel = root.getObjectByName('mount001')
+  const tubeA = root.getObjectByName('weapon001')
+  const tubeB = root.getObjectByName('weapon2001')
+  if (!hull || !turret || !barrel || !tubeA || !tubeB) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+
+  const interior = root.getObjectByName('inside')
+  if (interior) interior.visible = false
+
+  // Pin deck/hull bits that must not spin with the ATGM mount.
+  for (const n of [
+    'sensor',
+    'sensor2',
+    'sensor3',
+    'extras',
+    'object03',
+    'lens',
+    'hull-2',
+    'hull-3',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part && part.parent !== hull) hull.attach(part)
+  }
+
+  console.info('[Steel] Khrizantema-S: mount2 turret + mount001 barrel (−90° Y); dish/sensors on Hull')
+  return true
+}
+
+/**
+ * BTR-82A — Object_95 turret, Object_97 thin 30mm tube (authored −Z → 180° Y).
+ * Fingerprint Object_95 + Object_97 (must run before Pershing Object_* path).
+ * Roof / cups / sensors ship as siblings — parent them or they stay welded to hull.
+ */
+function prepareBtr82a(root: THREE.Object3D): boolean {
+  const turret = root.getObjectByName('Object_95')
+  const barrel = root.getObjectByName('Object_97')
+  if (!(turret instanceof THREE.Mesh) || !(barrel instanceof THREE.Mesh)) return false
+
+  // Confirm barrel is a long thin stick
+  const box = new THREE.Box3().setFromObject(barrel)
+  const size = box.getSize(new THREE.Vector3())
+  const dims = [size.x, size.y, size.z].sort((a, b) => a - b)
+  if (dims[2]! < dims[1]! * 4) return false
+
+  root.rotation.y = Math.PI
+  root.updateMatrixWorld(true)
+
+  const hull = root.getObjectByName('Object_37')
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+  turret.attach(barrel)
+
+  // Turret roof + optics + hatches (Object_51 is the big cupola that looked fused).
+  for (const n of [
+    'Object_9',
+    'Object_11',
+    'Object_47',
+    'Object_49',
+    'Object_51',
+    'Object_57',
+    'Object_59',
+    'Object_61',
+    'Object_63',
+    'Object_65',
+    'Object_67',
+    'Object_69',
+    'Object_71',
+    'Object_73',
+    'Object_75',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part) turret.attach(part)
+  }
+  // Coax / secondary tube rides with elevation.
+  const coax = root.getObjectByName('Object_99')
+  if (coax) barrel.attach(coax)
+
+  console.info('[Steel] BTR-82A: Object_95 turret + roof bits + Object_97 barrel (180° Y)')
+  return true
+}
+
+/**
+ * T-34-76 Mod.1942 — Maya pack with `_Body_` / `_Turret_` mesh name tags.
+ * Gun tube = polySurface31768 (long +Z). Already +Z forward.
+ */
+function prepareT3476(root: THREE.Object3D): boolean {
+  const barrel =
+    root.getObjectByName('polySurface31768_Turret_blinn33_0') ??
+    root.getObjectByName('polySurface31768')
+  if (!(barrel instanceof THREE.Mesh)) return false
+
+  const turretParts: THREE.Object3D[] = []
+  let bodyHit = false
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return
+    if (/_Body_/i.test(o.name)) bodyHit = true
+    if (/_Turret_/i.test(o.name) && o !== barrel) turretParts.push(o)
+  })
+  if (!bodyHit || turretParts.length < 4) return false
+
+  const turret = new THREE.Group()
+  turret.name = 'Turret'
+  root.add(turret)
+  for (const part of turretParts) turret.attach(part)
+  barrel.name = 'Barrel'
+  turret.attach(barrel)
+
+  // Prefer a large body plate as Hull label (tracks/wheels stay siblings).
+  const hull =
+    root.getObjectByName('pPlane533_Body_blinn32_0') ??
+    root.getObjectByName('pCube1_blinn11_0')
+  if (hull) hull.name = 'Hull'
+
+  console.info('[Steel] T-34-76: Turret group + polySurface31768 Barrel (+Z)')
+  return true
+}
+
+/**
+ * T-64 MBT — Sketchfab Object_* pack.
+ * Object_3 = turret, Object_4 = long 125mm tube (+Z), Object_2 hull, Object_5/6 tracks.
+ * Must run before prepareT34 (which also claims Object_2 / Object_4).
+ */
+function prepareT64(root: THREE.Object3D): boolean {
+  const turret = root.getObjectByName('Object_3')
+  const barrel = root.getObjectByName('Object_4')
+  const trackA = root.getObjectByName('Object_5')
+  const trackB = root.getObjectByName('Object_6')
+  if (!(turret instanceof THREE.Mesh) || !(barrel instanceof THREE.Mesh)) return false
+  if (!(trackA instanceof THREE.Mesh) || !(trackB instanceof THREE.Mesh)) return false
+  // Fingerprint vs Pershing / T-34 / other Object_* packs
+  if (root.getObjectByName('Object_9') || root.getObjectByName('Object_7')) return false
+  if (root.getObjectByName('Object_22') || root.getObjectByName('Object_20')) return false
+
+  const box = new THREE.Box3().setFromObject(barrel)
+  const size = box.getSize(new THREE.Vector3())
+  const dims = [size.x, size.y, size.z].sort((a, b) => a - b)
+  // Gun stick: longest axis >> mid axis
+  if (dims[2]! < dims[1]! * 2.8) return false
+
+  const hull = root.getObjectByName('Object_2')
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+  // Yaw carries the gun; elevation hinge uses Barrel origin
+  turret.attach(barrel)
+
+  console.info('[Steel] T-64: Object_3 turret + Object_4 barrel (+Z)')
+  return true
+}
+
+/**
+ * T-34-85 (`tank_t34.glb`) — simple 4-mesh Sketchfab pack.
  * Object_2 = turret+gun (baked), Object_4 = hull. Peel forward stick → Barrel.
  */
 function prepareT34(root: THREE.Object3D): boolean {
@@ -523,7 +721,7 @@ function prepareT34(root: THREE.Object3D): boolean {
       console.warn('[Steel] T-34: barrel peel failed — elevation will tip whole turret')
     }
   }
-  console.info('[Steel] T-34: Hull/Turret + peeled Barrel')
+  console.info('[Steel] T-34-85: Hull/Turret + peeled Barrel')
   return true
 }
 
@@ -1092,8 +1290,13 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareT90(model) ||
       prepareShilka(model) ||
       preparePantsir(model) ||
+      prepareKhrizantema(model) ||
+      prepareKatyusha(model) ||
+      prepareBtr82a(model) ||
       prepareT72(model) ||
       prepareT55(model) ||
+      prepareT64(model) ||
+      prepareT3476(model) ||
       prepareT44(model) ||
       prepareT34(model) ||
       prepareAbrams(model) ||
@@ -1112,11 +1315,10 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
     model.position.y -= box.min.y
   }
   paintTankDunkelgrau(model)
-  await applyTankWrap(model)
   enableShadows(model)
 
   const root = new THREE.Group()
-  root.name = 'playerTank'
+  root.name = 'tankRoot'
   root.add(model)
   root.updateMatrixWorld(true)
 
@@ -1135,8 +1337,8 @@ function loadGltfSceneClone(url: string): Promise<THREE.Object3D> {
   return cloneGltfScene(url)
 }
 
-/** Load the tank chosen on the main menu. */
-export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
+/** Chassis only — stock paint. Used by AI and MP remotes. */
+export async function loadTankChassis(id: TankId): Promise<PlayerTankHandle> {
   const option = tankOptionById(id)
   try {
     return await loadGltf(option.url, option.targetWidth, !!option.rigidRig)
@@ -1147,6 +1349,15 @@ export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
   console.info('[Steel] Missing', option.url, '— procedural fallback')
   const handle = createShermanTank()
   paintTankDunkelgrau(handle.root)
-  await applyTankWrap(handle.root)
   return finishRig(handle.root, handle.turret)
+}
+
+/** Local player — chassis + this account's cosmetics for `id`. */
+export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
+  const handle = await loadTankChassis(id)
+  const cos = getTankCosmetics(id)
+  await applyTankWrap(handle.root, cos.wrapId)
+  handle.root.name = 'playerTank'
+  console.info(`[Steel] Player cosmetics ${id}: wrap=${cos.wrapId}`)
+  return handle
 }

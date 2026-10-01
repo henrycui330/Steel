@@ -3,6 +3,7 @@ import { SHELL_GRAVITY, SHELL_SPEED, type HeightSampler } from './ballistics'
 import { shellPenetrationAtSpeed } from './armor'
 import type { DummyTarget } from './dummy'
 import type { GunProfile } from './tankCatalog'
+import { playRocketFireSound } from './audio'
 
 /**
  * Six wing-mounted .50 cals for the Corsair.
@@ -61,6 +62,10 @@ export type AircraftGuns = {
   /** Restock ammo + cool the barrels (KOTH respawn). */
   refill: () => void
   setOnKill: (fn: ((victim: THREE.Object3D) => void) | null) => void
+  /** Damaging hit on a target (pen / blast / kill) — used for death-cam credit. */
+  setOnStrike: (
+    fn: ((victim: THREE.Object3D, destroyed: boolean) => void) | null,
+  ) => void
   dispose: () => void
 }
 
@@ -122,6 +127,7 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
   let shotSeq = 0
   let isFiring = false
   let onKill: ((victim: THREE.Object3D) => void) | null = null
+  let onStrike: ((victim: THREE.Object3D, destroyed: boolean) => void) | null = null
 
   const _muzzleW = new THREE.Vector3()
   const _convergeW = new THREE.Vector3()
@@ -161,6 +167,8 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
       life: BULLET_LIFETIME,
       tracer,
     })
+    // Rocket whoosh doubles as gun chatter — play on tracers so it isn't a wall of noise.
+    if (tracer) playRocketFireSound()
   }
 
   function retire(i: number): void {
@@ -237,6 +245,13 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
           { ammoId: 'mg' },
         )
         if (!result) continue
+        if (
+          result.destroyed ||
+          result.resolution.kind === 'penetrated' ||
+          result.resolution.kind === 'blast'
+        ) {
+          onStrike?.(t.root, result.destroyed)
+        }
         if (result.destroyed) onKill?.(t.root)
         // A .50 cal splashes on armour rather than deflecting onward. Retiring
         // it here also stops a deflected round re-resolving against the same
@@ -260,6 +275,9 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
     },
     setOnKill: (fn) => {
       onKill = fn
+    },
+    setOnStrike: (fn) => {
+      onStrike = fn
     },
     dispose() {
       for (let i = bullets.length - 1; i >= 0; i--) retire(i)

@@ -68,6 +68,8 @@ export type CombatantOptions = {
   onDestroyed?: (root: THREE.Group, info: { severe: boolean }) => void
   /** Fired when APHE pens tracks (immobilize applied). */
   onTracksDisabled?: (seconds: number) => void
+  /** Damaging hit (pen / blast) that applied HP loss — crew “we've been hit”. */
+  onDamaged?: (info: { damage: number; kind: string; destroyed: boolean }) => void
   label?: string
 }
 
@@ -173,15 +175,30 @@ export function createCombatant(
           console.info(
             `[Steel] ${label} ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}`,
           )
+          opts.onDamaged?.({
+            damage: resolution.damage,
+            kind: resolution.kind,
+            destroyed: true,
+          })
           opts.onDestroyed?.(root, { severe })
-        } else if (!tracksDisabled) {
-          console.info(
-            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage} HP (${hp}/${maxHp})`,
-          )
-        } else {
+        } else if (tracksDisabled) {
           console.info(
             `[Steel] ${label} TRACK PEN −${resolution.damage} HP (${hp}/${maxHp})`,
           )
+          opts.onDamaged?.({
+            damage: resolution.damage,
+            kind: resolution.kind,
+            destroyed: false,
+          })
+        } else {
+          console.info(
+            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage} HP (${hp}/${maxHp})`,
+          )
+          opts.onDamaged?.({
+            damage: resolution.damage,
+            kind: resolution.kind,
+            destroyed: false,
+          })
         }
       } else if (resolution.kind === 'ricochet') {
         console.info(

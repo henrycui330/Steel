@@ -15,6 +15,8 @@ export type MatchEndOpts = {
   podium3d?: boolean
   /** Currency granted this match (wins only). */
   reward?: WalletReward | null
+  /** Opens the highlight review (Watch Replay). */
+  onWatchReplay?: () => void
 }
 
 function escapeHtml(s: string): string {
@@ -135,6 +137,10 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
     .filter(Boolean)
     .join(' ')
 
+  const watchBtn = opts.onWatchReplay
+    ? `<button type="button" class="deploy-btn match-end-btn match-end-watch">Watch Replay</button>`
+    : ''
+
   root.innerHTML = opts.podium3d
     ? `
     <div class="stage-top">
@@ -145,7 +151,10 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
     </div>
     <div class="stage-bottom">
       ${tableHtml(rows)}
-      <button type="button" class="deploy-btn match-end-btn">Main menu</button>
+      <div class="match-end-actions">
+        ${watchBtn}
+        <button type="button" class="deploy-btn match-end-btn match-end-menu">Main menu</button>
+      </div>
     </div>
   `
     : `
@@ -157,11 +166,17 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
       ${rewardHtml(opts.reward)}
       ${podiumHtml(rows)}
       ${tableHtml(rows)}
-      <button type="button" class="deploy-btn match-end-btn">Main menu</button>
+      <div class="match-end-actions">
+        ${watchBtn}
+        <button type="button" class="deploy-btn match-end-btn match-end-menu">Main menu</button>
+      </div>
     </div>
   `
-  root.querySelector('.match-end-btn')!.addEventListener('click', () => {
+  root.querySelector('.match-end-menu')!.addEventListener('click', () => {
     window.location.reload()
+  })
+  root.querySelector('.match-end-watch')?.addEventListener('click', () => {
+    opts.onWatchReplay?.()
   })
   document.body.appendChild(root)
   // Trigger CSS enter animations on next frame

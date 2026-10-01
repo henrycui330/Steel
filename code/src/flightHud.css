@@ -9,6 +9,11 @@
   --hud-accent: #7df0b8;
   --hud-panel: rgba(6, 10, 8, 0.55);
   --hud-ok: #8aba7a;
+  /* No tank compass — keep KOTH + minimap from stacking on heading */
+  --hud-compass-h: 0px;
+  --fh-top-band: calc(var(--hud-pad-y) + var(--hud-koth-h) + 3.2rem);
+  --fh-side-inset: max(40px, env(safe-area-inset-right, 0px) + 24px);
+  --fh-br-bottom: max(30px, env(safe-area-inset-bottom, 0px) + 18px);
   position: fixed;
   inset: 0;
   pointer-events: none;
@@ -122,11 +127,11 @@
 }
 
 .fh-left {
-  left: 40px;
+  left: max(24px, env(safe-area-inset-left, 0px) + 16px);
 }
 
 .fh-right {
-  right: 40px;
+  right: max(24px, env(safe-area-inset-right, 0px) + 16px);
 }
 
 .fh-label {
@@ -150,10 +155,10 @@
   opacity: 0.6;
 }
 
-/* ——— Heading ——— */
+/* ——— Heading — below KOTH when present ——— */
 .fh-heading {
   position: absolute;
-  top: 26px;
+  top: calc(var(--hud-pad-y) + var(--hud-koth-h) + 0.35rem);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -163,6 +168,8 @@
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 3;
+  max-width: min(280px, calc(100vw - 2 * var(--hud-corner-w) - 2rem));
 }
 
 .fh-hdg-card {
@@ -179,7 +186,7 @@
 /* ——— Throttle ——— */
 .fh-throttle {
   position: absolute;
-  bottom: 30px;
+  bottom: var(--fh-br-bottom);
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -189,6 +196,8 @@
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
+  max-width: min(280px, calc(100vw - 2 * var(--hud-corner-w) - 3rem));
 }
 
 .fh-thr-bar {
@@ -212,17 +221,18 @@
   text-align: right;
 }
 
-/* ——— Wing guns ——— */
+/* ——— Wing guns / bombs / rockets — stacked BR column ——— */
 .fh-guns {
   position: absolute;
-  bottom: 30px;
-  right: 40px;
+  bottom: var(--fh-br-bottom);
+  right: var(--fh-side-inset);
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
 }
 
 .fh-guns:not([hidden]) {
@@ -262,14 +272,15 @@
 /* ——— Bombs ——— */
 .fh-bombs {
   position: absolute;
-  bottom: 74px;
-  right: 40px;
+  bottom: calc(var(--fh-br-bottom) + 44px);
+  right: var(--fh-side-inset);
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
 }
 
 .fh-bombs:not([hidden]) {
@@ -298,14 +309,15 @@
 /* ——— Rockets (Corsair HVAR) ——— */
 .fh-rockets {
   position: absolute;
-  bottom: 118px;
-  right: 40px;
+  bottom: calc(var(--fh-br-bottom) + 88px);
+  right: var(--fh-side-inset);
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
 }
 
 .fh-rockets:not([hidden]) {
@@ -327,14 +339,15 @@
 /* ——— Jet AAM lock (F-16 / MiG only) ——— */
 .fh-msl {
   position: absolute;
-  bottom: 118px;
-  right: 40px;
+  bottom: calc(var(--fh-br-bottom) + 88px);
+  right: var(--fh-side-inset);
   align-items: center;
   gap: 9px;
   padding: 7px 13px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
 }
 
 .fh-msl:not([hidden]) {
@@ -405,10 +418,11 @@
 /* ——— Bombsight scope (picture-in-picture) ——— */
 .fh-scope {
   position: absolute;
-  top: var(--scope-pad, 20px);
-  right: var(--scope-pad, 20px);
-  width: var(--scope-size, 300px);
-  height: var(--scope-size, 300px);
+  top: var(--fh-top-band);
+  right: max(var(--scope-pad, 16px), env(safe-area-inset-right, 0px) + 12px);
+  width: min(var(--scope-size, 280px), 42vw, 46vh);
+  height: min(var(--scope-size, 280px), 42vw, 46vh);
+  z-index: 5;
 }
 
 .fh-scope-frame {
@@ -541,21 +555,24 @@
   }
 }
 
-/* Minimap sits top-left so it does not cover the bombsight. */
+/* Minimap top-left — below KOTH, clear of bombsight (top-right) */
 .fhud .hud-minimap {
   right: auto;
-  left: max(0.85rem, env(safe-area-inset-left, 0px) + 0.6rem);
+  left: var(--hud-pad-x);
+  top: calc(var(--hud-pad-y) + var(--hud-koth-h) + 0.35rem);
+  max-height: calc(100vh - 12rem);
 }
 
 .fh-hp {
   position: absolute;
-  left: 40px;
-  bottom: 30px;
-  width: 168px;
+  left: max(24px, env(safe-area-inset-left, 0px) + 16px);
+  bottom: var(--fh-br-bottom);
+  width: min(168px, 36vw);
   padding: 8px 12px;
   border: 1px solid rgba(125, 240, 184, 0.28);
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
+  z-index: 4;
 }
 
 .fh-hp .hud-plate-head {
@@ -569,3 +586,31 @@
   font-size: 16px;
   color: #fff;
 }
+
+@media (max-width: 720px), (max-height: 560px) {
+  .fhud {
+    --fh-top-band: calc(var(--hud-pad-y) + var(--hud-koth-h) + 2.6rem);
+    --scope-size: 180px;
+  }
+
+  .fh-gauge {
+    top: 44%;
+    padding: 6px 8px;
+  }
+
+  .fh-value {
+    font-size: 20px;
+  }
+
+  .fh-thr-bar {
+    width: min(140px, 32vw);
+  }
+
+  .fh-horizon {
+    width: min(420px, 92vw);
+    height: min(340px, 55vh);
+    margin-left: calc(min(420px, 92vw) / -2);
+    margin-top: calc(min(340px, 55vh) / -2);
+  }
+}
+

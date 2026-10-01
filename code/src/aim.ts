@@ -5,18 +5,25 @@ const _quat = new THREE.Quaternion()
 const _fwd = new THREE.Vector3()
 const _muzzle = new THREE.Vector3()
 const _aimDir = new THREE.Vector3()
+const _barrelDir = new THREE.Vector3(0, 0, 1)
 const mouseWorld = new THREE.Vector3(0, 0, 28)
 const barrelWorld = new THREE.Vector3()
 
 /** Radians per pixel (pointer lock). */
 const AIM_SENS = 0.0022
-const AIM_SENS_ZOOMED = 0.0011
+const AIM_SENS_ZOOMED = 0.00085
 /** Distance along aim/gun ray for HUD markers. */
 const RETICLE_DISTANCE = 48
+/**
+ * Catalog rates are arcade-high (~5–9 rad/s). Scale down so the turret
+ * visibly lags the reticle — shells follow the barrel, not the mouse.
+ */
+const TRAVERSE_RATE_SCALE = 0.3
+const ELEVATE_RATE_SCALE = 0.34
 
 let aimPrecision = false
-let turretYawRate = 6.5
-let barrelPitchRate = 4.5
+let turretYawRate = 6.5 * TRAVERSE_RATE_SCALE
+let barrelPitchRate = 4.5 * ELEVATE_RATE_SCALE
 let pitchMin = THREE.MathUtils.degToRad(-8)
 let pitchMax = THREE.MathUtils.degToRad(20)
 let aimPitchMin = THREE.MathUtils.degToRad(-12)
@@ -77,8 +84,11 @@ export function setAimPrecision(enabled: boolean): void {
 }
 
 export function setAimRates(traverseRadPerSec: number, elevateRadPerSec: number): void {
-  turretYawRate = traverseRadPerSec
-  barrelPitchRate = elevateRadPerSec
+  turretYawRate = traverseRadPerSec * TRAVERSE_RATE_SCALE
+  barrelPitchRate = elevateRadPerSec * ELEVATE_RATE_SCALE
+  console.info(
+    `[Steel] Aim rates · traverse ${(turretYawRate * 57.3).toFixed(0)}°/s · elevate ${(barrelPitchRate * 57.3).toFixed(0)}°/s`,
+  )
 }
 
 /** Gun depression / elevation limits (degrees). AA needs a much higher max. */
@@ -126,6 +136,11 @@ export function getAimDirection(out = new THREE.Vector3()): THREE.Vector3 {
     out.applyQuaternion(_quat)
   }
   return out
+}
+
+/** Last frame’s barrel/muzzle fire axis — shells use this, not the mouse ray. */
+export function getBarrelDirection(out = new THREE.Vector3()): THREE.Vector3 {
+  return out.copy(_barrelDir)
 }
 
 export function getAimImpactPoint(): THREE.Vector3 {
@@ -216,6 +231,7 @@ export function updateTurretAim(
   } else {
     _fwd.set(0, 0, 1).applyQuaternion(_quat).normalize()
   }
+  _barrelDir.copy(_fwd)
   muzzle.getWorldPosition(_muzzle)
 
   const fireYaw = Math.atan2(_fwd.x, _fwd.z)
@@ -225,8 +241,9 @@ export function updateTurretAim(
   mouseWorld.copy(_muzzle).addScaledVector(_aimDir, RETICLE_DISTANCE)
   barrelWorld.copy(_muzzle).addScaledVector(_fwd, RETICLE_DISTANCE)
 
-  const gunSynced = _fwd.dot(_aimDir) > 0.9995
-  const rangeM = sampleAimRange(_muzzle, _aimDir)
+  // Slightly looser sync so the HUD hides the ghost reticle when “close enough”
+  const gunSynced = _fwd.dot(_aimDir) > 0.9988
+  const rangeM = sampleAimRange(_muzzle, _fwd)
 
   return {
     fireYaw,

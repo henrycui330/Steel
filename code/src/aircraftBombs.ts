@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { HeightSampler } from './ballistics'
 import type { GunTarget } from './aircraftGuns'
 import type { TrackedProjectile } from './impactCinematic'
+import { spawnExplosion } from './explosions'
 
 /**
  * Two 1000 lb bombs plus the bombsight that makes them usable.
@@ -197,7 +198,10 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
 
       for (const target of targets) {
         if (!target.alive) continue
-        if (target.root.position.distanceTo(pred.point) <= BOMB_RADIUS) {
+        if (
+          target.containsPoint(pred.point) ||
+          target.root.position.distanceTo(pred.point) <= BOMB_RADIUS
+        ) {
           pred.lethal = true
           break
         }
@@ -221,15 +225,16 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   }
 
   function detonate(at: THREE.Vector3, targets: readonly GunTarget[]): void {
-    flash(at)
+    spawnExplosion({ scene, at, radius: BOMB_RADIUS, kind: 'bomb' })
     onDetonate?.(at)
     for (const target of targets) {
       if (!target.alive) continue
-      const dist = target.root.position.distanceTo(at)
+      const inside = target.containsPoint(at)
+      const dist = inside ? 0 : target.root.position.distanceTo(at)
       if (dist > BOMB_RADIUS) continue
 
       const falloff = Math.pow(1 - dist / BOMB_RADIUS, 1.5)
-      const probe = surfacePoint(at, target)
+      const probe = inside ? at.clone() : surfacePoint(at, target)
       if (!probe) continue
 
       _dir.copy(target.root.position).sub(at)
@@ -248,33 +253,6 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
       )
       if (result?.destroyed) onKill?.(target.root)
     }
-  }
-
-  /** Expanding flash — cheap stand-in for a proper explosion. */
-  function flash(at: THREE.Vector3): void {
-    const geo = new THREE.SphereGeometry(2.2, 10, 10)
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffb257,
-      transparent: true,
-      opacity: 1,
-    })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.copy(at)
-    scene.add(mesh)
-    const t0 = performance.now()
-    const tick = (now: number): void => {
-      const u = (now - t0) / 620
-      if (u >= 1) {
-        scene.remove(mesh)
-        geo.dispose()
-        mat.dispose()
-        return
-      }
-      mesh.scale.setScalar(1 + u * 7)
-      mat.opacity = 1 - u
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
   }
 
   function release(): void {

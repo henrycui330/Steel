@@ -15,8 +15,13 @@ export type TankId =
   | 'duster'
   | 'abrams'
   | 't34'
+  | 't3476'
+  | 'katyusha'
   | 't44'
   | 't55'
+  | 't64'
+  | 'btr82a'
+  | 'khrizantema'
   | 'shilka'
   | 'pantsir'
   | 't72'
@@ -67,6 +72,19 @@ export type TankOption = {
   blurb: string
   url: string
   reloadSec: number
+  /**
+   * Rack / magazine size. When set, main gun fires with no per-shot cooldown
+   * until empty, then rests for `reloadSec` to restock. Hides HE/APHE switch.
+   */
+  magazineSize?: number
+  /**
+   * Scale hull/barrel recoil + cam kick (1 = tank gun). Autocannons want ~0.1.
+   */
+  recoilScale?: number
+  /**
+   * No cannon shells — coax MG + optional `samMissiles` ATGM only (Khrizantema).
+   */
+  noMainGun?: boolean
   maxHp: number
   drive: DriveProfile
   gun: GunProfile
@@ -82,6 +100,10 @@ export type TankOption = {
    * Modern MBTs ignore those climate penalties.
    */
   vintageCrew: boolean
+  /**
+   * Skip load/fire crew callouts (rocket trucks, etc. — no READY/FIRE VO).
+   */
+  noCrewVoice?: boolean
   /**
    * Sketchfab packs without Turret/Barrel names — aim pivots only (no mesh split).
    */
@@ -110,9 +132,22 @@ export type TankOption = {
    */
   antiAir?: boolean
   /**
-   * Pantsir-style SAM: M fires seekers at the hard-locked target (off-boresight OK).
+   * Pantsir-style SAM / BMP ATGM: M fires seekers at the hard-locked target (off-boresight OK).
+   * Enables lock-on even when `antiAir` is false.
    */
   samMissiles?: boolean
+  /** Override SAM/ATGM magazine size (default 12). */
+  samAmmo?: number
+  /** Override SAM/ATGM reload between shots (seconds). */
+  samReloadSec?: number
+  /** Override SAM/ATGM cruise speed. */
+  samSpeed?: number
+  /** Override SAM/ATGM hit damage. */
+  samDamage?: number
+  /** Override SAM/ATGM base penetration (mm). */
+  samPen?: number
+  /** HUD label for missile weapon (default SAM). */
+  samLabel?: string
   /** Override gun depression (degrees). Used with `antiAir` or SPG. */
   aimPitchMinDeg?: number
   /** Override gun elevation (degrees). */
@@ -276,6 +311,34 @@ const PANTSIR_DRIVE: DriveProfile = {
   tiltFromAccel: 0.01,
 }
 
+/** BTR-82A — wheeled IFV / 30mm (very fast on roads). */
+const BTR82A_DRIVE: DriveProfile = {
+  maxSpeed: 24,
+  maxReverse: 9,
+  accel: 14,
+  reverseAccel: 9,
+  brakeDecel: 30,
+  coastDrag: 4.8,
+  turnRate: 2.6,
+  turnInPlace: 1.25,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.009,
+}
+
+/** 9P157 Khrizantema-S — BMP-3 chassis / twin ATGM (mid pace). */
+const KHRIZANTEMA_DRIVE: DriveProfile = {
+  maxSpeed: 16,
+  maxReverse: 6,
+  accel: 10,
+  reverseAccel: 7,
+  brakeDecel: 24,
+  coastDrag: 5.5,
+  turnRate: 2.2,
+  turnInPlace: 1.1,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.011,
+}
+
 /** M1A1 Abrams — modern MBT / 120mm. */
 const ABRAMS_DRIVE: DriveProfile = {
   maxSpeed: 18,
@@ -304,6 +367,20 @@ const T34_DRIVE: DriveProfile = {
   tiltFromAccel: 0.011,
 }
 
+/** BM-13 Katyusha — truck MLRS (road sprint, soft skin). */
+const KATYUSHA_DRIVE: DriveProfile = {
+  maxSpeed: 18,
+  maxReverse: 7,
+  accel: 12,
+  reverseAccel: 8,
+  brakeDecel: 26,
+  coastDrag: 5.0,
+  turnRate: 2.5,
+  turnInPlace: 1.2,
+  tiltMax: (7 * Math.PI) / 180,
+  tiltFromAccel: 0.012,
+}
+
 /** T-44-100 — late-war / early cold-war medium · 100mm. */
 const T44_DRIVE: DriveProfile = {
   maxSpeed: 15.5,
@@ -329,6 +406,20 @@ const T55_DRIVE: DriveProfile = {
   turnRate: 2.25,
   turnInPlace: 1.15,
   tiltMax: (5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** T-64 — early 125mm MBT (bridge to T-72). */
+const T64_DRIVE: DriveProfile = {
+  maxSpeed: 16.5,
+  maxReverse: 6.5,
+  accel: 10.8,
+  reverseAccel: 7.5,
+  brakeDecel: 25,
+  coastDrag: 5,
+  turnRate: 2.28,
+  turnInPlace: 1.18,
+  tiltMax: (4.8 * Math.PI) / 180,
   tiltFromAccel: 0.01,
 }
 
@@ -690,27 +781,84 @@ export const TANK_OPTIONS: TankOption[] = [
   },
   {
     id: 't34',
-    name: 'T-34',
-    role: 'Soviet medium · 76mm',
-    blurb: 'Sloped armor · wide tracks · the Red Army workhorse',
+    name: 'T-34-85',
+    role: 'Soviet medium · 85mm',
+    blurb: 'Hex turret · ZiS-S-53 85mm · late-war workhorse',
     url: assetUrl('models/t34.glb?v=2'),
-    reloadSec: 5.2,
-    maxHp: 860,
+    reloadSec: 5.0,
+    maxHp: 920,
     targetWidth: 3.0,
     vintageCrew: true,
+    nation: 'soviet',
     rigidRig: false,
     drive: T34_DRIVE,
-    armor: armorKit({ front: 90, side: 45, rear: 40, turret: 70 }),
+    armor: armorKit({ front: 95, side: 50, rear: 45, turret: 90 }),
+    gun: {
+      aphePen: 145,
+      apheDmg: 380,
+      hePen: 16,
+      heDmg: 95,
+      heBlast: 160,
+      traverseRadPerSec: 5.6,
+      elevateRadPerSec: 4.1,
+      apLabel: 'APHE',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 't3476',
+    name: 'T-34-76',
+    role: 'Soviet medium · 76mm',
+    blurb: 'Mod. 1942 · F-34 76mm · the classic early T-34',
+    url: assetUrl('models/t3476.glb?v=1'),
+    reloadSec: 5.4,
+    maxHp: 820,
+    targetWidth: 3.0,
+    vintageCrew: true,
+    nation: 'soviet',
+    rigidRig: false,
+    drive: T34_DRIVE,
+    armor: armorKit({ front: 90, side: 45, rear: 40, turret: 65 }),
     gun: {
       aphePen: 95,
       apheDmg: 300,
       hePen: 14,
       heDmg: 85,
       heBlast: 150,
-      traverseRadPerSec: 5.5,
-      elevateRadPerSec: 4.0,
+      traverseRadPerSec: 5.4,
+      elevateRadPerSec: 3.9,
       apLabel: 'APHE',
       heLabel: 'HE',
+    },
+  },
+  {
+    id: 'katyusha',
+    name: 'BM-13 Katyusha',
+    role: 'MLRS · 132mm rockets',
+    blurb: 'Truck rails · ripple HE · soft skin, big boom',
+    url: assetUrl('models/katyusha.glb?v=2'),
+    reloadSec: 14,
+    magazineSize: 16,
+    maxHp: 520,
+    targetWidth: 2.35,
+    vintageCrew: true,
+    noCrewVoice: true,
+    nation: 'soviet',
+    aimPitchMinDeg: 0,
+    aimPitchMaxDeg: 45,
+    rigidRig: false,
+    drive: KATYUSHA_DRIVE,
+    armor: armorKit({ front: 8, side: 6, rear: 5, turret: 6 }),
+    gun: {
+      aphePen: 18,
+      apheDmg: 160,
+      hePen: 12,
+      heDmg: 200,
+      heBlast: 380,
+      traverseRadPerSec: 3.8,
+      elevateRadPerSec: 3.2,
+      apLabel: 'Rocket',
+      heLabel: 'HE rocket',
     },
   },
   {
@@ -723,6 +871,7 @@ export const TANK_OPTIONS: TankOption[] = [
     maxHp: 1020,
     targetWidth: 3.1,
     vintageCrew: true,
+    nation: 'soviet',
     rigidRig: false,
     drive: T44_DRIVE,
     armor: armorKit({ front: 130, side: 75, rear: 45, turret: 120 }),
@@ -748,6 +897,7 @@ export const TANK_OPTIONS: TankOption[] = [
     maxHp: 1180,
     targetWidth: 3.3,
     vintageCrew: false,
+    nation: 'soviet',
     rigidRig: false,
     drive: T55_DRIVE,
     armor: armorKit({ front: 240, side: 90, rear: 50, turret: 220 }),
@@ -761,6 +911,100 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 4.2,
       apLabel: 'APDS',
       heLabel: 'HE',
+    },
+  },
+  {
+    id: 't64',
+    name: 'T-64',
+    role: 'Cold-war MBT · 125mm',
+    blurb: 'Composite face · autoloader · D-81T 125mm — bridge to T-72',
+    url: assetUrl('models/t64.glb?v=1'),
+    reloadSec: 6.2,
+    maxHp: 1280,
+    targetWidth: 3.4,
+    vintageCrew: false,
+    nation: 'soviet',
+    rigidRig: false,
+    drive: T64_DRIVE,
+    armor: armorKit({ front: 340, side: 110, rear: 55, turret: 360 }),
+    gun: {
+      aphePen: 420,
+      apheDmg: 760,
+      hePen: 32,
+      heDmg: 145,
+      heBlast: 230,
+      traverseRadPerSec: 6.0,
+      elevateRadPerSec: 4.3,
+      apLabel: 'APFSDS',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'btr82a',
+    name: 'BTR-82A',
+    role: 'IFV · 30mm autocannon',
+    blurb: 'Wheeled sprint · 2A72 30mm · soft skin, hard to catch',
+    url: assetUrl('models/btr82a.glb?v=1'),
+    reloadSec: 0.16,
+    recoilScale: 0.1,
+    maxHp: 680,
+    targetWidth: 2.9,
+    vintageCrew: false,
+    nation: 'soviet',
+    antiAir: true,
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 70,
+    rigidRig: false,
+    drive: BTR82A_DRIVE,
+    armor: armorKit({ front: 22, side: 14, rear: 10, turret: 18 }),
+    gun: {
+      aphePen: 55,
+      apheDmg: 110,
+      hePen: 12,
+      heDmg: 70,
+      heBlast: 100,
+      traverseRadPerSec: 8.5,
+      elevateRadPerSec: 7.0,
+      apLabel: 'AP-T 30mm',
+      heLabel: 'HEI 30mm',
+    },
+  },
+  {
+    id: 'khrizantema',
+    name: '9P157 Khrizantema-S',
+    role: 'ATGM · twin 9M123',
+    blurb: 'Radar ATGM · lock+M seekers · soft hull, hard punches',
+    url: assetUrl('models/khrizantema.glb?v=1'),
+    reloadSec: 6.0,
+    /** No cannon — coax MG + M-key ATGM only. */
+    noMainGun: true,
+    maxHp: 820,
+    targetWidth: 3.15,
+    vintageCrew: false,
+    nation: 'soviet',
+    samMissiles: true,
+    samAmmo: 8,
+    samReloadSec: 5.5,
+    samSpeed: 110,
+    samDamage: 980,
+    samPen: 900,
+    samLabel: 'ATGM',
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 25,
+    rigidRig: false,
+    drive: KHRIZANTEMA_DRIVE,
+    armor: armorKit({ front: 40, side: 22, rear: 16, turret: 30 }),
+    /** Traverse only — used for aim rates; shells disabled via noMainGun. */
+    gun: {
+      aphePen: 0,
+      apheDmg: 0,
+      hePen: 0,
+      heDmg: 0,
+      heBlast: 0,
+      traverseRadPerSec: 5.5,
+      elevateRadPerSec: 4.0,
+      apLabel: '—',
+      heLabel: '—',
     },
   },
   {
@@ -832,6 +1076,7 @@ export const TANK_OPTIONS: TankOption[] = [
     maxHp: 1380,
     targetWidth: 3.55,
     vintageCrew: false,
+    nation: 'soviet',
     rigidRig: false,
     drive: T72_DRIVE,
     armor: armorKit({ front: 420, side: 140, rear: 60, turret: 450 }),
@@ -857,6 +1102,7 @@ export const TANK_OPTIONS: TankOption[] = [
     maxHp: 1600,
     targetWidth: 3.7,
     vintageCrew: false,
+    nation: 'soviet',
     rigidRig: false,
     drive: T90_DRIVE,
     armor: armorKit({ front: 780, side: 250, rear: 100, turret: 850, modern: true }),

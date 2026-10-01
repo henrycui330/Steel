@@ -36,18 +36,23 @@ export const FOREST_TOWNS: readonly ForestTown[] = [
 
 /** Soft hills placed away from clearings / roads (peak height ≈ h). */
 const FOREST_HILLS: ReadonlyArray<{ x: number; z: number; h: number; r: number }> = [
-  { x: 220, z: 380, h: 14, r: 110 },
-  { x: -210, z: -420, h: 16, r: 120 },
-  { x: 180, z: -700, h: 11, r: 95 },
-  { x: -230, z: 680, h: 13, r: 100 },
-  { x: 120, z: 820, h: 9, r: 80 },
-  { x: -140, z: -860, h: 10, r: 88 },
-  { x: 280, z: -160, h: 12, r: 100 },
-  { x: -270, z: 120, h: 9.5, r: 85 },
-  { x: 70, z: -300, h: 7, r: 55 },
-  { x: -90, z: 280, h: 8, r: 60 },
-  { x: 150, z: 160, h: 6.5, r: 50 },
-  { x: -160, z: -180, h: 7.5, r: 58 },
+  { x: 220, z: 380, h: 18, r: 115 },
+  { x: -210, z: -420, h: 20, r: 125 },
+  { x: 180, z: -700, h: 14, r: 100 },
+  { x: -230, z: 680, h: 16, r: 105 },
+  { x: 120, z: 820, h: 12, r: 85 },
+  { x: -140, z: -860, h: 13, r: 92 },
+  { x: 280, z: -160, h: 15, r: 105 },
+  { x: -270, z: 120, h: 12, r: 90 },
+  { x: 70, z: -300, h: 9, r: 58 },
+  { x: -90, z: 280, h: 10.5, r: 65 },
+  { x: 150, z: 160, h: 8.5, r: 55 },
+  { x: -160, z: -180, h: 9.5, r: 62 },
+  // Extra mid-scale bumps for a slightly rougher floor
+  { x: 250, z: 540, h: 11, r: 72 },
+  { x: -255, z: -560, h: 12, r: 78 },
+  { x: 95, z: -480, h: 8, r: 48 },
+  { x: -110, z: 460, h: 8.5, r: 52 },
 ]
 
 export type ForestMapLoadResult = {
@@ -60,23 +65,23 @@ export type ForestMapLoadResult = {
 
 const PINE_URL = assetUrl('maps/props/pine_tree.glb')
 const RUIN_HOUSE_URL = assetUrl('maps/props/ruined_house_low_poly.glb')
-const EMPTY_INTERIOR_URL = assetUrl('maps/props/empty_building_interior.glb')
-const CITY_RUIN_URL = assetUrl('maps/props/ruined_city_building.glb')
-const CRATES_URL = assetUrl('maps/props/crates_and_barrels.glb')
-const RUBBLE_URL = assetUrl('maps/props/construction_rubble.glb')
 const FANCY_CAR_URL = assetUrl('maps/props/fancy_cardestroyed.glb')
+const ROCKS_URL = assetUrl('maps/props/stylised_rocks_asset_pack.glb')
+const SANDBAGS_URL = assetUrl('maps/props/sandbags_defense_line.glb')
 
 export const FOREST_PROP_URLS: readonly string[] = [
   PINE_URL,
   RUIN_HOUSE_URL,
-  EMPTY_INTERIOR_URL,
-  CITY_RUIN_URL,
-  CRATES_URL,
-  RUBBLE_URL,
   FANCY_CAR_URL,
+  ROCKS_URL,
+  SANDBAGS_URL,
 ]
-/** Kept low — pines are heavy; instances share 1–2 merged meshes. */
-const TREE_COUNT = 72
+/** Kept moderate — pines share 1–2 merged meshes via InstancedMesh. */
+const TREE_COUNT = 144
+/** Individual rock instances (clustered into small cliff piles). */
+const ROCK_COUNT = 56
+/** How many unique Plain_Rock meshes to keep as instance templates. */
+const ROCK_TEMPLATE_COUNT = 8
 const CLEAR_SPAWN_HALF_X = 70
 const CLEAR_SPAWN_Z = 820
 
@@ -252,13 +257,14 @@ function flattenMask(x: number, z: number): number {
 }
 
 function rawRelief(x: number, z: number): number {
-  // Stronger multi-scale bumps (meters)
+  // Multi-scale bumps — slightly rougher than the original soft roll
   let h =
-    Math.sin(x * 0.009) * Math.cos(z * 0.0085) * 4.2 +
-    Math.sin(x * 0.019 + 1.1) * Math.cos(z * 0.017 - 0.5) * 3.1 +
-    Math.sin(x * 0.038 + z * 0.015) * Math.cos(z * 0.034) * 1.8 +
-    Math.sin(x * 0.072) * Math.sin(z * 0.068 + 2.2) * 1.15 +
-    Math.sin(x * 0.13 + 0.7) * Math.cos(z * 0.11) * 0.55
+    Math.sin(x * 0.009) * Math.cos(z * 0.0085) * 5.4 +
+    Math.sin(x * 0.019 + 1.1) * Math.cos(z * 0.017 - 0.5) * 4.0 +
+    Math.sin(x * 0.038 + z * 0.015) * Math.cos(z * 0.034) * 2.5 +
+    Math.sin(x * 0.072) * Math.sin(z * 0.068 + 2.2) * 1.55 +
+    Math.sin(x * 0.13 + 0.7) * Math.cos(z * 0.11) * 0.8 +
+    Math.sin(x * 0.21 + z * 0.17) * Math.cos(z * 0.19 - 0.4) * 0.45
 
   for (const hill of FOREST_HILLS) {
     const dx = x - hill.x
@@ -294,6 +300,11 @@ function blockedForTree(x: number, z: number): boolean {
   if (Math.abs(x) < CLEAR_SPAWN_HALF_X && Math.abs(z) > CLEAR_SPAWN_Z * 0.55) return true
   if (Math.abs(x) < 28 && Math.abs(z) < CLEAR_SPAWN_Z) return true
   return false
+}
+
+/** Rocks stay off roads / clearings / spawn lanes (same keep-outs as trees). */
+function blockedForRock(x: number, z: number): boolean {
+  return blockedForTree(x, z)
 }
 
 /** Stand Z-up Sketchfab pines on Y and plant base at y=0. Returns unit height. */
@@ -437,6 +448,226 @@ async function placePineTrees(
     `[Steel] Forest pines — ${count} instances, ${parts.length} merged draw calls (was ~${count * 160} meshes)`,
   )
   return count
+}
+
+type RockTemplate = {
+  geometry: THREE.BufferGeometry
+  material: THREE.Material
+  unitHeight: number
+}
+
+/**
+ * Pull the largest Plain_Rock meshes from the stylised pack, upright them,
+ * and bake world-space geometry for InstancedMesh (cliff-scale cover).
+ */
+function bakeRockTemplates(src: THREE.Object3D): RockTemplate[] {
+  const candidates: Array<{ mesh: THREE.Mesh; vol: number }> = []
+  src.updateMatrixWorld(true)
+  src.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
+    const name = obj.name || ''
+    if (!/Plain_Rock/i.test(name)) return
+    if (Array.isArray(obj.material)) return
+    obj.geometry.computeBoundingBox()
+    const bb = obj.geometry.boundingBox
+    if (!bb) return
+    const sx = bb.max.x - bb.min.x
+    const sy = bb.max.y - bb.min.y
+    const sz = bb.max.z - bb.min.z
+    candidates.push({ mesh: obj, vol: sx * sy * sz })
+  })
+  candidates.sort((a, b) => b.vol - a.vol)
+
+  const picked = candidates.slice(0, ROCK_TEMPLATE_COUNT)
+  const templates: RockTemplate[] = []
+  for (const { mesh } of picked) {
+    const holder = new THREE.Group()
+    const clone = mesh.clone(false)
+    clone.material = mesh.material
+    // Detach from pack layout offsets — plant from local geometry alone
+    clone.position.set(0, 0, 0)
+    clone.rotation.set(0, 0, 0)
+    clone.scale.set(1, 1, 1)
+    clone.updateMatrix()
+    holder.add(clone)
+
+    // glTF rocks are Y-up; only tip if clearly Z-up (unlike pines, width > height is normal)
+    holder.position.set(0, 0, 0)
+    holder.rotation.set(0, 0, 0)
+    holder.scale.setScalar(1)
+    holder.updateMatrixWorld(true)
+    _box.setFromObject(holder)
+    _box.getSize(_size)
+    if (_size.z > _size.y * 1.4 && _size.z >= _size.x) {
+      holder.rotation.x = -Math.PI / 2
+      holder.updateMatrixWorld(true)
+      _box.setFromObject(holder)
+    }
+    holder.position.y = -_box.min.y
+    holder.updateMatrixWorld(true)
+    _box.setFromObject(holder)
+    const unitHeight = Math.max(_box.max.y - _box.min.y, 0.001)
+
+    const g = clone.geometry.clone()
+    g.applyMatrix4(clone.matrixWorld)
+    g.computeBoundingSphere()
+
+    const srcMat = Array.isArray(clone.material) ? clone.material[0]! : clone.material
+    const mat = srcMat.clone()
+    if ('metalness' in mat && typeof mat.metalness === 'number') mat.metalness = 0
+    if ('roughness' in mat && typeof mat.roughness === 'number') {
+      mat.roughness = Math.max(0.9, mat.roughness)
+    }
+    templates.push({ geometry: g, material: mat, unitHeight })
+  }
+  return templates
+}
+
+/**
+ * Scatter small cliff piles from the stylised rock pack (instanced).
+ * Prefers hill slopes; keeps roads / clearings / spawn lanes clear.
+ */
+async function placeCliffRocks(
+  root: THREE.Group,
+  colliders: PropCollider[],
+): Promise<number> {
+  const gltf = await loadGltfCached(ROCKS_URL)
+  const templates = bakeRockTemplates(gltf.scene)
+  if (templates.length === 0) {
+    console.warn('[Steel] Rock bake produced 0 templates')
+    return 0
+  }
+
+  const rand = mulberry32(0xc11ff70)
+  const halfX = FOREST_OVERWATCH_WIDTH * 0.46
+  const halfZ = FOREST_OVERWATCH_DEPTH * 0.46
+
+  type RockPlace = {
+    x: number
+    z: number
+    yaw: number
+    height: number
+    template: number
+    cliff: boolean
+  }
+  const placements: RockPlace[] = []
+
+  // Seed ~18 cliff cluster centers, then fill with satellite rocks
+  const clusters: Array<{ x: number; z: number }> = []
+  let attempts = 0
+  while (clusters.length < 18 && attempts < 400) {
+    attempts++
+    const x = (rand() - 0.5) * 2 * halfX
+    const z = (rand() - 0.5) * 2 * halfZ
+    if (blockedForRock(x, z)) continue
+    // Prefer higher relief (hill flanks read as cliff bases)
+    if (rawRelief(x, z) < 3.5 && rand() > 0.35) continue
+    let ok = true
+    for (const c of clusters) {
+      if (Math.hypot(x - c.x, z - c.z) < 55) {
+        ok = false
+        break
+      }
+    }
+    if (!ok) continue
+    clusters.push({ x, z })
+  }
+
+  for (const c of clusters) {
+    const pileN = 2 + Math.floor(rand() * 3) // 2–4 rocks per pile
+    for (let i = 0; i < pileN; i++) {
+      const ang = rand() * Math.PI * 2
+      const dist = i === 0 ? rand() * 2.5 : 3 + rand() * 7
+      const x = c.x + Math.cos(ang) * dist
+      const z = c.z + Math.sin(ang) * dist
+      if (blockedForRock(x, z)) continue
+      const cliff = i === 0 || rand() > 0.55
+      placements.push({
+        x,
+        z,
+        yaw: rand() * Math.PI * 2,
+        height: cliff ? 5.5 + rand() * 4.5 : 2.8 + rand() * 2.8,
+        template: Math.floor(rand() * templates.length),
+        cliff,
+      })
+    }
+  }
+
+  // Fill remaining budget with lone mid-size rocks
+  attempts = 0
+  while (placements.length < ROCK_COUNT && attempts < ROCK_COUNT * 14) {
+    attempts++
+    const x = (rand() - 0.5) * 2 * halfX
+    const z = (rand() - 0.5) * 2 * halfZ
+    if (blockedForRock(x, z)) continue
+    if (rawRelief(x, z) < 2.0 && rand() > 0.5) continue
+    let ok = true
+    for (const p of placements) {
+      if (Math.hypot(x - p.x, z - p.z) < 14) {
+        ok = false
+        break
+      }
+    }
+    if (!ok) continue
+    placements.push({
+      x,
+      z,
+      yaw: rand() * Math.PI * 2,
+      height: 2.4 + rand() * 3.2,
+      template: Math.floor(rand() * templates.length),
+      cliff: false,
+    })
+  }
+
+  // One InstancedMesh per template
+  const byTemplate: RockPlace[][] = templates.map(() => [])
+  for (const pl of placements) {
+    byTemplate[pl.template]!.push(pl)
+  }
+
+  for (let t = 0; t < templates.length; t++) {
+    const list = byTemplate[t]!
+    if (list.length === 0) continue
+    const { geometry, material, unitHeight } = templates[t]!
+    const mesh = new THREE.InstancedMesh(geometry, material, list.length)
+    mesh.name = `forestRockInstanced_${t}`
+    mesh.castShadow = false
+    mesh.receiveShadow = true
+    mesh.frustumCulled = true
+    mesh.matrixAutoUpdate = false
+
+    for (let i = 0; i < list.length; i++) {
+      const pl = list[i]!
+      const s = pl.height / unitHeight
+      _dummy.position.set(pl.x, forestHeightAt(pl.x, pl.z), pl.z)
+      _dummy.rotation.set(0, pl.yaw, 0)
+      // Slight non-uniform scale so piles don't look stamped
+      const sx = s * (0.9 + rand() * 0.25)
+      const sy = s
+      const sz = s * (0.9 + rand() * 0.25)
+      _dummy.scale.set(sx, sy, sz)
+      _dummy.updateMatrix()
+      mesh.setMatrixAt(i, _dummy.matrix)
+    }
+    mesh.instanceMatrix.needsUpdate = true
+    root.add(mesh)
+  }
+
+  for (const pl of placements) {
+    const kind = pl.cliff || pl.height >= 5.5 ? 'cliff' : 'rock'
+    const shape = estimatePropCollider(kind, pl.height)
+    colliders.push({
+      x: pl.x,
+      z: pl.z,
+      radius: shape.radius,
+      maxY: shape.maxY,
+    })
+  }
+
+  console.info(
+    `[Steel] Forest rocks — ${placements.length} instances, ${templates.length} templates, ${clusters.length} cliff piles`,
+  )
+  return placements.length
 }
 
 /** Continuous asphalt ribbon along a densified path (smooth curves, no tile seams). */
@@ -698,144 +929,122 @@ async function placeTownHouses(
 }
 
 /**
- * Larger shells: empty interior + ruined city building (Midwood gets the most).
+ * Cut sandbags + guard towers from the labeled defense-line pack (not the whole scene).
+ * Parts: Sandbags_Line_*, Sandbags_Cover_*, Sandbags_Watchtower, Sandbags_Defencetower.
  */
-async function placeLargeBuildings(
+type DefensePiece = {
+  label: string
+  piece: ReturnType<typeof prepareRuinPiece>
+}
+
+function extractDefensePieces(src: THREE.Object3D): {
+  bags: DefensePiece[]
+  towers: DefensePiece[]
+} {
+  const bags: DefensePiece[] = []
+  const towers: DefensePiece[] = []
+  const seen = new Set<string>()
+
+  src.updateMatrixWorld(true)
+  src.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
+    const name = obj.name || ''
+    if (seen.has(name)) return
+
+    let kind: 'bag' | 'tower' | null = null
+    if (/Watchtower|Defencetower/i.test(name)) kind = 'tower'
+    else if (/Sandbags_(Line|Cover)_/i.test(name)) kind = 'bag'
+    if (!kind) return
+    seen.add(name)
+
+    // Detach from pack layout — plant from local geometry alone
+    const holder = new THREE.Group()
+    holder.name = name
+    const clone = obj.clone(true)
+    clone.position.set(0, 0, 0)
+    clone.rotation.set(0, 0, 0)
+    clone.scale.set(1, 1, 1)
+    clone.updateMatrix()
+    holder.add(clone)
+    const piece = prepareRuinPiece(holder)
+    const entry = { label: name, piece }
+    if (kind === 'tower') towers.push(entry)
+    else bags.push(entry)
+  })
+
+  bags.sort((a, b) => a.label.localeCompare(b.label))
+  towers.sort((a, b) => a.label.localeCompare(b.label))
+  console.info(
+    `[Steel] Defense pack cut — bags: ${bags.map((b) => b.label).join(', ') || 'none'} · towers: ${towers.map((t) => t.label).join(', ') || 'none'}`,
+  )
+  return { bags, towers }
+}
+
+/**
+ * A few sandbag segments + guard towers at clearing edges / road shoulders.
+ */
+async function placeDefenseCuts(
   root: THREE.Group,
   colliders: PropCollider[],
-): Promise<number> {
+): Promise<{ bags: number; towers: number }> {
   const group = new THREE.Group()
-  group.name = 'LargeBuildings'
+  group.name = 'DefenseCuts'
   root.add(group)
 
   const south = FOREST_TOWNS.find((t) => t.id === 'south')!
   const mid = FOREST_TOWNS.find((t) => t.id === 'mid')!
   const north = FOREST_TOWNS.find((t) => t.id === 'north')!
 
-  let count = 0
-
-  const plantSpots = async (url: string, spots: PropSpot[], label: string) => {
-    try {
-      const gltf = await loadGltfCached(url)
-      const piece = prepareRuinPiece(gltf.scene)
-      let n = 0
-      for (const spot of spots) {
-        if (onAsphalt(spot.x, spot.z)) continue
-        plantRuin(piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-        n++
-      }
-      console.info(`[Steel] ${label} — ${n}`)
-      count += n
-    } catch (err) {
-      console.warn(`[Steel] ${label} failed`, err)
-    }
-  }
-
-  await Promise.all([
-    plantSpots(
-      EMPTY_INTERIOR_URL,
-      [
-        ...townRing(south, 2, 48, 15, 0.0),
-        ...townRing(mid, 2, 55, 16, 0.6),
-        ...townRing(north, 2, 48, 15, 0.3),
-      ],
-      'Empty interiors',
-    ),
-    plantSpots(
-      CITY_RUIN_URL,
-      [
-        ...townRing(south, 2, 70, 18, 1.1),
-        ...townRing(mid, 2, 82, 19, 1.7),
-        ...townRing(north, 2, 70, 18, 1.4),
-      ],
-      'City ruins',
-    ),
-  ])
-
-  return count
-}
-
-/**
- * Construction rubble piles at clearing edges (cover, not on roads).
- */
-async function placeRubblePiles(
-  root: THREE.Group,
-  colliders: PropCollider[],
-): Promise<number> {
-  const group = new THREE.Group()
-  group.name = 'TownRubble'
-  root.add(group)
-
-  const south = FOREST_TOWNS.find((t) => t.id === 'south')!
-  const mid = FOREST_TOWNS.find((t) => t.id === 'mid')!
-  const north = FOREST_TOWNS.find((t) => t.id === 'north')!
-  const spots: PropSpot[] = [
-    { x: south.x - 50, z: south.z + 22, yaw: 0.8, h: 4.2 },
-    { x: south.x + 44, z: south.z - 36, yaw: -1.4, h: 3.8 },
-    { x: south.x - 28, z: south.z + 58, yaw: 2.4, h: 4.0 },
-    { x: mid.x + 78, z: mid.z - 48, yaw: 0.3, h: 5.0 },
-    { x: mid.x - 82, z: mid.z + 40, yaw: 2.1, h: 4.6 },
-    { x: mid.x + 28, z: mid.z - 78, yaw: -0.6, h: 4.0 },
-    { x: north.x + 48, z: north.z + 18, yaw: 1.1, h: 4.4 },
-    { x: north.x - 52, z: north.z - 24, yaw: -2.0, h: 3.9 },
-    { x: north.x + 18, z: north.z + 62, yaw: -0.4, h: 4.1 },
-  ]
-
-  let count = 0
+  let bagN = 0
+  let towerN = 0
   try {
-    const gltf = await loadGltfCached(RUBBLE_URL)
-    const pile = prepareRuinPiece(gltf.scene)
-    for (const spot of spots) {
-      if (onAsphalt(spot.x, spot.z)) continue
-      plantRuin(pile, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-      count++
+    const gltf = await loadGltfCached(SANDBAGS_URL)
+    const { bags, towers } = extractDefensePieces(gltf.scene)
+    if (bags.length === 0 && towers.length === 0) {
+      console.warn('[Steel] Defense pack — no labeled Line/Cover/tower meshes')
+      return { bags: 0, towers: 0 }
+    }
+
+    // Sandbag lines / covers — short walls near towns, off asphalt
+    const bagSpots: PropSpot[] = [
+      { x: south.x - 42, z: south.z + 28, yaw: 0.9, h: 1.45 },
+      { x: south.x + 48, z: south.z - 18, yaw: -1.1, h: 1.35 },
+      { x: mid.x + 62, z: mid.z - 38, yaw: 0.35, h: 1.5 },
+      { x: mid.x - 70, z: mid.z + 32, yaw: 2.0, h: 1.4 },
+      { x: mid.x + 22, z: mid.z + 72, yaw: -0.5, h: 1.35 },
+      { x: north.x + 40, z: north.z + 22, yaw: 1.2, h: 1.45 },
+      { x: north.x - 46, z: north.z - 30, yaw: -2.0, h: 1.4 },
+      { x: 72, z: -120, yaw: 0.2, h: 1.3 },
+      { x: -78, z: 140, yaw: 1.7, h: 1.35 },
+    ]
+    for (let i = 0; i < bagSpots.length; i++) {
+      const spot = bagSpots[i]!
+      if (onAsphalt(spot.x, spot.z) || bags.length === 0) continue
+      const pick = bags[i % bags.length]!
+      plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
+      bagN++
+    }
+
+    // Guard / defence towers — one-ish per clearing + one roadside
+    const towerSpots: PropSpot[] = [
+      { x: south.x - 68, z: south.z - 8, yaw: 0.4, h: 5.5 },
+      { x: mid.x + 88, z: mid.z + 12, yaw: -1.0, h: 6.2 },
+      { x: north.x - 62, z: north.z + 28, yaw: 2.2, h: 5.8 },
+      { x: -95, z: -280, yaw: 0.8, h: 5.2 },
+    ]
+    for (let i = 0; i < towerSpots.length; i++) {
+      const spot = towerSpots[i]!
+      if (onAsphalt(spot.x, spot.z) || towers.length === 0) continue
+      const pick = towers[i % towers.length]!
+      plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
+      towerN++
     }
   } catch (err) {
-    console.warn('[Steel] Construction rubble failed', err)
+    console.warn('[Steel] Defense sandbags/towers failed', err)
   }
 
-  console.info(`[Steel] Rubble piles — ${count}`)
-  return count
-}
-
-/**
- * Crate / barrel dumps next to houses (supply purpose).
- */
-async function placeSupplyDumps(
-  root: THREE.Group,
-  colliders: PropCollider[],
-): Promise<number> {
-  const group = new THREE.Group()
-  group.name = 'SupplyDumps'
-  root.add(group)
-
-  const spots: PropSpot[] = [
-    { x: 20, z: -500, yaw: 0.4, h: 2.4 },
-    { x: -12, z: 24, yaw: -0.7, h: 2.6 },
-    { x: 40, z: -22, yaw: 1.15, h: 2.5 },
-    { x: -30, z: 536, yaw: 2.0, h: 2.4 },
-    { x: -46, z: 6, yaw: 0.25, h: 2.5 },
-    { x: 24, z: -546, yaw: -1.4, h: 2.3 },
-    { x: 8, z: 548, yaw: 0.9, h: 2.4 },
-    { x: -38, z: -532, yaw: 1.6, h: 2.4 },
-    { x: 28, z: 500, yaw: -1.1, h: 2.5 },
-  ]
-
-  let count = 0
-  try {
-    const gltf = await loadGltfCached(CRATES_URL)
-    const dump = prepareRuinPiece(gltf.scene)
-    for (const spot of spots) {
-      if (onAsphalt(spot.x, spot.z)) continue
-      plantRuin(dump, group, colliders, spot.x, spot.z, spot.yaw, spot.h)
-      count++
-    }
-  } catch (err) {
-    console.warn('[Steel] Crates pack failed', err)
-  }
-
-  console.info(`[Steel] Supply dumps — ${count} crate/barrel clusters`)
-  return count
+  console.info(`[Steel] Defense cuts — ${bagN} sandbags, ${towerN} towers`)
+  return { bags: bagN, towers: towerN }
 }
 
 /**
@@ -986,27 +1195,23 @@ export async function loadForestOverwatch(
     console.warn('[Steel] Forest roads failed to load', err)
   }
 
-  const [treeCount, ruinCount, largeCount, rubbleCount, dumpCount, carCount] =
+  const [treeCount, rockCount, ruinCount, defense, carCount] =
     await Promise.all([
       placePineTrees(root, colliders).catch((err) => {
         console.warn('[Steel] Forest pine trees failed to load', err)
+        return 0
+      }),
+      placeCliffRocks(root, colliders).catch((err) => {
+        console.warn('[Steel] Forest cliff rocks failed to load', err)
         return 0
       }),
       placeTownHouses(root, colliders).catch((err) => {
         console.warn('[Steel] Town houses failed', err)
         return 0
       }),
-      placeLargeBuildings(root, colliders).catch((err) => {
-        console.warn('[Steel] Large buildings failed', err)
-        return 0
-      }),
-      placeRubblePiles(root, colliders).catch((err) => {
-        console.warn('[Steel] Rubble failed', err)
-        return 0
-      }),
-      placeSupplyDumps(root, colliders).catch((err) => {
-        console.warn('[Steel] Supply dumps failed', err)
-        return 0
+      placeDefenseCuts(root, colliders).catch((err) => {
+        console.warn('[Steel] Defense cuts failed', err)
+        return { bags: 0, towers: 0 }
       }),
       placeAbandonedCars(root, colliders).catch((err) => {
         console.warn('[Steel] Fancy wrecks failed', err)
@@ -1015,7 +1220,7 @@ export async function loadForestOverwatch(
     ])
 
   console.info(
-    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${ruinCount} houses, ${largeCount} large buildings, ${rubbleCount} rubble, ${dumpCount} crates, ${carCount} fancy wrecks, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders`,
+    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${defense.bags} sandbags, ${defense.towers} towers, ${carCount} fancy wrecks, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders`,
   )
   return {
     root,

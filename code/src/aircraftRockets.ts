@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { HeightSampler } from './ballistics'
 import type { GunTarget } from './aircraftGuns'
+import { spawnExplosion } from './explosions'
 
 /**
  * Unguided wing rockets (Corsair HVAR-style).
@@ -196,40 +197,15 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     return null
   }
 
-  function flash(at: THREE.Vector3): void {
-    const geo = new THREE.SphereGeometry(1.4, 8, 8)
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xff8844,
-      transparent: true,
-      opacity: 0.95,
-    })
-    const mesh = new THREE.Mesh(geo, mat)
-    mesh.position.copy(at)
-    scene.add(mesh)
-    const t0 = performance.now()
-    const tick = (now: number): void => {
-      const u = (now - t0) / 420
-      if (u >= 1) {
-        scene.remove(mesh)
-        geo.dispose()
-        mat.dispose()
-        return
-      }
-      mesh.scale.setScalar(1 + u * 3.5)
-      mat.opacity = 0.95 * (1 - u)
-      requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  }
-
   function detonate(at: THREE.Vector3, targets: readonly GunTarget[]): void {
-    flash(at)
+    spawnExplosion({ scene, at, radius: BLAST_RADIUS, kind: 'rocket' })
     for (const target of targets) {
       if (!target.alive) continue
-      const dist = target.root.position.distanceTo(at)
+      const inside = target.containsPoint(at)
+      const dist = inside ? 0 : target.root.position.distanceTo(at)
       if (dist > BLAST_RADIUS) continue
       const falloff = Math.pow(1 - dist / BLAST_RADIUS, 1.35)
-      const probe = surfacePoint(at, target)
+      const probe = inside ? at.clone() : surfacePoint(at, target)
       if (!probe) continue
       _dir.copy(target.root.position).sub(at)
       if (_dir.lengthSq() < 1e-6) _dir.set(0, -1, 0)
@@ -337,7 +313,8 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
         let hit = false
         for (const t of targets) {
           if (!t.alive) continue
-          if (t.root.position.distanceTo(p) > HIT_RADIUS + 8) continue
+          // Large AABB targets (carriers) must use containsPoint — root centre
+          // can be 100m+ from a bow/stern impact.
           if (!t.containsPoint(p) && t.root.position.distanceTo(p) > HIT_RADIUS) continue
           detonate(p, targets)
           hit = true

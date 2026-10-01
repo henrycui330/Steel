@@ -23,6 +23,15 @@ export type SmokeSystem = {
   gunBlastCloud: (origin: THREE.Vector3, forward: THREE.Vector3) => void
   /** Continuous diesel/exhaust from rear deck. */
   engineExhaust: (origin: THREE.Vector3, intensity?: number) => void
+  /**
+   * Grit under a track contact. Call per side while rolling.
+   * `outward` ≈ hull +X / −X in world; intensity 0–1.
+   */
+  trackDust: (
+    origin: THREE.Vector3,
+    outward: THREE.Vector3,
+    intensity?: number,
+  ) => void
   damageLeak: (origin: THREE.Vector3, intensity?: number) => void
   wreckPlume: (origin: THREE.Vector3) => void
   /** Orange fire tongues + black smoke for burning wrecks (burst). */
@@ -75,7 +84,7 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
       hot?: boolean
     },
   ): void {
-    if (puffs.length >= 64) return
+    if (puffs.length >= 72) return
     const mat = new THREE.MeshBasicMaterial({
       map: tex,
       color: opts.color,
@@ -207,6 +216,46 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
           color: 0x6a6864,
         },
       )
+    },
+
+    trackDust(origin, outward, intensity = 1) {
+      const i = THREE.MathUtils.clamp(intensity, 0, 1)
+      if (i < 0.08) return
+      // Probabilistic — keep grit readable without filling the puff pool.
+      if (Math.random() > 0.22 + i * 0.45) return
+      const out = outward.clone()
+      if (out.lengthSq() < 1e-6) out.set(1, 0, 0)
+      else out.normalize()
+      const n = Math.random() < 0.35 + i * 0.4 ? 2 : 1
+      for (let k = 0; k < n; k++) {
+        const side = out
+          .clone()
+          .multiplyScalar(0.35 + Math.random() * 0.9)
+          .add(
+            new THREE.Vector3(
+              (Math.random() - 0.5) * 0.5,
+              0.15 + Math.random() * 0.55,
+              (Math.random() - 0.5) * 0.6,
+            ),
+          )
+        spawn(
+          origin.clone().add(
+            new THREE.Vector3(
+              (Math.random() - 0.5) * 0.35,
+              0.02 + Math.random() * 0.08,
+              (Math.random() - 0.5) * 0.45,
+            ),
+          ),
+          side,
+          {
+            size: 0.55 + Math.random() * 0.7,
+            life: 0.45 + Math.random() * 0.55,
+            grow: 1.8,
+            opacity: 0.22 + i * 0.2,
+            color: Math.random() < 0.4 ? 0x7a6e52 : 0x8a7d5c,
+          },
+        )
+      }
     },
 
     damageLeak(origin, intensity = 1) {

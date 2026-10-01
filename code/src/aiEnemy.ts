@@ -20,7 +20,7 @@ import {
 } from './combatant'
 import type { DummyTarget } from './dummy'
 import { showHitBanner, worldToScreen } from './hitFeedback'
-import { loadPlayerTank } from './loadTank'
+import { loadTankChassis } from './loadTank'
 import { tankOptionById, type TankId } from './tankCatalog'
 import { collectWheels, updateWheels } from './wheels'
 import { spawnDestroyedWreck } from './wreck'
@@ -107,6 +107,12 @@ export type AiSpawnOptions = {
   onKill?: () => void
   /** Called when this AI is destroyed (before wreck / hide). */
   onDeath?: (root: THREE.Object3D) => void
+  /** Damaging hit / kill on the player from this AI's shell. */
+  onStrikePlayer?: (killer: {
+    root: THREE.Object3D
+    tankId: TankId
+    name: string
+  }) => void
 }
 
 const _muzzlePos = new THREE.Vector3()
@@ -224,7 +230,7 @@ export async function spawnAiPz3Enemy(
   const { team, position, yaw = Math.PI, smoke, heightAt, persistMesh = false } = opts
   const tankId = opts.tankId ?? 'pz3'
   const chassis = tankOptionById(tankId)
-  const handle = await loadPlayerTank(tankId)
+  const handle = await loadTankChassis(tankId)
   const { root, turret, barrel, muzzle } = handle
   root.name = team === 'friendly' ? 'aiFriendly' : 'aiEnemy'
   root.position.copy(position)
@@ -237,6 +243,8 @@ export async function spawnAiPz3Enemy(
   const flatY = position.y
   const label =
     team === 'friendly' ? `Friendly ${chassis.name}` : `Enemy ${chassis.name}`
+  root.userData.displayName = label
+  root.userData.tankId = tankId
   const combat = createCombatant(root, {
     maxHp: Math.round(chassis.maxHp * 0.85),
     armor: chassis.armor,
@@ -324,7 +332,7 @@ export async function spawnAiPz3Enemy(
 
     _spark.copy(shell.mesh.position)
     const { resolution, destroyed, tracksDisabled } = result
-    const isPlayer = target.root.name === 'playerTank'
+    const isPlayer = isPlayerCombatRoot(target.root)
     const youTag = isPlayer ? ' · YOU' : ''
 
     if (resolution.kind === 'ricochet') {
@@ -350,6 +358,18 @@ export async function spawnAiPz3Enemy(
       }
     }
     if (destroyed) opts.onKill?.()
+    if (
+      isPlayer &&
+      (destroyed ||
+        resolution.kind === 'penetrated' ||
+        resolution.kind === 'blast')
+    ) {
+      opts.onStrikePlayer?.({
+        root,
+        tankId,
+        name: chassis.name,
+      })
+    }
     return true
   }
 
@@ -665,6 +685,11 @@ export function aiSpawnRing(
     out.push(new THREE.Vector3(x, sampleY(x, z), z))
   }
   return out
+}
+
+/** True for the local player's tank or aircraft root. */
+export function isPlayerCombatRoot(root: THREE.Object3D): boolean {
+  return root.name === 'playerTank' || root.userData?.isPlayer === true
 }
 
 /** Wrap player combatant as an AI hostile. */

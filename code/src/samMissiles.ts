@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { DummyTarget } from './dummy'
+import type { HitAnalyzeReport } from './hitAnalyzer'
 
 /**
  * Seeker missiles (Pantsir SAM + F-16 AAM).
@@ -50,10 +51,14 @@ export type SamMissileOpts = {
   getDecoys?: () => readonly THREE.Object3D[]
   heightAt?: (x: number, z: number) => number
   onKill?: (victim: THREE.Object3D) => void
+  /** Armor hit analyzer (player SAM / ATGM). */
+  onHitAnalyze?: (report: HitAnalyzeReport) => void
   maxAmmo?: number
   reloadSec?: number
   speed?: number
   damage?: number
+  /** Base armour penetration (mm). */
+  pen?: number
   color?: number
   logTag?: string
   /** Air-launched: no forced loft (ground SAMs keep upward bias). */
@@ -97,6 +102,49 @@ const _axis = new THREE.Vector3()
 const _q = new THREE.Quaternion()
 const _back = new THREE.Vector3()
 const _side = new THREE.Vector3()
+const _localHit = new THREE.Vector3()
+const _localDir = new THREE.Vector3()
+const _invTarget = new THREE.Matrix4()
+
+function emitHitAnalyze(
+  opts: SamMissileOpts,
+  h: DummyTarget,
+  hitPos: THREE.Vector3,
+  vel: THREE.Vector3,
+  report: Omit<
+    HitAnalyzeReport,
+    'targetRoot' | 'localHit' | 'localDir' | 'partId' | 'targetName' | 'ammoLabel'
+  > & { partId: HitAnalyzeReport['partId']; partLabel: string },
+  logTag: string,
+): void {
+  if (!opts.onHitAnalyze) return
+  h.root.updateMatrixWorld(true)
+  _invTarget.copy(h.root.matrixWorld).invert()
+  _localHit.copy(hitPos).applyMatrix4(_invTarget)
+  _localDir.copy(vel).transformDirection(_invTarget)
+  if (_localDir.lengthSq() > 1e-8) _localDir.normalize()
+  else _localDir.set(0, 0, 1)
+  opts.onHitAnalyze({
+    targetRoot: h.root,
+    localHit: _localHit.clone(),
+    localDir: _localDir.clone(),
+    partId: report.partId,
+    targetName:
+      (typeof h.root.userData?.displayName === 'string' &&
+        h.root.userData.displayName) ||
+      h.root.name ||
+      'Enemy',
+    ammoLabel: logTag,
+    outcome: report.outcome,
+    partLabel: report.partLabel,
+    damage: report.damage,
+    penetration: report.penetration,
+    effectiveArmor: report.effectiveArmor,
+    angleDeg: report.angleDeg,
+    hp: report.hp,
+    maxHp: report.maxHp,
+  })
+}
 
 export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   const { scene } = opts
@@ -107,6 +155,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   const maxAmmo = opts.maxAmmo ?? MAX_AMMO
   const reloadSec = opts.reloadSec ?? RELOAD
   const damage = opts.damage ?? DAMAGE
+  const pen = opts.pen ?? PEN
   const logTag = opts.logTag ?? 'SAM'
   const airLaunch = !!opts.airLaunch
   const meshScale = opts.meshScale ?? 1
@@ -358,14 +407,14 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
       let result = h.resolveShellHit(
         m.mesh.position,
         m.vel,
-        { basePenetration: PEN, baseDamage: damage },
+        { basePenetration: pen, baseDamage: damage },
         { ammoId: 'he' },
       )
       if (!result && isLock && close) {
         result = h.resolveShellHit(
           _tgt,
           m.vel,
-          { basePenetration: PEN, baseDamage: damage },
+          { basePenetration: pen, baseDamage: damage },
           { ammoId: 'he' },
         )
       }
@@ -375,11 +424,52 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
           h.alive = false
           opts.onKill?.(h.root)
         }
+        emitHitAnalyze(
+          opts,
+          h,
+          m.mesh.position,
+          m.vel,
+          {
+            partId: 'hullFront',
+            partLabel: 'Proximity',
+            outcome: h.hp <= 0 ? 'kill' : 'blast',
+            damage,
+            penetration: pen,
+            effectiveArmor: 0,
+            angleDeg: 0,
+            hp: h.hp,
+            maxHp: h.maxHp,
+          },
+          logTag,
+        )
         console.info(`[Steel] ${logTag} proximity hit ${h.root.name || 'target'}`)
         return true
       }
       if (!result) continue
       if (result.destroyed) opts.onKill?.(h.root)
+      {
+        const r = result.resolution
+        let outcome: HitAnalyzeReport['outcome'] = r.kind
+        if (result.destroyed) outcome = r.crit ? 'crit' : 'kill'
+        emitHitAnalyze(
+          opts,
+          h,
+          m.mesh.position,
+          m.vel,
+          {
+            partId: r.part.id,
+            partLabel: r.part.label,
+            outcome,
+            damage: r.damage,
+            penetration: r.penetration,
+            effectiveArmor: r.effectiveArmor,
+            angleDeg: r.angleDeg,
+            hp: result.hp,
+            maxHp: h.maxHp,
+          },
+          logTag,
+        )
+      }
       console.info(`[Steel] ${logTag} hit ${h.root.name || 'target'}`)
       return true
     }

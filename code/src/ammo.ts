@@ -24,6 +24,23 @@ export type AmmoDef = {
   emissive: number
 }
 
+/** Remaining rounds the player can still fire. */
+export type AmmoStock = Record<AmmoId, number>
+
+/** Default rack for a typical MBT / medium tank. */
+export const DEFAULT_AMMO_STOCK: AmmoStock = {
+  he: 20,
+  aphe: 24,
+  mg: 350,
+}
+
+/** High ROF SPAAG / autocannon — more ammo, still finite. */
+export const AA_AMMO_STOCK: AmmoStock = {
+  he: 160,
+  aphe: 100,
+  mg: 600,
+}
+
 export const AMMO_TYPES: Record<AmmoId, AmmoDef> = {
   he: {
     id: 'he',
@@ -65,4 +82,28 @@ export const AMMO_ORDER: AmmoId[] = ['he', 'aphe']
 
 export function ammoById(id: AmmoId): AmmoDef {
   return AMMO_TYPES[id]
+}
+
+export function cloneAmmoStock(src: AmmoStock): AmmoStock {
+  return { he: src.he, aphe: src.aphe, mg: src.mg }
+}
+
+/** Pick starting racks from tank role (rockets use magazine mode — stock unused). */
+export function defaultAmmoRacks(opts: {
+  reloadSec: number
+  magazineSize?: number
+  antiAir?: boolean
+  /** ATGM carriers — coax belt only, no AP/HE. */
+  noMainGun?: boolean
+}): AmmoStock {
+  if (opts.magazineSize && opts.magazineSize > 0) {
+    return { he: 0, aphe: 0, mg: 0 }
+  }
+  if (opts.noMainGun) {
+    return { he: 0, aphe: 0, mg: 600 }
+  }
+  if (opts.antiAir || opts.reloadSec < 1.2) {
+    return cloneAmmoStock(AA_AMMO_STOCK)
+  }
+  return cloneAmmoStock(DEFAULT_AMMO_STOCK)
 }

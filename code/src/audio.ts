@@ -1,4 +1,6 @@
 import { assetUrl, fixPublicUrl } from './assetUrl'
+import { germanCrewSfxUrls } from './germanCrew'
+import { sovietCrewSfxUrls } from './sovietCrew'
 
 /** Fire SFX from extracted audio (no video element). */
 function fireSfxUrl(): string {
@@ -22,6 +24,9 @@ function lowAltAlarmUrl(): string {
 function stallAlarmUrl(): string {
   return fixPublicUrl(assetUrl('sfx/stall-alarm.mp3'))
 }
+function reloadSfxUrl(): string {
+  return fixPublicUrl(assetUrl('sfx/reloading.mp3'))
+}
 
 const PEAK_VOLUME = 0.9
 /** Full volume before fade starts (seconds). */
@@ -30,6 +35,7 @@ const HOLD_SEC = 0.35
 const FADE_SEC = 3
 
 let shared: HTMLAudioElement | null = null
+let reloadShared: HTMLAudioElement | null = null
 
 function getShared(): HTMLAudioElement {
   if (!shared) {
@@ -37,6 +43,14 @@ function getShared(): HTMLAudioElement {
     shared.preload = 'auto'
   }
   return shared
+}
+
+function getReloadShared(): HTMLAudioElement {
+  if (!reloadShared) {
+    reloadShared = new Audio(reloadSfxUrl())
+    reloadShared.preload = 'auto'
+  }
+  return reloadShared
 }
 
 function fadeOutAndStop(el: HTMLAudioElement, durationSec: number): void {
@@ -74,6 +88,86 @@ export function playFireSound(): void {
     .catch((err) => {
       console.warn('[Steel] Fire SFX blocked or failed', err)
     })
+}
+
+let rocketCtx: AudioContext | null = null
+
+/** Short whoosh for MLRS / rocket rack — not the tank cannon sample. */
+export function playRocketFireSound(): void {
+  try {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return
+    if (!rocketCtx) rocketCtx = new AC()
+    const ctx = rocketCtx
+    if (ctx.state === 'suspended') void ctx.resume()
+
+    const t0 = ctx.currentTime
+    const dur = 0.28
+    const bufferSize = Math.floor(ctx.sampleRate * dur)
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+    const data = buffer.getChannelData(0)
+    for (let i = 0; i < bufferSize; i++) {
+      const env = 1 - i / bufferSize
+      data[i] = (Math.random() * 2 - 1) * env * env
+    }
+    const src = ctx.createBufferSource()
+    src.buffer = buffer
+    const filter = ctx.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.setValueAtTime(480, t0)
+    filter.frequency.exponentialRampToValueAtTime(180, t0 + dur)
+    filter.Q.value = 0.7
+    const gain = ctx.createGain()
+    gain.gain.setValueAtTime(0.0001, t0)
+    gain.gain.exponentialRampToValueAtTime(0.55, t0 + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+    src.connect(filter)
+    filter.connect(gain)
+    gain.connect(ctx.destination)
+    src.start(t0)
+    src.stop(t0 + dur + 0.02)
+  } catch (err) {
+    console.warn('[Steel] Rocket SFX failed', err)
+  }
+}
+
+/** Delay after fire before breech reload SFX (eject / cool beat). */
+const RELOAD_SFX_DELAY_MS = 300
+let reloadDelayTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Main-gun breech / loader — starts after a short post-shot delay. */
+export function playReloadSound(): void {
+  if (reloadDelayTimer != null) {
+    clearTimeout(reloadDelayTimer)
+    reloadDelayTimer = null
+  }
+  reloadDelayTimer = setTimeout(() => {
+    reloadDelayTimer = null
+    const el = getReloadShared()
+    try {
+      el.pause()
+      el.currentTime = 0
+    } catch {
+      /* ignore seek errors before metadata */
+    }
+    el.volume = 0.72
+    void el.play().catch((err) => {
+      console.warn('[Steel] Reload SFX blocked or failed', err)
+    })
+  }, RELOAD_SFX_DELAY_MS)
+}
+
+/** Stop reload SFX early (match end / weapon swap). */
+export function stopReloadSound(): void {
+  if (reloadDelayTimer != null) {
+    clearTimeout(reloadDelayTimer)
+    reloadDelayTimer = null
+  }
+  if (!reloadShared) return
+  reloadShared.pause()
+  reloadShared.currentTime = 0
 }
 
 export type EngineLoop = {
@@ -159,6 +253,178 @@ export function createDieselEngine(): EngineLoop {
     rateIdle: 0.92,
     rateFull: 1.18,
   })
+}
+
+export type CabinBed = {
+  start: () => void
+  stop: () => void
+  /**
+   * Track clatter under the diesel.
+   * `speed01` / `turn01` 0–1; `aiming` ducks the bed so the sight stays calm.
+   */
+  setDrive: (speed01: number, turn01: number, aiming: boolean) => void
+  /** Soft suspension / landing thud (0–1). */
+  thump: (amount: number) => void
+}
+
+let cabinCtx: AudioContext | null = null
+let trackNoiseBuf: AudioBuffer | null = null
+
+function getCabinCtx(): AudioContext | null {
+  try {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!AC) return null
+    if (!cabinCtx) cabinCtx = new AC()
+    return cabinCtx
+  } catch {
+    return null
+  }
+}
+
+function getTrackNoiseBuffer(ctx: AudioContext): AudioBuffer {
+  if (trackNoiseBuf && trackNoiseBuf.sampleRate === ctx.sampleRate) return trackNoiseBuf
+  const sec = 1.4
+  const n = Math.floor(ctx.sampleRate * sec)
+  const buf = ctx.createBuffer(1, n, ctx.sampleRate)
+  const data = buf.getChannelData(0)
+  let brown = 0
+  for (let i = 0; i < n; i++) {
+    const white = Math.random() * 2 - 1
+    brown = (brown + white * 0.02) * 0.986
+    // Metallic ticks every so often — reads as track links.
+    const tick =
+      Math.random() < 0.0025 ? (Math.random() * 2 - 1) * 0.55 : 0
+    data[i] = brown * 0.55 + tick
+  }
+  trackNoiseBuf = buf
+  return buf
+}
+
+/**
+ * Procedural cabin bed — track clatter loop + bump thumps (no extra assets).
+ * Sits under diesel; never louder than the gun.
+ */
+export function createCabinBed(): CabinBed {
+  let started = false
+  let src: AudioBufferSourceNode | null = null
+  let filter: BiquadFilterNode | null = null
+  let gain: GainNode | null = null
+  let wantedSpeed = 0
+  let wantedTurn = 0
+  let aiming = false
+
+  function apply(): void {
+    const ctx = getCabinCtx()
+    if (!ctx || !gain || !filter || !started) return
+    if (ctx.state === 'suspended') void ctx.resume()
+
+    const s = clamp01(wantedSpeed)
+    const t = clamp01(wantedTurn)
+    // Need real motion before clatter reads; turn at crawl still ticks a little.
+    const motion = Math.max(0, (s - 0.08) / 0.92)
+    const raw = motion * 0.72 + t * motion * 0.28
+    const duck = aiming ? 0.28 : 1
+    const level = raw * duck * 0.14
+    const now = ctx.currentTime
+    gain.gain.cancelScheduledValues(now)
+    gain.gain.setTargetAtTime(level, now, 0.08)
+    const hz = 280 + motion * 520 + t * 90
+    filter.frequency.cancelScheduledValues(now)
+    filter.frequency.setTargetAtTime(hz, now, 0.1)
+  }
+
+  function ensureLoop(): void {
+    const ctx = getCabinCtx()
+    if (!ctx || !started || src) return
+    if (ctx.state === 'suspended') void ctx.resume()
+    const g = ctx.createGain()
+    g.gain.value = 0
+    const f = ctx.createBiquadFilter()
+    f.type = 'bandpass'
+    f.frequency.value = 320
+    f.Q.value = 0.7
+    const s = ctx.createBufferSource()
+    s.buffer = getTrackNoiseBuffer(ctx)
+    s.loop = true
+    s.connect(f)
+    f.connect(g)
+    g.connect(ctx.destination)
+    try {
+      s.start()
+    } catch (err) {
+      console.warn('[Steel] Cabin track loop failed', err)
+      return
+    }
+    src = s
+    filter = f
+    gain = g
+    apply()
+  }
+
+  return {
+    start() {
+      started = true
+      ensureLoop()
+      apply()
+      console.info('[Steel] Cabin bed — track clatter ready')
+    },
+    stop() {
+      started = false
+      wantedSpeed = 0
+      wantedTurn = 0
+      try {
+        src?.stop()
+      } catch {
+        /* already stopped */
+      }
+      src?.disconnect()
+      filter?.disconnect()
+      gain?.disconnect()
+      src = null
+      filter = null
+      gain = null
+    },
+    setDrive(speed01, turn01, aim) {
+      wantedSpeed = clamp01(speed01)
+      wantedTurn = clamp01(turn01)
+      aiming = aim
+      if (started && !src) ensureLoop()
+      apply()
+    },
+    thump(amount) {
+      const ctx = getCabinCtx()
+      if (!ctx || !started) return
+      if (ctx.state === 'suspended') void ctx.resume()
+      const a = clamp01(amount)
+      if (a < 0.05) return
+      const t0 = ctx.currentTime
+      const dur = 0.12 + a * 0.1
+      const n = Math.floor(ctx.sampleRate * dur)
+      const buf = ctx.createBuffer(1, n, ctx.sampleRate)
+      const data = buf.getChannelData(0)
+      for (let i = 0; i < n; i++) {
+        const env = Math.pow(1 - i / n, 1.8)
+        data[i] = (Math.random() * 2 - 1) * env
+      }
+      const node = ctx.createBufferSource()
+      node.buffer = buf
+      const lp = ctx.createBiquadFilter()
+      lp.type = 'lowpass'
+      lp.frequency.setValueAtTime(90 + a * 70, t0)
+      const g = ctx.createGain()
+      const peak = 0.12 + a * 0.18
+      g.gain.setValueAtTime(0.0001, t0)
+      g.gain.exponentialRampToValueAtTime(peak * (aiming ? 0.35 : 1), t0 + 0.012)
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+      node.connect(lp)
+      lp.connect(g)
+      g.connect(ctx.destination)
+      node.start(t0)
+      node.stop(t0 + dur + 0.02)
+    },
+  }
 }
 
 /** Prop fighter idle — throttle / airspeed raises intensity. */
@@ -296,6 +562,9 @@ export function unlockAudio(): void {
     ejectSirenUrl(),
     lowAltAlarmUrl(),
     stallAlarmUrl(),
+    reloadSfxUrl(),
+    ...germanCrewSfxUrls(),
+    ...sovietCrewSfxUrls(),
   ]) {
     const probe = new Audio(url)
     probe.volume = 0

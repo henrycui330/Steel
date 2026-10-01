@@ -12,6 +12,8 @@ export type DriveControls = {
 
 export type DriveController = {
   getSpeed: () => number
+  /** True while crest-flying / hang above terrain. */
+  isAirborne: () => boolean
   /** Instant zero speed (prop / wall hard-stop). */
   killSpeed: () => void
   setGroundY: (y: number) => void
@@ -35,7 +37,8 @@ const TRACK_HALF_L = 1.55
 /** Soft spring — readable settle without earthquake rocking. */
 const SPRING = 42
 const DAMP = 17
-const MAX_HANG = 0.28
+/** Grounded hang above tracks (m) — small hops only; crest flight uses MAX_AIR. */
+const MAX_HANG = 0.35
 /** Peak micro-relief amplitude (m) — subtle undulation only. */
 const RELIEF_AMP = 0.045
 /** How much corner-sample pitch/roll reaches the hull (0–1). */
@@ -59,6 +62,25 @@ const THROTTLE_BRAKE = 14
 const COAST_INERTIA = 0.68
 /** Deadzone on smoothed throttle. */
 const THROTTLE_EPS = 0.03
+/**
+ * Global arcade pace — catalog maxSpeed/accel stay relative; this is the
+ * “feel like SPEED” knob without retuning every chassis.
+ */
+export const SPEED_FEEL = 1.48
+/** Airborne gravity (m/s²) while crest-flying. */
+const AIR_GRAVITY = 26
+/** Max meters above terrain while airborne. */
+const MAX_AIR = 3.4
+/** Need this fraction of top speed before a crest can launch you. */
+const CREST_SPEED_FRAC = 0.4
+/** Uphill grade (rise/run) that arms a crest launch. */
+const CREST_ARM_GRADE = 0.11
+/** Downhill grade that triggers launch once armed. */
+const CREST_FIRE_GRADE = -0.04
+/** Upward launch scale: rideVel += |speed| * armedGrade * this. */
+const CREST_LAUNCH = 1.85
+/** Extra launch from how hard the slope pitches over. */
+const CREST_SNAP = 0.55
 
 /**
  * Soft procedural undulation under the tracks.
@@ -89,12 +111,16 @@ export function createDriveController(profile: DriveProfile): DriveController {
   let heightAt: ((x: number, z: number) => number) | null = null
   let mobilityMul = 1
   let slip = 0
+  let airborne = false
+  let prevGrade = 0
+  /** Peak uphill grade while armed — spent on crest launch. */
+  let armedGrade = 0
 
   const {
-    maxSpeed,
-    maxReverse,
-    accel,
-    reverseAccel,
+    maxSpeed: catalogMaxSpeed,
+    maxReverse: catalogMaxReverse,
+    accel: catalogAccel,
+    reverseAccel: catalogReverseAccel,
     brakeDecel,
     coastDrag,
     turnRate,
@@ -103,22 +129,32 @@ export function createDriveController(profile: DriveProfile): DriveController {
     tiltFromAccel,
   } = profile
 
+  const maxSpeed = catalogMaxSpeed * SPEED_FEEL
+  const maxReverse = catalogMaxReverse * SPEED_FEEL
+  const accel = catalogAccel * SPEED_FEEL
+  const reverseAccel = catalogReverseAccel * SPEED_FEEL
+
   function sampleGround(x: number, z: number): number {
     const base = heightAt ? heightAt(x, z) : groundY
     return base + microRelief(x, z)
   }
 
   console.info(
-    `[Steel] Drive TP1c — throttle lag engage=${THROTTLE_ENGAGE} release=${THROTTLE_RELEASE} · coast×${COAST_INERTIA}`,
+    `[Steel] Drive — SPEED_FEEL×${SPEED_FEEL} · crest hop · throttle engage=${THROTTLE_ENGAGE} release=${THROTTLE_RELEASE} · coast×${COAST_INERTIA}`,
   )
 
   return {
     getSpeed: () => speed,
+    isAirborne: () => airborne,
     killSpeed() {
       speed = 0
       prevSpeed = 0
       throttle = 0
       slipLat = 0
+      airborne = false
+      armedGrade = 0
+      prevGrade = 0
+      rideVel = 0
     },
     setGroundY(y) {
       groundY = y
@@ -127,6 +163,9 @@ export function createDriveController(profile: DriveProfile): DriveController {
       heightAt = fn
       rideY = null
       rideVel = 0
+      airborne = false
+      armedGrade = 0
+      prevGrade = 0
     },
     setMobilityMul(mul) {
       mobilityMul = THREE.MathUtils.clamp(mul, 0.2, 1.2)
@@ -187,6 +226,7 @@ export function createDriveController(profile: DriveProfile): DriveController {
       const cy = Math.cos(yaw)
 
       let climbMul = 1
+      let grade = 0
       // Always sample relief (and dunes when heightAt is set)
       {
         const ahead = 2.2
@@ -195,9 +235,10 @@ export function createDriveController(profile: DriveProfile): DriveController {
           tank.position.x + sy * ahead,
           tank.position.z + cy * ahead,
         )
-        const grade = (y1 - y0) / ahead
-        if (grade > 0.28) climbMul = Math.max(0.3, 1 - (grade - 0.28) * 1.6)
-        else if (grade < -0.35) climbMul = 1.12
+        grade = (y1 - y0) / ahead
+        // Softer climb tax so you can still crest at pace
+        if (grade > 0.32) climbMul = Math.max(0.42, 1 - (grade - 0.32) * 1.25)
+        else if (grade < -0.35) climbMul = 1.14
       }
 
       tank.position.x += sy * speed * climbMul * dt
@@ -231,19 +272,65 @@ export function createDriveController(profile: DriveProfile): DriveController {
       if (rideY == null) {
         rideY = terrainY
         rideVel = 0
+        airborne = false
       }
 
-      const accelY = -SPRING * (rideY - terrainY) - DAMP * rideVel
-      rideVel += accelY * dt
-      rideY += rideVel * dt
+      // Arm crest: climbing at pace stores peak uphill grade
+      if (
+        !airborne &&
+        Math.abs(speed) >= capFwd * CREST_SPEED_FRAC &&
+        grade > CREST_ARM_GRADE
+      ) {
+        armedGrade = Math.max(armedGrade, grade)
+      } else if (!airborne && grade < CREST_ARM_GRADE * 0.5) {
+        // Fade arm if you slow / level out without pitching over
+        armedGrade *= Math.exp(-2.5 * dt)
+        if (armedGrade < 0.04) armedGrade = 0
+      }
 
-      if (rideY < terrainY) {
-        // Contact — light rebound (was too punchy)
-        rideY = terrainY
-        if (rideVel < 0) rideVel *= -0.18
-      } else if (rideY > terrainY + MAX_HANG) {
-        rideY = terrainY + MAX_HANG
-        if (rideVel > 0) rideVel = 0
+      // Fire: slope pitches from climb → drop while still fast
+      if (
+        !airborne &&
+        armedGrade >= CREST_ARM_GRADE &&
+        Math.abs(speed) >= capFwd * CREST_SPEED_FRAC &&
+        grade <= CREST_FIRE_GRADE &&
+        prevGrade > CREST_FIRE_GRADE
+      ) {
+        const snap = Math.max(0, armedGrade - grade)
+        const launch =
+          Math.abs(speed) * armedGrade * CREST_LAUNCH +
+          Math.abs(speed) * snap * CREST_SNAP
+        rideVel = Math.max(rideVel, launch)
+        airborne = true
+        armedGrade = 0
+      }
+      prevGrade = grade
+
+      if (airborne) {
+        rideVel -= AIR_GRAVITY * dt
+        rideY += rideVel * dt
+        if (rideY <= terrainY) {
+          rideY = terrainY
+          if (rideVel < -3.5) rideVel *= -0.14
+          else rideVel = 0
+          airborne = false
+        } else if (rideY > terrainY + MAX_AIR) {
+          rideY = terrainY + MAX_AIR
+          if (rideVel > 0) rideVel = 0
+        }
+      } else {
+        const accelY = -SPRING * (rideY - terrainY) - DAMP * rideVel
+        rideVel += accelY * dt
+        rideY += rideVel * dt
+
+        if (rideY < terrainY) {
+          // Contact — light rebound (was too punchy)
+          rideY = terrainY
+          if (rideVel < 0) rideVel *= -0.18
+        } else if (rideY > terrainY + MAX_HANG) {
+          rideY = terrainY + MAX_HANG
+          if (rideVel > 0) rideVel = 0
+        }
       }
 
       tank.position.y = rideY
@@ -259,6 +346,11 @@ export function createDriveController(profile: DriveProfile): DriveController {
       let terrainRoll = Math.atan2(rightAvg - leftAvg, TRACK_HALF_W * 2)
       terrainPitch = THREE.MathUtils.clamp(terrainPitch, -0.22, 0.22) * TERRAIN_TILT_BLEND
       terrainRoll = THREE.MathUtils.clamp(terrainRoll, -0.18, 0.18) * TERRAIN_TILT_BLEND
+
+      // While airborne, keep a bit of nose-up from the launch then ease to flat fall
+      if (airborne) {
+        terrainPitch *= 0.35
+      }
 
       // TP1b — accel: nose up (squat); brake: nose down (dive). Sign was inverted before.
       const accelGain =
