@@ -4,7 +4,7 @@ import { cloneGltfScene } from './loadGltf'
 import { createLandingGear, type LandingGear } from './landingGear'
 import { tankOptionById, type TankId } from './tankCatalog'
 
-const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=7')
+const CORSAIR_URL = assetUrl('models/f4u_corsair.glb?v=8')
 const YAK9_URL = assetUrl('models/yak9.glb?v=7')
 const P51_URL = assetUrl('models/p51_mustang.glb?v=2')
 const F84F_URL = assetUrl('models/f84f.glb?v=1')

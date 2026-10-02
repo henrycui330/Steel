@@ -101,7 +101,7 @@ function forestSkyPalette(
 }
 
 export type DriveWeatherMods = {
-  /** Multiplies max speed / accel feel (heat + freeze). */
+  /** Multiplies max speed / accel feel (rain slip only). */
   mobilityMul: number
   /** 0–1 rain slip. */
   slip: number
@@ -118,8 +118,8 @@ export type EnvironmentSystem = {
 const _rainPos = new THREE.Vector3()
 
 /**
- * Day/night lighting, season tint, weather fog/rain, and crew/oil mobility effects
- * for vintage tanks.
+ * Day/night lighting, season tint, weather fog/rain.
+ * (Crew overheating / oil-freeze mobility penalties removed.)
  */
 export function createEnvironment(
   scene: THREE.Scene,
@@ -133,9 +133,6 @@ export function createEnvironment(
 ): EnvironmentSystem {
   const { timeOfDay, season, weather, mapId } = config
 
-  let heat = 0
-  let freezeLeft = 0
-  let freezeCooldown = 8 + Math.random() * 10
   let status = ''
 
   // --- Lighting ---
@@ -242,7 +239,7 @@ export function createEnvironment(
   )
 
   return {
-    update(dt, camera, speed, vintageCrew) {
+    update(dt, camera, _speed, _vintageCrew) {
       status = ''
 
       if (skyDome) {
@@ -267,49 +264,15 @@ export function createEnvironment(
         attr.needsUpdate = true
       }
 
-      if (!vintageCrew) {
-        heat = Math.max(0, heat - dt * 0.15)
-        freezeLeft = 0
-        return
-      }
-
-      if (season === 'summer' && timeOfDay === 'day') {
-        const moving = Math.abs(speed) > 1.5
-        if (moving) heat = Math.min(1, heat + dt * 0.045)
-        else heat = Math.max(0, heat - dt * 0.08)
-        if (heat > 0.35) status = 'CREW OVERHEATING'
-      } else {
-        heat = Math.max(0, heat - dt * 0.2)
-      }
-
-      if (season === 'winter') {
-        freezeCooldown -= dt
-        if (freezeLeft > 0) {
-          freezeLeft -= dt
-          status = 'OIL THICK — SLOW'
-        } else if (freezeCooldown <= 0) {
-          if (Math.random() < 0.35) {
-            freezeLeft = 2.8 + Math.random() * 2.5
-            status = 'OIL THICK — SLOW'
-          }
-          freezeCooldown = 12 + Math.random() * 18
-        }
-      }
-
-      if (raining && !status) status = 'WET TRACKS'
-      if (foggy && !status) status = 'LOW VISIBILITY'
+      if (raining) status = 'WET TRACKS'
+      else if (foggy) status = 'LOW VISIBILITY'
     },
 
     getDriveMods() {
-      let mobilityMul = 1
-      if (heat > 0.2) {
-        mobilityMul *= THREE.MathUtils.lerp(1, 0.52, THREE.MathUtils.smoothstep(heat, 0.2, 1))
-      }
-      if (freezeLeft > 0) mobilityMul *= 0.42
       const slip = raining ? 0.85 : 0
       let s = status
       if (raining && slip > 0 && !s) s = 'WET TRACKS'
-      return { mobilityMul, slip, status: s }
+      return { mobilityMul: 1, slip, status: s }
     },
 
     dispose() {

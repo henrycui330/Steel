@@ -3,6 +3,7 @@ import type { HeightSampler } from './ballistics'
 import type { GunTarget } from './aircraftGuns'
 import type { TrackedProjectile } from './impactCinematic'
 import { spawnExplosion } from './explosions'
+import { hitsPropCollider, type PropCollider } from './collision'
 
 /**
  * Two 1000 lb bombs plus the bombsight that makes them usable.
@@ -83,10 +84,12 @@ export type BombOptions = {
   velocity: THREE.Vector3
   /** Override bay size (fighters default 2; bombers pass more). */
   bombCount?: number
+  propColliders?: readonly PropCollider[]
 }
 
 export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   const { scene, root, heightAt, bounds, velocity } = opts
+  const walls = opts.propColliders ?? []
   const capacity = Math.max(1, Math.floor(opts.bombCount ?? BOMB_COUNT))
 
   const bombGeo = new THREE.CapsuleGeometry(0.19, 1.0, 4, 8)
@@ -339,6 +342,9 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
 
       const p = b.mesh.position
       let hit = p.y <= heightAt(p.x, p.z)
+      if (!hit && walls.length > 0 && hitsPropCollider(p, walls, 0.35)) {
+        hit = true
+      }
       if (!hit) {
         for (const target of targets) {
           if (target.alive && target.containsPoint(p)) {

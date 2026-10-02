@@ -948,6 +948,261 @@ function prepareT34(root: THREE.Object3D): boolean {
 }
 
 /**
+ * M2 Bradley IFV — Sketchfab FBX bake.
+ * body_lod0 hull, turret_lod turret (25mm baked in), bags on hull.
+ * Match by substring — Sketchfab node names vary slightly after load.
+ */
+function prepareBradley(root: THREE.Object3D): boolean {
+  const meshes: THREE.Mesh[] = []
+  root.traverse((o) => {
+    if (o instanceof THREE.Mesh) meshes.push(o)
+  })
+  const body = meshes.find((m) => /body_lod/i.test(m.name))
+  const turretMesh = meshes.find((m) => /turret_lod/i.test(m.name))
+  if (!body || !turretMesh) {
+    console.warn(
+      '[Steel] Bradley prep miss — body=',
+      !!body,
+      'turret=',
+      !!turretMesh,
+    )
+    return false
+  }
+
+  let hasBradleyRoot = false
+  root.traverse((o) => {
+    if (/m2_bradley|bradley\.fbx|body_lod0/i.test(o.name)) hasBradleyRoot = true
+  })
+  if (!hasBradleyRoot) return false
+
+  body.name = 'Hull'
+
+  let turretGroup: THREE.Object3D = turretMesh
+  let p: THREE.Object3D | null = turretMesh.parent
+  while (p && p !== root) {
+    if (/turret_lod/i.test(p.name)) {
+      turretGroup = p
+      break
+    }
+    p = p.parent
+  }
+  turretGroup.name = 'Turret'
+
+  const bagsParent =
+    root.getObjectByName('bagsbagsba') ??
+    meshes.find((m) => /bagsbagsba/i.test(m.name))?.parent ??
+    meshes.find((m) => /bagsbagsba/i.test(m.name)) ??
+    null
+  if (bagsParent && bagsParent !== body) body.attach(bagsParent)
+
+  let obj05: THREE.Object3D | null = root.getObjectByName('Object05') ?? null
+  if (!obj05) {
+    root.traverse((o) => {
+      if (!obj05 && /^object05$/i.test(o.name)) obj05 = o
+    })
+  }
+  if (obj05 && obj05 !== turretGroup) {
+    turretGroup.attach(obj05)
+  }
+
+  console.info('[Steel] Bradley: Hull + Turret from body_lod / turret_lod (baked 25mm)')
+  return true
+}
+
+/**
+ * M55 SPG pack fingerprint. GLTFLoader strips `.` from Sketchfab names
+ * (`M55.obj…` → `M55obj…`), so never require a literal `m55.obj`.
+ * `(?!1)` keeps M551 Sheridan from matching.
+ */
+function isM55Pack(root: THREE.Object3D): boolean {
+  let hit = false
+  root.traverse((o) => {
+    if (/m55(?!1)/i.test(o.name)) hit = true
+  })
+  return hit
+}
+
+/**
+ * M55 SPG (War Thunder Tusk Force) — Object_* SpecGloss→metalrough.
+ * Object_29 hull · Object_13 open turret · Object_32 155mm tube (+Z).
+ * Name fingerprint required — shares Object_3/5/13/23/24 with Duster/M3A3.
+ */
+function prepareM55(root: THREE.Object3D): boolean {
+  if (!isM55Pack(root)) return false
+
+  const hull = root.getObjectByName('Object_29')
+  const turretMain = root.getObjectByName('Object_13')
+  const barrel = root.getObjectByName('Object_32')
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turretMain instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+
+  hull.name = 'Hull'
+  turretMain.name = 'Turret'
+  for (const n of [
+    'Object_14',
+    'Object_15',
+    'Object_16',
+    'Object_17',
+    'Object_6',
+    'Object_8',
+    'Object_2',
+    'Object_18',
+    'Object_11',
+  ]) {
+    const extra = root.getObjectByName(n)
+    if (extra && extra !== turretMain && extra !== barrel) turretMain.attach(extra)
+  }
+  barrel.name = 'Barrel'
+  if (barrel.parent !== turretMain) turretMain.attach(barrel)
+  const muzzleTip = root.getObjectByName('Object_4')
+  if (muzzleTip) barrel.attach(muzzleTip)
+
+  console.info('[Steel] M55: Hull/Turret/Barrel (Object_29 + Object_13 + Object_32)')
+  return true
+}
+
+/**
+ * M551 Sheridan (War Thunder) — Object_* SpecGloss→metalrough.
+ * Object_21 hull · Object_10 turret · Object_16 stubby 152mm (+Z tip Object_6).
+ * Fingerprint `/m551/i` — must beat Duster/M3A3 shared Object_* ids.
+ */
+function prepareSheridan(root: THREE.Object3D): boolean {
+  let isSheridan = false
+  root.traverse((o) => {
+    if (/m551|sheridan/i.test(o.name)) isSheridan = true
+  })
+  if (!isSheridan) return false
+
+  const hull = root.getObjectByName('Object_21')
+  const turretMain = root.getObjectByName('Object_10')
+  const barrel = root.getObjectByName('Object_16')
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turretMain instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+
+  hull.name = 'Hull'
+  turretMain.name = 'Turret'
+  for (const n of [
+    'Object_11',
+    'Object_8',
+    'Object_9',
+    'Object_4',
+    'Object_14',
+    'Object_3',
+    'Object_12',
+    'Object_7',
+  ]) {
+    const extra = root.getObjectByName(n)
+    if (extra && extra !== turretMain && extra !== barrel) turretMain.attach(extra)
+  }
+  barrel.name = 'Barrel'
+  if (barrel.parent !== turretMain) turretMain.attach(barrel)
+  for (const n of ['Object_6', 'Object_17']) {
+    const tip = root.getObjectByName(n)
+    if (tip) barrel.attach(tip)
+  }
+
+  console.info('[Steel] M551 Sheridan: Hull/Turret/Barrel (Object_21 + Object_10 + Object_16)')
+  return true
+}
+
+/**
+ * M901 ITV — named M113 TOW hammerhead pack.
+ * hull Hull; mount Turret (yaw); mount2 Barrel (elevate + twin tubes).
+ * Tubes authored +X → −90° Y → +Z. ATGM-only chassis.
+ */
+function prepareM901(root: THREE.Object3D): boolean {
+  let isM901 = false
+  root.traverse((o) => {
+    if (/m901/i.test(o.name)) isM901 = true
+  })
+  if (!isM901) return false
+
+  const hull = root.getObjectByName('hull')
+  const turret = root.getObjectByName('mount')
+  const barrel = root.getObjectByName('mount2')
+  if (!hull || !turret || !barrel) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+
+  // Keep hammerhead bits under yaw/elevate (already parented); hide interiors.
+  root.traverse((o) => {
+    if (/inside/i.test(o.name)) o.visible = false
+  })
+
+  console.info('[Steel] M901 ITV: mount turret + mount2 barrel (−90° Y)')
+  return true
+}
+
+/**
+ * M3A3 Bradley — Object_* SpecGloss→metalrough bake.
+ * Object_24 hull · Object_13 turret · Object_12 25mm tube · Object_18 TOW mast.
+ * Gun already +Z. Fingerprint must beat prepareDuster (shares Object_3/5/23/24).
+ */
+function prepareM3A3Bradley(root: THREE.Object3D): boolean {
+  // M55 SPG also has Object_12/13/18/24 — leave that path to prepareM55.
+  if (isM55Pack(root)) return false
+  // M551 Sheridan shares Object_12/13/18/24 ids too.
+  let isSheridan = false
+  root.traverse((o) => {
+    if (/m551|sheridan/i.test(o.name)) isSheridan = true
+  })
+  if (isSheridan) return false
+
+  const hull = root.getObjectByName('Object_24')
+  const turretMain = root.getObjectByName('Object_13')
+  const barrel = root.getObjectByName('Object_12')
+  const tow = root.getObjectByName('Object_18')
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turretMain instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh) ||
+    !(tow instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+
+  hull.name = 'Hull'
+  turretMain.name = 'Turret'
+  for (const n of [
+    'Object_18',
+    'Object_14',
+    'Object_15',
+    'Object_8',
+    'Object_11',
+    'Object_7',
+    'Object_19',
+    'Object_2',
+    'Object_4',
+    'Object_16',
+    'Object_20',
+    'Object_21',
+  ]) {
+    const extra = root.getObjectByName(n)
+    if (extra && extra !== turretMain && extra !== barrel) turretMain.attach(extra)
+  }
+  barrel.name = 'Barrel'
+  if (barrel.parent !== turretMain) turretMain.attach(barrel)
+
+  console.info('[Steel] M3A3 Bradley: Hull/Turret/Barrel (Object_24 + Object_13 + Object_12)')
+  return true
+}
+
+/**
  * M1A1 Abrams (`m1a1_abrams.glb`) — named hull/turret/weapon hierarchy.
  * Authored +X forward; rotate −90° Y so gun aligns with game +Z.
  */
@@ -1016,6 +1271,22 @@ function preparePershing(root: THREE.Object3D): boolean {
  * Object_3 / Object_5 ≈ left/right track runs (fingerprint vs Pershing).
  */
 function prepareDuster(root: THREE.Object3D): boolean {
+  // M3A3 Bradley shares Object_3/5/23/24 — reject its turret/gun/TOW fingerprint.
+  if (
+    root.getObjectByName('Object_12') instanceof THREE.Mesh &&
+    root.getObjectByName('Object_13') instanceof THREE.Mesh &&
+    root.getObjectByName('Object_18') instanceof THREE.Mesh
+  ) {
+    return false
+  }
+  // M55 SPG also shares Object_3/5/23/24.
+  if (isM55Pack(root)) return false
+  // M551 Sheridan shares Object_5/23/24 (Object_3 exists too).
+  let isSheridan = false
+  root.traverse((o) => {
+    if (/m551|sheridan/i.test(o.name)) isSheridan = true
+  })
+  if (isSheridan) return false
   const turretMain = root.getObjectByName('Object_23')
   const barrel = root.getObjectByName('Object_24')
   const trackL = root.getObjectByName('Object_3')
@@ -1126,6 +1397,13 @@ function createYawPivot(
   turretMesh: THREE.Object3D,
   hasSeparateBarrel = false,
 ): THREE.Group {
+  // Never attach the tank root into a child pivot (infinite matrixWorld recurse).
+  if (turretMesh === tankRoot) {
+    throw new Error(
+      '[Steel] Turret mesh is tank root — prep failed to label Turret (would stack-overflow)',
+    )
+  }
+
   tankRoot.updateMatrixWorld(true)
   turretMesh.updateMatrixWorld(true)
 
@@ -1522,6 +1800,11 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareT44(model) ||
       prepareT34(model) ||
       prepareChallenger3(model) ||
+      prepareBradley(model) ||
+      prepareM55(model) ||
+      prepareSheridan(model) ||
+      prepareM901(model) ||
+      prepareM3A3Bradley(model) ||
       prepareAbrams(model) ||
       prepareDuster(model) ||
       preparePershing(model) ||

@@ -2,26 +2,111 @@ import * as THREE from 'three'
 import type { AmmoId } from './ammo'
 import type { ArmorPartDef, ArmorPartId, HitResolution, ShellImpact } from './armor'
 import { createTankHitVolumes } from './hitParts'
+import {
+  createModuleKit,
+  moduleForArmorPart,
+  resetModuleKit,
+  type ModuleId,
+  type ModuleKit,
+  type ModuleState,
+} from './modules'
 
 export const TRACK_DISABLE_SEC = 30
 
 export type ShellHitContext = {
-  /** Used for track immobilization (APHE only). */
+  /** Used for track immobilization (APHE only historically; any pen now). */
   ammoId?: AmmoId
 }
 
 export type CombatHitResult = {
   resolution: HitResolution
   destroyed: boolean
+  /** Hull HP (compat). */
   hp: number
-  /** True if this hit just immobilized the tracks. */
+  /** True if this hit just disabled a track side (or both). */
   tracksDisabled?: boolean
+  /** Which track side went out on this hit, if any. */
+  trackSide?: 'L' | 'R' | 'both'
+  /** Module that absorbed the damage. */
+  moduleId?: ModuleId
 }
 
-/** Shared hittable tank: armor volumes + HP (player, AI, dummy). */
+export type TrackSideState = {
+  leftOut: boolean
+  rightOut: boolean
+  /** Seconds left on L/R repair timers (0 if healthy). */
+  leftDisableLeft: number
+  rightDisableLeft: number
+}
+
+/** Drive modifiers from damaged tracks (M2). */
+export type TrackDriveMods = {
+  leftOut: boolean
+  rightOut: boolean
+  /** Both tracks out — hard stop. */
+  immobilized: boolean
+  /** Scale throttle (1 = full, ~0.32 crawl on one track). */
+  forwardMul: number
+  /** Added to turn (−1…+1). Kept for API; always 0 (no auto-steer). */
+  turnBias: number
+  /** Scale player turn input. */
+  turnMul: number
+}
+
+export type FuelState = {
+  leaking: boolean
+  empty: boolean
+  /** Fuel HP fraction 0–1. */
+  fraction: number
+}
+
+/** Crawl pace with one track (fraction of throttle). */
+const ONE_TRACK_FORWARD = 0.32
+/** No auto-steer — broken track only slows you; turn only when you steer. */
+const ONE_TRACK_TURN_MUL = 0.75
+/** Chance per second to cook off once fuel HP is empty. */
+const FUEL_COOK_OFF_CHANCE = 0.11
+/** Smoke / FX interval while leaking (s). */
+const FUEL_LEAK_FX_SEC = 0.3
+
+export function trackDriveModsFromState(s: TrackSideState): TrackDriveMods {
+  const leftOut = s.leftOut
+  const rightOut = s.rightOut
+  if (leftOut && rightOut) {
+    return {
+      leftOut,
+      rightOut,
+      immobilized: true,
+      forwardMul: 0,
+      turnBias: 0,
+      turnMul: 0,
+    }
+  }
+  if (leftOut || rightOut) {
+    return {
+      leftOut,
+      rightOut,
+      immobilized: false,
+      forwardMul: ONE_TRACK_FORWARD,
+      turnBias: 0,
+      turnMul: ONE_TRACK_TURN_MUL,
+    }
+  }
+  return {
+    leftOut: false,
+    rightOut: false,
+    immobilized: false,
+    forwardMul: 1,
+    turnBias: 0,
+    turnMul: 1,
+  }
+}
+
+/** Shared hittable tank: armor volumes + module HP (player, AI, dummy). */
 export type Combatant = {
   root: THREE.Group
   alive: boolean
+  /** Hull HP — death when ≤ 0. */
   hp: number
   maxHp: number
   containsPoint: (p: THREE.Vector3) => boolean
@@ -43,9 +128,16 @@ export type Combatant = {
     shellStats: Omit<ShellImpact, 'speed'>,
   ) => HitResolution | null
   tickMobility: (dt: number) => void
+  /** Fully immobilized = both tracks out. */
   isImmobilized: () => boolean
-  /** Seconds left on track disable (0 if mobile). */
+  /** Max seconds left on either track disable (0 if both mobile). */
   getTracksDisableLeft: () => number
+  getTrackState: () => TrackSideState
+  /** Forward crawl + turn bias when one track is out. */
+  getTrackDriveMods: () => TrackDriveMods
+  getFuelState: () => FuelState
+  getModules: () => Readonly<ModuleKit>
+  getModule: (id: ModuleId) => ModuleState
   /** Restore HP / alive after a KOTH respawn (mesh must still exist). */
   revive: () => void
 }
@@ -66,8 +158,10 @@ export type CombatantOptions = {
    * flaming out and gliding to the deck.
    */
   onDestroyed?: (root: THREE.Group, info: { severe: boolean }) => void
-  /** Fired when APHE pens tracks (immobilize applied). */
+  /** Fired when a track side is disabled. */
   onTracksDisabled?: (seconds: number) => void
+  /** Periodic fuel leak FX while fuel module is damaged. */
+  onFuelLeak?: (info: { intensity: number; empty: boolean }) => void
   /** Damaging hit (pen / blast) that applied HP loss — crew “we've been hit”. */
   onDamaged?: (info: { damage: number; kind: string; destroyed: boolean }) => void
   label?: string
@@ -76,7 +170,7 @@ export type CombatantOptions = {
 const _tmp = new THREE.Vector3()
 
 /**
- * Attach armor hit volumes + HP to an existing tank root.
+ * Attach armor hit volumes + module HP to an existing tank root.
  * Call after the tank is parented / posed; volumes track the root as it moves.
  */
 export function createCombatant(
@@ -88,10 +182,44 @@ export function createCombatant(
   const broadR2 = broadR * broadR
   const altSpan = opts.altitudeSpan
   const volumes = createTankHitVolumes(root, opts.armor)
-  let hp = maxHp
+  const modules = createModuleKit(maxHp)
   let alive = true
-  let tracksDisableLeft = 0
+  let trackLDisableLeft = 0
+  let trackRDisableLeft = 0
+  let fuelLeaking = false
+  let fuelLeakFxAcc = 0
+  let fuelCookAcc = 0
   const label = opts.label ?? root.name ?? 'tank'
+  let lastTrackDriveLog = ''
+  let fuelWarned = false
+  let cookWarned = false
+
+  console.info(
+    `[Steel] Modules · ${label} · hull ${modules.hull.maxHp} · turret ${modules.turret.maxHp} · ` +
+      `trackL/R ${modules.trackL.maxHp} · fuel ${modules.fuel.maxHp}`,
+  )
+
+  const readTrackState = (): TrackSideState => ({
+    leftOut: trackLDisableLeft > 0 || modules.trackL.hp <= 0,
+    rightOut: trackRDisableLeft > 0 || modules.trackR.hp <= 0,
+    leftDisableLeft: trackLDisableLeft,
+    rightDisableLeft: trackRDisableLeft,
+  })
+
+  const applyTrackDisable = (side: 'L' | 'R'): void => {
+    if (side === 'L') {
+      trackLDisableLeft = TRACK_DISABLE_SEC
+      modules.trackL.hp = 0
+    } else {
+      trackRDisableLeft = TRACK_DISABLE_SEC
+      modules.trackR.hp = 0
+    }
+    console.info(
+      `[Steel] ${label} TRACK ${side} DISABLED ${TRACK_DISABLE_SEC}s ` +
+        `(L=${trackLDisableLeft > 0 ? 'OUT' : 'OK'} R=${trackRDisableLeft > 0 ? 'OUT' : 'OK'})`,
+    )
+    opts.onTracksDisabled?.(TRACK_DISABLE_SEC)
+  }
 
   return {
     root,
@@ -99,9 +227,9 @@ export function createCombatant(
       return alive
     },
     get hp() {
-      return hp
+      return modules.hull.hp
     },
-    maxHp,
+    maxHp: modules.hull.maxHp,
     containsPoint(p) {
       if (!alive) return false
       root.getWorldPosition(_tmp)
@@ -115,25 +243,120 @@ export function createCombatant(
       return p.y > -0.5 && p.y < 6
     },
     tickMobility(dt) {
-      if (tracksDisableLeft > 0) {
-        tracksDisableLeft = Math.max(0, tracksDisableLeft - dt)
-        if (tracksDisableLeft === 0) {
-          console.info(`[Steel] ${label} tracks repaired`)
+      if (trackLDisableLeft > 0) {
+        trackLDisableLeft = Math.max(0, trackLDisableLeft - dt)
+        if (trackLDisableLeft === 0) {
+          modules.trackL.hp = modules.trackL.maxHp
+          console.info(`[Steel] ${label} track L repaired`)
+        }
+      }
+      if (trackRDisableLeft > 0) {
+        trackRDisableLeft = Math.max(0, trackRDisableLeft - dt)
+        if (trackRDisableLeft === 0) {
+          modules.trackR.hp = modules.trackR.maxHp
+          console.info(`[Steel] ${label} track R repaired`)
+        }
+      }
+
+      if (!alive) return
+
+      const fuel = modules.fuel
+      const fuelFrac = fuel.maxHp > 0 ? fuel.hp / fuel.maxHp : 1
+      if (fuel.hp < fuel.maxHp) fuelLeaking = true
+
+      if (fuelLeaking) {
+        fuelLeakFxAcc += dt
+        if (fuelLeakFxAcc >= FUEL_LEAK_FX_SEC) {
+          fuelLeakFxAcc = 0
+          const intensity = 0.35 + (1 - fuelFrac) * 1.1
+          opts.onFuelLeak?.({ intensity, empty: fuel.hp <= 0 })
+        }
+      }
+
+      // Empty fuel tank → ticking cook-off (ammo/fuel fire).
+      if (fuel.hp <= 0) {
+        if (!cookWarned) {
+          cookWarned = true
+          console.info(`[Steel] ${label} FUEL EMPTY — cook-off risk`)
+        }
+        fuelCookAcc += dt
+        if (fuelCookAcc >= 1) {
+          fuelCookAcc = 0
+          if (Math.random() < FUEL_COOK_OFF_CHANCE) {
+            alive = false
+            modules.hull.hp = 0
+            console.info(`[Steel] ${label} FUEL COOK-OFF — tank exploded`)
+            opts.onDamaged?.({
+              damage: modules.hull.maxHp,
+              kind: 'blast',
+              destroyed: true,
+            })
+            opts.onDestroyed?.(root, { severe: true })
+          }
         }
       }
     },
     isImmobilized() {
-      return tracksDisableLeft > 0
+      // M1: only full stop when both sides out. M2 will crawl on one track.
+      return trackLDisableLeft > 0 && trackRDisableLeft > 0
     },
     getTracksDisableLeft() {
-      return tracksDisableLeft
+      return Math.max(trackLDisableLeft, trackRDisableLeft)
+    },
+    getTrackState() {
+      return readTrackState()
+    },
+    getTrackDriveMods() {
+      const mods = trackDriveModsFromState(readTrackState())
+      const key = mods.immobilized
+        ? 'both'
+        : mods.leftOut
+          ? 'L'
+          : mods.rightOut
+            ? 'R'
+            : 'ok'
+      if (key !== lastTrackDriveLog) {
+        lastTrackDriveLog = key
+        if (key === 'both') {
+          console.info(`[Steel] ${label} tracks BOTH OUT — immobilized`)
+        } else if (key === 'L' || key === 'R') {
+          console.info(
+            `[Steel] ${label} one-track drive · ${key} out · crawl×${ONE_TRACK_FORWARD} (no auto-steer)`,
+          )
+        }
+      }
+      return mods
+    },
+    getFuelState() {
+      const fuel = modules.fuel
+      const fraction = fuel.maxHp > 0 ? fuel.hp / fuel.maxHp : 1
+      return {
+        leaking: fuelLeaking || fuel.hp < fuel.maxHp,
+        empty: fuel.hp <= 0,
+        fraction,
+      }
+    },
+    getModules() {
+      return modules
+    },
+    getModule(id) {
+      return modules[id]
     },
     revive() {
       alive = true
-      hp = maxHp
-      tracksDisableLeft = 0
+      resetModuleKit(modules)
+      trackLDisableLeft = 0
+      trackRDisableLeft = 0
+      fuelLeaking = false
+      fuelLeakFxAcc = 0
+      fuelCookAcc = 0
+      fuelWarned = false
+      cookWarned = false
+      lastTrackDriveLog = ''
       root.visible = true
-      console.info(`[Steel] ${label} respawned HP ${hp}/${maxHp}`)
+      console.info(
+        `[Steel] ${label} respawned hull ${modules.hull.hp}/${modules.hull.maxHp}`,
+      )
     },
     previewShellHit(p, velocity, shellStats) {
       if (!alive) return null
@@ -148,32 +371,57 @@ export function createCombatant(
 
       let destroyed = false
       let tracksDisabled = false
+      let trackSide: 'L' | 'R' | 'both' | undefined
+      const moduleId = moduleForArmorPart(resolution.part.id)
+      const mod = modules[moduleId]
 
       if (resolution.kind === 'penetrated' || resolution.kind === 'blast') {
-        hp = Math.max(0, hp - resolution.damage)
+        const before = mod.hp
+        mod.hp = Math.max(0, mod.hp - resolution.damage)
 
-        // APHE into tracks → immobilize hull movement for 30s (turret still works)
+        // Track pen → disable that side when module empties (or any APHE pen for feel).
         if (
           resolution.kind === 'penetrated' &&
-          resolution.part.id === 'tracks' &&
-          ctx?.ammoId === 'aphe'
+          (moduleId === 'trackL' || moduleId === 'trackR')
         ) {
-          tracksDisableLeft = TRACK_DISABLE_SEC
-          tracksDisabled = true
-          console.info(
-            `[Steel] ${label} TRACKS DISABLED ${TRACK_DISABLE_SEC}s`,
-          )
-          opts.onTracksDisabled?.(TRACK_DISABLE_SEC)
+          const side: 'L' | 'R' = moduleId === 'trackL' ? 'L' : 'R'
+          const force =
+            ctx?.ammoId === 'aphe' || mod.hp <= 0 || before > 0 && mod.hp === 0
+          if (force || mod.hp <= 0) {
+            applyTrackDisable(side)
+            tracksDisabled = true
+            trackSide = side
+            if (trackLDisableLeft > 0 && trackRDisableLeft > 0) trackSide = 'both'
+          }
         }
 
-        if (resolution.crit || hp <= 0) {
+        if (moduleId === 'fuel' && mod.hp < mod.maxHp) {
+          fuelLeaking = true
+          if (!fuelWarned) {
+            fuelWarned = true
+            console.info(
+              `[Steel] ${label} FUEL LEAK — tank ${mod.hp}/${mod.maxHp}` +
+                (mod.hp <= 0 ? ' · EMPTY cook-off armed' : ''),
+            )
+          }
+          // Immediate puff on the hit that opened the tank.
+          opts.onFuelLeak?.({
+            intensity: 0.9 + (1 - mod.hp / mod.maxHp),
+            empty: mod.hp <= 0,
+          })
+        }
+
+        // Crit (ammo rack) still kills the tank outright.
+        const hullDead = modules.hull.hp <= 0
+        if (resolution.crit || hullDead) {
           alive = false
           destroyed = true
-          hp = 0
+          modules.hull.hp = 0
           const severe = resolution.crit === true
-          const reason = severe ? 'AMMO RACK' : 'DESTROYED'
+          const reason = severe ? 'AMMO RACK' : 'HULL DESTROYED'
           console.info(
-            `[Steel] ${label} ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}`,
+            `[Steel] ${label} ${reason} — ${mod.label} ${resolution.kind} ${resolution.damage} ` +
+              `(${moduleId} ${mod.hp}/${mod.maxHp})`,
           )
           opts.onDamaged?.({
             damage: resolution.damage,
@@ -181,18 +429,14 @@ export function createCombatant(
             destroyed: true,
           })
           opts.onDestroyed?.(root, { severe })
-        } else if (tracksDisabled) {
-          console.info(
-            `[Steel] ${label} TRACK PEN −${resolution.damage} HP (${hp}/${maxHp})`,
-          )
-          opts.onDamaged?.({
-            damage: resolution.damage,
-            kind: resolution.kind,
-            destroyed: false,
-          })
         } else {
           console.info(
-            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage} HP (${hp}/${maxHp})`,
+            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${mod.label} −${resolution.damage} ` +
+              `(${moduleId} ${mod.hp}/${mod.maxHp}` +
+              (moduleId !== 'hull'
+                ? ` · hull ${modules.hull.hp}/${modules.hull.maxHp}`
+                : '') +
+              `)`,
           )
           opts.onDamaged?.({
             damage: resolution.damage,
@@ -210,7 +454,14 @@ export function createCombatant(
         )
       }
 
-      return { resolution, destroyed, hp, tracksDisabled }
+      return {
+        resolution,
+        destroyed,
+        hp: modules.hull.hp,
+        tracksDisabled,
+        trackSide,
+        moduleId,
+      }
     },
   }
 }

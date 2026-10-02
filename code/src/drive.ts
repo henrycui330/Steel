@@ -23,7 +23,7 @@ export type DriveController = {
   setGroundY: (y: number) => void
   /** Dynamic terrain height (dunes). Overrides flat groundY when set. */
   setHeightAt: (fn: ((x: number, z: number) => number) | null) => void
-  /** Heat / oil freeze multiplier (1 = normal). */
+  /** Heat / oil freeze multiplier (1 = normal). Kept for API; climate pens removed. */
   setMobilityMul: (mul: number) => void
   /** Rain slip 0–1. */
   setSlip: (amount: number) => void

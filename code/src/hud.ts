@@ -2,6 +2,7 @@ import type { AmmoId } from './ammo'
 import { AMMO_ORDER, AMMO_TYPES } from './ammo'
 import { getAimZoomLabel } from './camera'
 import type { FireHudState } from './fire'
+import type { ModuleId, ModuleKit } from './modules'
 import { nationByTeam, nationFlagSrc } from './nations'
 import * as THREE from 'three'
 
@@ -11,6 +12,16 @@ export type CombatHudState = {
   fire: FireHudState
   /** Seconds left immobilized (0 = mobile). */
   tracksDisableLeft?: number
+  /** Per-side track disable (for L/R chip). */
+  trackLeftOut?: boolean
+  trackRightOut?: boolean
+  trackLeftDisableLeft?: number
+  trackRightDisableLeft?: number
+  /** Module HP pools — when set, HUD shows five bars. */
+  modules?: Readonly<ModuleKit>
+  /** Fuel leak / cook-off status for chip. */
+  fuelLeaking?: boolean
+  fuelEmpty?: boolean
   /** Weather / climate status line. */
   envStatus?: string
   /** Artillery deploy / map status (PzH only). */
@@ -484,21 +495,50 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     <div class="sight-bar"><i class="sight-bar-fill"></i></div>
   `
 
-  // Bottom-left: armor + status chips
+  // Bottom-left: module HP + status chips
   const status = document.createElement('div')
   status.className = 'hud-corner hud-bl'
   status.innerHTML = `
-    <div class="hud-plate combat-hp">
+    <div class="hud-plate combat-modules">
       <div class="hud-plate-head">
-        <span class="combat-label">Armor</span>
-        <span class="combat-value hp-text">1000</span>
+        <span class="combat-label">Modules</span>
       </div>
-      <div class="combat-bar"><i class="combat-bar-fill hp-fill"></i></div>
+      <div class="module-rows">
+        <div class="module-row" data-mod="hull">
+          <span class="module-name">Hull</span>
+          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
+          <span class="module-val">—</span>
+        </div>
+        <div class="module-row" data-mod="turret">
+          <span class="module-name">Turret</span>
+          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
+          <span class="module-val">—</span>
+        </div>
+        <div class="module-row" data-mod="trackL">
+          <span class="module-name">Trk L</span>
+          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
+          <span class="module-val">—</span>
+        </div>
+        <div class="module-row" data-mod="trackR">
+          <span class="module-name">Trk R</span>
+          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
+          <span class="module-val">—</span>
+        </div>
+        <div class="module-row" data-mod="fuel">
+          <span class="module-name">Fuel</span>
+          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
+          <span class="module-val">—</span>
+        </div>
+      </div>
     </div>
     <div class="hud-chips">
       <div class="hud-chip combat-tracks is-ok" data-chip="tracks">
         <span class="combat-label">Trk</span>
         <span class="combat-value tracks-text">OK</span>
+      </div>
+      <div class="hud-chip combat-fuel is-ok" data-chip="fuel">
+        <span class="combat-label">Fuel</span>
+        <span class="combat-value fuel-text">OK</span>
       </div>
       <div class="hud-chip combat-env is-quiet" data-chip="env">
         <span class="combat-label">Cond</span>
@@ -590,14 +630,21 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
   document.body.appendChild(root)
 
-  const hpFill = status.querySelector('.hp-fill') as HTMLElement
-  const hpText = status.querySelector('.hp-text') as HTMLElement
-  const hpPlate = status.querySelector('.combat-hp') as HTMLElement
+  const moduleRows = {
+    hull: status.querySelector('[data-mod="hull"]') as HTMLElement,
+    turret: status.querySelector('[data-mod="turret"]') as HTMLElement,
+    trackL: status.querySelector('[data-mod="trackL"]') as HTMLElement,
+    trackR: status.querySelector('[data-mod="trackR"]') as HTMLElement,
+    fuel: status.querySelector('[data-mod="fuel"]') as HTMLElement,
+  } as const satisfies Record<ModuleId, HTMLElement>
+  const modulesPlate = status.querySelector('.combat-modules') as HTMLElement
   const tracksChip = status.querySelector('.combat-tracks') as HTMLElement
+  const fuelChip = status.querySelector('.combat-fuel') as HTMLElement
   const envChip = status.querySelector('.combat-env') as HTMLElement
   const weaponText = weapon.querySelector('.weapon-text') as HTMLElement
   const speedText = weapon.querySelector('.speed-text') as HTMLElement
   const tracksText = status.querySelector('.tracks-text') as HTMLElement
+  const fuelText = status.querySelector('.fuel-text') as HTMLElement
   const envText = status.querySelector('.env-text') as HTMLElement
   const artyRow = status.querySelector('.combat-arty') as HTMLElement
   const artyText = status.querySelector('.arty-text') as HTMLElement
@@ -638,11 +685,30 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       if (root.classList.contains('is-aiming')) {
         opticZoomTag.textContent = getAimZoomLabel()
       }
-      const hpPct = THREE.MathUtils.clamp(state.hp / state.maxHp, 0, 1)
-      hpFill.style.transform = `scaleX(${hpPct})`
-      hpText.textContent = `${Math.round(state.hp)}`
-      hpPlate.classList.toggle('is-critical', hpPct <= 0.25)
-      hpPlate.classList.toggle('is-low', hpPct > 0.25 && hpPct <= 0.5)
+
+      const mods = state.modules
+      const ids = Object.keys(moduleRows) as ModuleId[]
+      for (const id of ids) {
+        const row = moduleRows[id]
+        const fill = row.querySelector('.module-fill') as HTMLElement
+        const val = row.querySelector('.module-val') as HTMLElement
+        const m = mods?.[id]
+        const hp = m?.hp ?? (id === 'hull' ? state.hp : 0)
+        const max = m?.maxHp ?? (id === 'hull' ? state.maxHp : 1)
+        const pct = max > 0 ? THREE.MathUtils.clamp(hp / max, 0, 1) : 0
+        fill.style.transform = `scaleX(${pct})`
+        val.textContent = String(Math.round(hp))
+        row.classList.toggle('is-critical', pct <= 0.25)
+        row.classList.toggle('is-low', pct > 0.25 && pct <= 0.5)
+        row.classList.toggle('is-dead', pct <= 0)
+      }
+      const hullPct =
+        mods && mods.hull.maxHp > 0
+          ? mods.hull.hp / mods.hull.maxHp
+          : state.maxHp > 0
+            ? state.hp / state.maxHp
+            : 0
+      modulesPlate.classList.toggle('is-critical', hullPct <= 0.25)
 
       const kmh = Math.round(speedToKmh(state.speedU ?? 0))
       speedText.textContent = `${kmh}`
@@ -656,21 +722,31 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
       const { fire } = state
       const onMg = fire.weapon === 'mg'
+      const onAtgm = fire.weapon === 'atgm'
       const rackMode = !!(fire.magazineSize && fire.magazineSize > 0)
       weaponText.textContent = onMg
         ? `MG · ${fire.stock?.mg ?? 0}`
-        : rackMode
-          ? 'ROCKETS'
-          : 'MAIN · 1'
+        : onAtgm
+          ? 'ATGM · 3'
+          : rackMode
+            ? 'ROCKETS'
+            : 'MAIN · 1'
       weaponText.classList.toggle('is-mg', onMg)
+      weaponText.classList.toggle('is-atgm', onAtgm)
       root.classList.toggle('is-mg', onMg)
+      root.classList.toggle('is-atgm', onAtgm)
 
       let readyLabel: string
       let shellLabel: string
       let progress: number
       let isReady: boolean
 
-      if (onMg) {
+      if (onAtgm) {
+        isReady = true
+        readyLabel = 'P LOCK'
+        shellLabel = 'ATGM'
+        progress = 1
+      } else if (onMg) {
         isReady = fire.ready
         readyLabel = fire.ready ? 'READY' : fire.stock && fire.stock.mg <= 0 ? 'EMPTY' : '…'
         shellLabel = fire.stock ? `MG ${fire.stock.mg}` : 'MG'
@@ -737,15 +813,42 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         sightRange.classList.add('is-empty')
       }
 
-      const trackLeft = state.tracksDisableLeft ?? 0
-      if (trackLeft > 0) {
-        tracksText.textContent = `OUT ${Math.ceil(trackLeft)}s`
+      const lOut = !!state.trackLeftOut
+      const rOut = !!state.trackRightOut
+      const lSec = state.trackLeftDisableLeft ?? 0
+      const rSec = state.trackRightDisableLeft ?? 0
+      if (lOut || rOut) {
+        const bits: string[] = []
+        if (lOut) bits.push(lSec > 0 ? `L ${Math.ceil(lSec)}s` : 'L OUT')
+        if (rOut) bits.push(rSec > 0 ? `R ${Math.ceil(rSec)}s` : 'R OUT')
+        tracksText.textContent = bits.join(' · ')
         tracksChip.classList.add('is-warn')
         tracksChip.classList.remove('is-ok')
       } else {
-        tracksText.textContent = 'OK'
-        tracksChip.classList.add('is-ok')
-        tracksChip.classList.remove('is-warn')
+        const trackLeft = state.tracksDisableLeft ?? 0
+        if (trackLeft > 0) {
+          tracksText.textContent = `OUT ${Math.ceil(trackLeft)}s`
+          tracksChip.classList.add('is-warn')
+          tracksChip.classList.remove('is-ok')
+        } else {
+          tracksText.textContent = 'OK'
+          tracksChip.classList.add('is-ok')
+          tracksChip.classList.remove('is-warn')
+        }
+      }
+
+      if (state.fuelEmpty) {
+        fuelText.textContent = 'COOK!'
+        fuelChip.classList.add('is-warn')
+        fuelChip.classList.remove('is-ok', 'is-quiet')
+      } else if (state.fuelLeaking) {
+        fuelText.textContent = 'LEAK'
+        fuelChip.classList.add('is-warn')
+        fuelChip.classList.remove('is-ok', 'is-quiet')
+      } else {
+        fuelText.textContent = 'OK'
+        fuelChip.classList.add('is-ok')
+        fuelChip.classList.remove('is-warn')
       }
 
       const env = (state.envStatus ?? '').trim()

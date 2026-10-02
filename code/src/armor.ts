@@ -8,7 +8,9 @@ export type ArmorPartId =
   | 'turret'
   | 'turretRing'
   | 'gun'
-  | 'tracks'
+  | 'tracksL'
+  | 'tracksR'
+  | 'fuel'
 
 export type ArmorPartDef = {
   id: ArmorPartId
@@ -77,13 +79,29 @@ export const PZ3_ARMOR: Record<ArmorPartId, ArmorPartDef> = {
     critChance: 0.04,
     autoRicochetDeg: 75,
   },
-  tracks: {
-    id: 'tracks',
-    label: 'Tracks',
+  tracksL: {
+    id: 'tracksL',
+    label: 'Track L',
     armor: 12,
     damageMult: 0.35,
     critChance: 0,
     autoRicochetDeg: 78,
+  },
+  tracksR: {
+    id: 'tracksR',
+    label: 'Track R',
+    armor: 12,
+    damageMult: 0.35,
+    critChance: 0,
+    autoRicochetDeg: 78,
+  },
+  fuel: {
+    id: 'fuel',
+    label: 'Fuel tank',
+    armor: 18,
+    damageMult: 1.1,
+    critChance: 0.08,
+    autoRicochetDeg: 72,
   },
 }
 

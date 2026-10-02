@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import type { DummyTarget } from './dummy'
 import type { HitAnalyzeReport } from './hitAnalyzer'
+import { segmentHitsPropCollider, type PropCollider } from './collision'
 
 /**
  * Seeker missiles (Pantsir SAM + F-16 AAM).
@@ -50,6 +51,8 @@ export type SamMissileOpts = {
   getHostiles: () => readonly DummyTarget[]
   getDecoys?: () => readonly THREE.Object3D[]
   heightAt?: (x: number, z: number) => number
+  /** Buildings / arena walls — missiles detonate on impact. */
+  propColliders?: readonly PropCollider[]
   onKill?: (victim: THREE.Object3D) => void
   /** Armor hit analyzer (player SAM / ATGM). */
   onHitAnalyze?: (report: HitAnalyzeReport) => void
@@ -98,6 +101,7 @@ const _fwd = new THREE.Vector3()
 const _aim = new THREE.Vector3()
 const _tgt = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
+const _segFrom = new THREE.Vector3()
 const _axis = new THREE.Vector3()
 const _q = new THREE.Quaternion()
 const _back = new THREE.Vector3()
@@ -563,6 +567,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
         }
 
         const step = m.speedNow * dt
+        _segFrom.copy(m.mesh.position)
         m.mesh.position.addScaledVector(m.vel, dt)
         m.distFlown += step
         m.trailBudget += step
@@ -573,6 +578,17 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
 
         if (m.vel.lengthSq() > 1e-6) {
           m.mesh.quaternion.setFromUnitVectors(_up, _fwd.copy(m.vel).normalize())
+        }
+
+        const walls = opts.propColliders
+        if (
+          walls &&
+          walls.length > 0 &&
+          segmentHitsPropCollider(_segFrom, m.mesh.position, walls, 0.35)
+        ) {
+          console.info(`[Steel] ${logTag} hit wall / building`)
+          killMissile(m)
+          continue
         }
 
         const gy = opts.heightAt?.(m.mesh.position.x, m.mesh.position.z) ?? 0

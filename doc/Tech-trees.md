@@ -10,7 +10,12 @@ PzH 2000
     M24 Chaffee
     Sherman 
     M26 Pershing
+    M55
     M42 Duster
+    M551 Sheridan
+    M901 ITV
+    M2 Bradley
+    M3A3 Bradley
     M1 Abrams
     P-51 Mustang
     F-16A Fighting Falcon

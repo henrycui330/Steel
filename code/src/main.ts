@@ -12,13 +12,14 @@ import {
   createLowAltAlarm,
   createStallAlarm,
 } from './audio'
-import { addArenaWalls, clampToArena, type ArenaHalf } from './arena'
+import { addArenaWalls, arenaWallColliders, clampToArena, type ArenaHalf } from './arena'
 import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
 import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, resetCameraShake, setTerrainCameraRumble, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
 import './cosmetics'
 import type { DummyTarget } from './dummy'
+import { spawnStaticPz3Dummy } from './dummy'
 import { createDriveController, SPEED_FEEL } from './drive'
 import { createGermanCrewVoice } from './germanCrew'
 import { createSovietCrewVoice } from './sovietCrew'
@@ -67,6 +68,9 @@ import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
 import { onGltfProgress, preloadUrls } from './loadGltf'
 import { showMainMenu, showRespawnHangar, pickLoadingTip, type MenuSelection, type TeamId } from './menu'
+import { createLandTutorial, type LandTutorialHandle } from './tutorialLand'
+import { createAirTutorial, type AirTutorialHandle } from './tutorialAir'
+import { createSystemsTutorial, type SystemsTutorialHandle } from './tutorialSystems'
 import { nationByTeam } from './nations'
 import { getMpSession } from './net/mpSession'
 import type { MpInput, MpTankPose } from './net/mpProtocol'
@@ -260,6 +264,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const { mapId, tankId, team, spawnIndex, redAi, blueAi, timeOfDay, season, weather, gameMode, mp } =
     sel
   const isKoth = gameMode === 'koth'
+  const isRemount = !!sel.remount
+  const isTutorial = sel.tutorial === 'land-basics'
+  const isAirTutorial = sel.tutorial === 'air-basics'
+  const isSystemsTutorial = sel.tutorial === 'systems-basics'
+  /** Shared empty-range behavior (no AI win, practice dummies, skip parade). */
+  const isRangeLand = isTutorial || isSystemsTutorial
   const mpSess = mp ? getMpSession() : null
   if (mp && !mpSess) {
     console.warn('[Steel] MP selection without session — continuing as solo')
@@ -270,6 +280,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   fire.setReloadSec(option.reloadSec)
   fire.setMagazine(option.magazineSize ?? 0, option.reloadSec)
   fire.setNoMainGun(!!option.noMainGun)
+  fire.setAtgmAvailable(!!option.samMissiles)
   fire.setGunProfile(option.gun)
   fire.setAmmoStock(
     defaultAmmoRacks({
@@ -401,6 +412,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
   if (mapOpt.useArenaWalls) {
     playable = addArenaWalls(scene, mapOpt.sizeX, mapOpt.sizeZ)
     fire.setPlayableBounds(playable)
+    mapColliders = [...mapColliders, ...arenaWallColliders(mapOpt.sizeX, mapOpt.sizeZ)]
+    console.info(
+      `[Steel] Arena walls block projectiles · ${mapColliders.length} world solids`,
+    )
   } else {
     playable = { x: mapOpt.sizeX / 2 - 1, z: mapOpt.sizeZ / 2 - 1 }
     fire.setPlayableBounds(playable)
@@ -428,7 +443,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
     const air = airHandleEarly
     const base = mapSpawns[team][spawnIndex] ?? mapSpawns[team][0]!
-    air.root.position.set(base.x, sampleY(base.x, base.z) + AIR_SPAWN_ALT, base.z)
+    const airSpawnAlt = isAirTutorial ? 42 : AIR_SPAWN_ALT
+    air.root.position.set(base.x, sampleY(base.x, base.z) + airSpawnAlt, base.z)
     air.root.rotation.y = Math.atan2(-base.x, -base.z)
     air.root.userData.air = true
     air.root.userData.isPlayer = true
@@ -441,6 +457,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
     // or eject respawns; in Skirmish either one ends the match.
     let airCrashed = false
     let airDeadFor = 0
+    let airTutor: AirTutorialHandle | null = null
+    let tutorialBombDropped = false
+    const airPracticeTargets: DummyTarget[] = []
     let lastAirKiller: DeathKiller | null = null
     let pendingAirDeathCam = false
     const creditAirStrike = (k: DeathKiller): void => {
@@ -454,7 +473,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const flight = createAircraftFlight({
       root: air.root,
       heightAt: sampleY,
-      throttle: 0.55,
+      // Tutorial starts slow/low so throttle + climb steps aren't already done.
+      throttle: isAirTutorial ? 0.28 : 0.55,
       // Share the tanks' playable box so air and ground agree on the arena,
       // pulled in a little so the aircraft turns before clipping a wall.
       bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
@@ -482,6 +502,21 @@ async function startMission(sel: MenuSelection): Promise<void> {
         console.info(`[Steel] Corsair ejected at ${speed.toFixed(0)} m/s`)
       } else {
         console.info(`[Steel] Corsair crashed at ${speed.toFixed(0)} m/s`)
+      }
+      if (isAirTutorial) {
+        if (reason === 'eject') {
+          airTutor?.noteEject()
+          airEnded = true
+          flightHud.setVisible(false)
+          flightHud.setRespawn(null)
+          killInd?.setVisible(false)
+          document.exitPointerLock?.()
+          return
+        }
+        // Crash mid-lesson — soft respawn like KOTH.
+        flightHud.setRespawn(KOTH_RESPAWN_SEC)
+        console.info(`[Steel] Air tutorial respawn in ${KOTH_RESPAWN_SEC}s`)
+        return
       }
       if (!isKoth) {
         finishAirMatch(
@@ -639,6 +674,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             getHostiles: () => airEnemies,
             getDecoys: () => countermeasures.getDecoys(),
             heightAt: sampleY,
+            propColliders: mapColliders,
             onKill: (victim) => {
               airBoard.noteKill(air.root)
               console.info(`[Steel] F-16 AAM destroyed ${victim.name || 'target'}`)
@@ -847,6 +883,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       heightAt: sampleY,
       bounds: playable,
       velocity: flight.velocity,
+      propColliders: mapColliders,
       ...(option.jet
         ? {
             stations: [[0, -0.15, air.nose.position.z]] as const,
@@ -866,10 +903,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
       bounds: playable,
       velocity: flight.velocity,
       bombCount: option.aircraftBombCount,
+      propColliders: mapColliders,
     })
     bombs.setOnKill((victim) => {
       airBoard.noteKill(air.root)
       console.info(`[Steel] Bomb destroyed ${victim.name || 'target'}`)
+    })
+    bombs.setOnRelease(() => {
+      tutorialBombDropped = true
     })
     if (option.aircraftBombCount && option.aircraftBombCount > 2) {
       console.info(
@@ -885,6 +926,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             heightAt: sampleY,
             bounds: playable,
             velocity: flight.velocity,
+            propColliders: mapColliders,
           })
         : null
     rockets?.setOnKill((victim) => {
@@ -907,12 +949,68 @@ async function startMission(sel: MenuSelection): Promise<void> {
       endTeam: TeamId
     } | null = null
 
+    async function placeAirPracticeTarget(): Promise<void> {
+      for (const d of airPracticeTargets) {
+        d.root.parent?.remove(d.root)
+      }
+      airPracticeTargets.length = 0
+      const yaw = air.root.rotation.y
+      const fx = Math.sin(yaw)
+      const fz = Math.cos(yaw)
+      const aimX = air.root.position.x + fx * 55
+      const aimZ = air.root.position.z + fz * 55
+      const clear = findClearSpawnNear(aimX, aimZ, mapColliders, {
+        radius: TANK_RADIUS + 1.4,
+        playableHalfX: playable.x,
+        playableHalfZ: playable.z,
+        maxRange: 120,
+        y: sampleY(aimX, aimZ),
+      })
+      const pos = new THREE.Vector3(clear.x, sampleY(clear.x, clear.z), clear.z)
+      const faceYaw = Math.atan2(air.root.position.x - pos.x, air.root.position.z - pos.z)
+      try {
+        const dummy = await spawnStaticPz3Dummy(scene, pos, faceYaw, { highlight: true })
+        airPracticeTargets.push(dummy)
+        console.info(
+          `[Steel] Air tutorial panzer @ (${pos.x.toFixed(0)}, ${pos.z.toFixed(0)})`,
+        )
+      } catch (err) {
+        console.warn('[Steel] Air tutorial dummy failed', err)
+      }
+    }
+
+    if (isAirTutorial) {
+      airTutor = createAirTutorial({
+        onEnterGuns: () => {
+          void placeAirPracticeTarget()
+        },
+        onComplete: () => {
+          airEnded = true
+          flightHud.setVisible(false)
+          flightHud.setRespawn(null)
+          killInd?.setVisible(false)
+          document.exitPointerLock?.()
+        },
+      })
+      console.info('[Steel] Tutorial 2 coach armed — Basics Air')
+    }
+
+    // MP / tutorial: skip parade so play (or coach) starts immediately.
+    if (mp || isAirTutorial) {
+      console.info(
+        `[Steel] ${isAirTutorial ? 'Air tutorial' : 'MP'} — skip match opening`,
+      )
+      airMatchOpening.skip()
+    }
+
     function presentAirMatchEnd(
       kind: 'win' | 'lose',
       title: string,
       sub: string,
       endTeam: TeamId = team,
     ): void {
+      airTutor?.dispose()
+      airTutor = null
       airMatchOpening.dispose()
       nvg.dispose()
       propEngine.stop()
@@ -988,8 +1086,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     function respawnAirPlayer(): void {
       const pos = spawnAt(team, spawnIndex)
       const yaw = Math.atan2(-pos.x, -pos.z)
-      pos.y = sampleY(pos.x, pos.z) + AIR_SPAWN_ALT
-      flight.reset(pos, yaw, 0.55)
+      pos.y = sampleY(pos.x, pos.z) + (isAirTutorial ? 42 : AIR_SPAWN_ALT)
+      flight.reset(pos, yaw, isAirTutorial ? 0.28 : 0.55)
       guns.refill()
       bombs.refill()
       rockets?.refill()
@@ -1007,12 +1105,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     function tickAirRespawns(dt: number): void {
-      if (!isKoth || airEnded) return
+      if ((!isKoth && !isAirTutorial) || airEnded) return
       if (airCrashed) {
         airDeadFor += dt
         flightHud.setRespawn(Math.max(0, KOTH_RESPAWN_SEC - airDeadFor))
         if (airDeadFor >= KOTH_RESPAWN_SEC) respawnAirPlayer()
       }
+      if (!isKoth) return
       for (const rec of airAiSlots) {
         if (rec.unit.alive) {
           rec.deadFor = 0
@@ -1201,16 +1300,35 @@ async function startMission(sel: MenuSelection): Promise<void> {
           })
         }
 
+        const gunTargets = isAirTutorial
+          ? airPracticeTargets
+          : airEnemies
         if (!airCrashed && !tm.flameout && !ejectCam.active()) {
-          guns.update(dt, input.fire, airEnemies, camera)
+          guns.update(dt, input.fire, gunTargets, camera)
           if (input.toggleSight) {
             scopeOn = !scopeOn
             console.info(`[Steel] Bombsight ${scopeOn ? 'ON' : 'OFF'}`)
           }
-          bombs.update(dt, input.dropBomb, airEnemies, camera)
+          bombs.update(dt, input.dropBomb, gunTargets, camera)
           rockets?.update(dt, input.fireRocket, airEnemies)
         } else {
           rockets?.update(dt, false, airEnemies)
+        }
+
+        if (airTutor && !airEnded) {
+          airTutor.update({
+            dt,
+            speed: tm.speed,
+            throttle: tm.throttle,
+            agl: tm.agl,
+            bankDeg: tm.bank,
+            firing: guns.firing(),
+            bombDropped: tutorialBombDropped,
+            bombsLeft: bombs.remaining(),
+            ejectArmed: ejectAlert.active(),
+            ejected: ejectCam.active() || airCrashed,
+          })
+          if (tutorialBombDropped) tutorialBombDropped = false
         }
 
         if (isKoth) {
@@ -1238,6 +1356,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             )
           }
         } else if (
+          !isAirTutorial &&
           !airCrashed &&
           airEnemies.length > 0 &&
           airEnemies.every((e) => !e.alive)
@@ -1528,8 +1647,48 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
     }
 
-    // Player can only damage enemies (no friendly fire)
-    const dummies: DummyTarget[] = enemies
+    // Tutorial practice panzer — relocated in front of the player on the fire step
+    // (staying at spawn+42m meant it vanished in the trees after driving drills).
+    const practiceTargets: DummyTarget[] = []
+    const _pracFwd = new THREE.Vector3()
+
+    async function placeTutorialTargetAhead(): Promise<void> {
+      for (const d of practiceTargets) {
+        d.root.parent?.remove(d.root)
+      }
+      practiceTargets.length = 0
+
+      const yaw = tank.rotation.y
+      _pracFwd.set(Math.sin(yaw), 0, Math.cos(yaw))
+      const aimX = tank.position.x + _pracFwd.x * 32
+      const aimZ = tank.position.z + _pracFwd.z * 32
+      const clear = findClearSpawnNear(aimX, aimZ, mapColliders, {
+        radius: TANK_RADIUS + 1.4,
+        playableHalfX: playable.x,
+        playableHalfZ: playable.z,
+        maxRange: 80,
+        y: sampleY(aimX, aimZ),
+      })
+      const pos = new THREE.Vector3(clear.x, sampleY(clear.x, clear.z), clear.z)
+      const faceYaw = Math.atan2(
+        tank.position.x - pos.x,
+        tank.position.z - pos.z,
+      )
+      try {
+        const dummy = await spawnStaticPz3Dummy(scene, pos, faceYaw, { highlight: true })
+        practiceTargets.push(dummy)
+        const dist = Math.hypot(pos.x - tank.position.x, pos.z - tank.position.z)
+        console.info(
+          `[Steel] Tutorial panzer ahead · ${dist.toFixed(0)}m @ (${pos.x.toFixed(0)}, ${pos.z.toFixed(0)})`,
+        )
+      } catch (err) {
+        console.warn('[Steel] Tutorial dummy failed', err)
+      }
+    }
+
+    const dummies: DummyTarget[] = isRangeLand
+      ? practiceTargets
+      : (enemies as unknown as DummyTarget[])
 
     const { root: tank, turret, barrel, muzzle, mgMuzzle, turretMount } = playerHandle
     tank.name = 'playerTank'
@@ -1539,6 +1698,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
     scene.add(tank)
     resetAim(tank.rotation.y)
     const tankTape = createMatchTape()
+
+    if (isRangeLand) {
+      // Seed one at start so early look-ahead can spot it; fire/lock steps re-place it.
+      await placeTutorialTargetAhead()
+    }
 
     /** Remote human tanks (MP — host sims guests; guests apply snaps). */
     type MpRemoteUnit = {
@@ -1684,6 +1848,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         // German only — “We've been hit!” (Soviet HIT THEM is outbound confirm)
         germanCrew?.announceHit()
       },
+      onFuelLeak: ({ intensity, empty }) => {
+        const p = tank.position.clone()
+        p.y += 1.1
+        smoke.fuelLeak(p, intensity, empty)
+      },
     })
     const playerName = getSession()?.username?.trim() || 'Commander'
     board.register({
@@ -1769,6 +1938,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const _gLockOrigin = new THREE.Vector3()
     const _gLockLook = new THREE.Vector3()
     const samLabel = option.samLabel ?? 'SAM'
+    let tutorialAtgmFired = false
     const sam =
       option.samMissiles && groundLock
         ? createSamMissiles({
@@ -1781,9 +1951,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
               getAimDirection(out)
             },
             getLockedTarget: () => groundLock.getLockedTarget(),
-            getHostiles: () => enemies,
+            getHostiles: () =>
+              isSystemsTutorial
+                ? practiceTargets
+                : (enemies as unknown as DummyTarget[]),
             getDecoys: () => readPublishedDecoys(),
             heightAt: sampleY,
+            propColliders: mapColliders,
             maxAmmo: option.samAmmo,
             reloadSec: option.samReloadSec,
             speed: option.samSpeed,
@@ -1853,10 +2027,41 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
 
     let cameraMode: CameraMode = 'hull'
-    console.info('[Steel] Camera default → hull (C cycles turret / chase / hull)')
     let aiming = false
-    let wasAirborne = false
+    let landTutor: LandTutorialHandle | null = null
+    let systemsTutor: SystemsTutorialHandle | null = null
     let matchOver = false
+    if (isTutorial) {
+      landTutor = createLandTutorial({
+        tankId,
+        spawn: playerSpawn.clone(),
+        tankRoot: tank,
+        onEnterFireStep: () => {
+          void placeTutorialTargetAhead()
+        },
+        onComplete: () => {
+          matchOver = true
+          hud.setVisible(false)
+          document.exitPointerLock()
+        },
+      })
+      console.info('[Steel] Tutorial 1 coach armed — Basics Land')
+    }
+    if (isSystemsTutorial) {
+      systemsTutor = createSystemsTutorial({
+        onEnterLock: () => {
+          void placeTutorialTargetAhead()
+        },
+        onComplete: () => {
+          matchOver = true
+          hud.setVisible(false)
+          document.exitPointerLock()
+        },
+      })
+      console.info('[Steel] Tutorial 3 coach armed — Advanced Systems')
+    }
+    console.info('[Steel] Camera default → hull (C cycles turret / chase / hull)')
+    let wasAirborne = false
     if (mpSess) {
       mpSess.client.onPeerLeft((message) => {
         console.warn('[Steel] MP peer left during match:', message)
@@ -1872,6 +2077,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
       })
     }
     let koth = createKothState()
+    if (sel.kothHold) {
+      koth = {
+        ...koth,
+        vostokHold: sel.kothHold.vostokHold,
+        meridianHold: sel.kothHold.meridianHold,
+      }
+      console.info(
+        `[Steel] KOTH clocks restored · V ${koth.vostokHold.toFixed(0)}s · M ${koth.meridianHold.toFixed(0)}s`,
+      )
+    }
     const hillRing = isKoth ? createHillRing(scene) : null
     if (hillRing) {
       hillRing.position.y = sampleY(KOTH_CENTER.x, KOTH_CENTER.z) + 0.12
@@ -1939,9 +2154,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         )
       },
     })
-    // MP: skip parade so both clients start sending/receiving input immediately.
-    if (mp) {
-      console.info('[Steel] MP — skip match opening')
+    // MP / mid-match remount / tutorial: skip parade so play resumes immediately.
+    if (mp || isRemount || isRangeLand) {
+      console.info(
+        `[Steel] ${mp ? 'MP' : isRangeLand ? 'Tutorial' : 'Remount'} — skip match opening`,
+      )
       matchOpening.skip()
     }
 
@@ -2010,6 +2227,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           mapId,
           gameMode,
           team,
+          currentTankId: liveTankId,
           groundOnly: true,
           redAi,
           blueAi,
@@ -2019,9 +2237,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
         })
         liveSpawnIndex = pick.spawnIndex
         if (pick.tankId !== liveTankId) {
-          // Full remount — restart mission as the new chassis (same briefing).
+          // Chassis swap needs a remount — keep hill clocks so the match doesn't rewind.
           console.info(
-            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting match`,
+            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting (KOTH clocks kept)`,
           )
           sessionStorage.setItem(
             'steel.rematch',
@@ -2036,6 +2254,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
               season,
               weather,
               gameMode,
+              remount: true,
+              kothHold: {
+                vostokHold: koth.vostokHold,
+                meridianHold: koth.meridianHold,
+              },
             } satisfies MenuSelection),
           )
           window.location.reload()
@@ -2043,10 +2266,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
         }
         respawnPlayer()
         hud.setVisible(true)
+        lockPointer(renderer.domElement)
       } catch (err) {
         console.warn('[Steel] Respawn hangar failed — default respawn', err)
         respawnPlayer()
         hud.setVisible(true)
+        lockPointer(renderer.domElement)
       }
     }
 
@@ -2084,6 +2309,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
     function finishMatch(end: MatchEndSpec): void {
       matchOver = true
+      landTutor?.dispose()
+      landTutor = null
+      systemsTutor?.dispose()
+      systemsTutor = null
       matchOpening.dispose()
       nvg.dispose()
       dieselEngine.stop()
@@ -2138,6 +2367,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
     function checkMatchEnd(): void {
       if (matchOver) return
+      if (isRangeLand) return
       if (isKoth) {
         if (!koth.winner) return
         const won = koth.winner === team
@@ -2175,8 +2405,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
         }
       }
 
+      let cameraToggled = false
       if (consumeCameraToggle()) {
         cameraMode = nextCameraMode(cameraMode)
+        cameraToggled = true
         console.info(`[Steel] Camera → ${cameraMode}`)
       }
 
@@ -2206,16 +2438,25 @@ async function startMission(sel: MenuSelection): Promise<void> {
       // Host + guest both drive their *local* player tank.
       if (alive) {
         playerCombat.tickMobility(dt)
-        const immobilized = playerCombat.isImmobilized()
+        const trackDrive = playerCombat.getTrackDriveMods()
         env.update(dt, camera, drive.getSpeed(), option.vintageCrew)
         const mods = env.getDriveMods()
         drive.setMobilityMul(mods.mobilityMul)
         drive.setSlip(mods.slip)
+        const driveFwd = trackDrive.immobilized
+          ? 0
+          : forward * trackDrive.forwardMul
+        // Only turn when the player steers — never auto-yaw from a dead track.
+        const driveTurn = trackDrive.immobilized
+          ? 0
+          : turn * trackDrive.turnMul
         drive.update(
           dt,
-          immobilized
-            ? { forward: 0, turn: 0, brake: true }
-            : { forward, turn, brake },
+          {
+            forward: driveFwd,
+            turn: driveTurn,
+            brake: trackDrive.immobilized || brake,
+          },
           tank,
           (pos) => {
             const blocked =
@@ -2244,16 +2485,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
           updateWheels(
             wheels,
             dt,
-            immobilized ? 0 : drive.getSpeed(),
-            immobilized ? 0 : turn,
+            trackDrive.immobilized ? 0 : drive.getSpeed(),
+            trackDrive.immobilized ? 0 : driveTurn,
           )
         }
         if (trackBands.length > 0) {
           updateTracks(
             trackBands,
             dt,
-            immobilized ? 0 : drive.getSpeed(),
-            immobilized ? 0 : turn,
+            trackDrive.immobilized ? 0 : drive.getSpeed(),
+            trackDrive.immobilized ? 0 : driveTurn,
           )
         }
         arty?.update(Math.abs(drive.getSpeed()))
@@ -2370,16 +2611,23 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (groundLock && groundLockHud && alive && !matchOver && !killCam.active()) {
         muzzle.getWorldPosition(_gLockOrigin)
         getAimDirection(_gLockLook)
+        const lockFoes = isSystemsTutorial
+          ? practiceTargets.map((d) => ({
+              root: d.root,
+              alive: d.alive,
+              aircraft: false,
+            }))
+          : enemies.map((u) => ({
+              root: u.root,
+              alive: u.alive,
+              aircraft: !!u.aircraft,
+            }))
         const lockFrame = groundLock.update({
           dt,
           origin: _gLockOrigin,
           lookDir: _gLockLook,
           camera,
-          foes: enemies.map((u) => ({
-            root: u.root,
-            alive: u.alive,
-            aircraft: !!u.aircraft,
-          })),
+          foes: lockFoes,
           holdLock: isLockHold(),
         })
         groundLockHud.setVisible(true)
@@ -2407,11 +2655,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
       const aim: AimFrame = updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
 
       const useMg = fire.getWeapon() === 'mg'
+      const useAtgm = fire.getWeapon() === 'atgm'
       const activeMuzzle = useMg ? mgMuzzle : muzzle
       const canFire = (!arty || arty.isDeployed()) && !mpGuest
       const hudReady = fire.getHudState().ready
-      let fireWanted = alive && wantsFire && canFire
-      if (crew && !useMg && !option.antiAir) {
+      // ATGM uses LMB through samMissiles — don't also shoot the cannon.
+      let fireWanted = alive && wantsFire && canFire && !useAtgm
+      if (crew && !useMg && !useAtgm && !option.antiAir) {
         fireWanted = crew.gateFire(fireWanted, hudReady)
       }
       const fired = fire.update(
@@ -2423,7 +2673,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
         mapColliders,
       )
       if (sam) {
-        sam.update(dt, alive && !matchOver && isSamFire())
+        const ammoBefore = sam.ammo()
+        const samFire =
+          isSamFire() || (useAtgm && wantsFire && canFire)
+        sam.update(dt, alive && !matchOver && samFire)
+        if (sam.ammo() < ammoBefore) tutorialAtgmFired = true
       }
       if (fired) {
         const rocketRack = fire.isMagazineMode()
@@ -2449,6 +2703,45 @@ async function startMission(sel: MenuSelection): Promise<void> {
           if (!rocketRack) smoke.gunBlastCloud(_muzzleWorld, _fwd)
           smoke.muzzleBurst(_muzzleWorld, _fwd)
         }
+      }
+
+      if (landTutor) {
+        const live = practiceTargets.find((d) => d.alive)
+        const dummyDistM = live
+          ? Math.hypot(live.root.position.x - tank.position.x, live.root.position.z - tank.position.z)
+          : null
+        landTutor.update({
+          dt,
+          speed: drive.getSpeed(),
+          position: tank.position,
+          turnInput: turn,
+          braking: brake,
+          cameraMode,
+          cameraToggled,
+          dummyAlive: !!live,
+          dummyDistM,
+          aiming,
+          fired,
+        })
+      }
+
+      if (systemsTutor) {
+        const live = practiceTargets.find((d) => d.alive)
+        const dummyDistM = live
+          ? Math.hypot(live.root.position.x - tank.position.x, live.root.position.z - tank.position.z)
+          : null
+        const weapon = fire.getWeapon()
+        systemsTutor.update({
+          dt,
+          nvgOn: nvg.enabled(),
+          lockPhase: groundLock?.getPhase() ?? 'idle',
+          weapon: weapon === 'atgm' || weapon === 'mg' ? weapon : 'main',
+          atgmAmmo: sam?.ammo() ?? 0,
+          atgmFired: tutorialAtgmFired,
+          dummyAlive: !!live,
+          dummyDistM,
+        })
+        if (tutorialAtgmFired) tutorialAtgmFired = false
       }
 
       updateShotRecoil(dt, tank, barrel)
@@ -2608,14 +2901,23 @@ async function startMission(sel: MenuSelection): Promise<void> {
         finishMatch(end)
       }
       hud.updateCrosshairs(camera, aim.mouseHit, aim.barrelHit, aim.gunSynced)
+      const trackState = playerCombat.getTrackState()
+      const fuelState = playerCombat.getFuelState()
       hud.updateCombat({
         hp: playerCombat.hp,
         maxHp: option.maxHp,
         fire: fire.getHudState(),
         tracksDisableLeft: playerCombat.getTracksDisableLeft(),
+        trackLeftOut: trackState.leftOut,
+        trackRightOut: trackState.rightOut,
+        trackLeftDisableLeft: trackState.leftDisableLeft,
+        trackRightDisableLeft: trackState.rightDisableLeft,
+        modules: playerCombat.getModules(),
+        fuelLeaking: fuelState.leaking,
+        fuelEmpty: fuelState.empty,
         envStatus: env.getDriveMods().status,
         artilleryStatus: sam
-          ? `${samLabel} ${sam.ammo()} · P lock · M fire`
+          ? `${samLabel} ${sam.ammo()} · 1 gun · 2 MG · 3 ATGM · P lock · LMB/M`
           : arty?.getHud().status,
         headingRad: tank.rotation.y,
         speedU: drive.getSpeed(),
@@ -2664,7 +2966,9 @@ async function main(): Promise<void> {
     sessionStorage.removeItem('steel.rematch')
     try {
       selection = JSON.parse(rematchRaw) as MenuSelection
-      console.info(`[Steel] Remount after vehicle change → ${selection.tankId}`)
+      console.info(
+        `[Steel] Remount after vehicle change → ${selection.tankId}${selection.remount ? ' (KOTH clocks kept)' : ''}`,
+      )
     } catch {
       selection = await showMainMenu()
     }

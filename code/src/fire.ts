@@ -13,7 +13,7 @@ import type { HitResolution, ShellImpact } from './armor'
 import { getBarrelDirection } from './aim'
 import { playFireSound, playRocketFireSound, playReloadSound, stopReloadSound } from './audio'
 import type { DummyTarget } from './dummy'
-import { hitsPropCollider, type PropCollider } from './collision'
+import { segmentHitsPropCollider, type PropCollider } from './collision'
 import { showHitBanner, worldToScreen } from './hitFeedback'
 import type { TrackedProjectile } from './impactCinematic'
 import { predictLethalHit } from './lethalShot'
@@ -110,6 +110,8 @@ export type FireSystem = {
   isMagazineMode: () => boolean
   /** Disable cannon shells (MG + external ATGM only). */
   setNoMainGun: (on: boolean) => void
+  /** Allow weapon slot 3 = ATGM (Bradley / Pantsir-style seekers). */
+  setAtgmAvailable: (on: boolean) => void
   /** Replace HE/AP/MG racks (mission start / respawn). */
   setAmmoStock: (stock: AmmoStock) => void
   getAmmoStock: () => AmmoStock
@@ -166,6 +168,7 @@ const SHELL_SUBSTEP = 1 / 120
 const _origin = new THREE.Vector3()
 const _dir = new THREE.Vector3()
 const _look = new THREE.Vector3()
+const _shellPrev = new THREE.Vector3()
   const _sparkPos = new THREE.Vector3()
   const _localHit = new THREE.Vector3()
   const _localDir = new THREE.Vector3()
@@ -322,6 +325,8 @@ export function createFireSystem(
   let magazineShotCooldown = 0
   /** ATGM carriers — cannon disabled; coax only. */
   let noMainGun = false
+  /** Digit3 ATGM slot armed (samMissiles vehicles). */
+  let atgmAvailable = false
   let stock: AmmoStock = cloneAmmoStock(DEFAULT_AMMO_STOCK)
   let onKill: ((victim: THREE.Object3D) => void) | null = null
   let onHitAnalyze: ((report: HitAnalyzeReport) => void) | null = null
@@ -878,13 +883,24 @@ export function createFireSystem(
         console.info('[Steel] Main gun disabled — MG + ATGM only')
       }
     },
+    setAtgmAvailable(on) {
+      atgmAvailable = !!on
+      if (!atgmAvailable && weapon === 'atgm') {
+        weapon = noMainGun ? 'mg' : 'main'
+      }
+      if (atgmAvailable) {
+        console.info('[Steel] ATGM slot armed · press 3')
+        // ATGM-primary chassis (Sheridan / Khrizantema) start on the missile.
+        if (noMainGun) weapon = 'atgm'
+      }
+    },
     setAmmoStock(next) {
       stock = cloneAmmoStock(next)
       // Re-seat a chambered main round if stock allows; otherwise go dry.
       if (magazineSize <= 0) {
         pending = null
         if (noMainGun) {
-          weapon = 'mg'
+          weapon = atgmAvailable ? 'atgm' : 'mg'
           chambered = null
           cooldown = 0
           stopReloadSound()
@@ -930,6 +946,7 @@ export function createFireSystem(
     },
     setWeapon(id) {
       if (magazineSize > 0 && id === 'mg') return
+      if (id === 'atgm' && !atgmAvailable) return
       if (noMainGun && id === 'main') {
         weapon = 'mg'
         return
@@ -937,11 +954,25 @@ export function createFireSystem(
       if (weapon === id) return
       weapon = id
       pending = null
-      if (id === 'mg') stopReloadSound()
-      console.info(`[Steel] Weapon → ${id === 'mg' ? 'MACHINE GUN' : 'MAIN GUN'}`)
+      if (id === 'mg' || id === 'atgm') stopReloadSound()
+      const label =
+        id === 'mg' ? 'MACHINE GUN' : id === 'atgm' ? 'ATGM' : 'MAIN GUN'
+      console.info(`[Steel] Weapon → ${label}`)
     },
     toggleWeapon() {
-      if (magazineSize > 0 || noMainGun) return
+      if (magazineSize > 0) return
+      if (noMainGun) {
+        if (atgmAvailable) {
+          this.setWeapon(weapon === 'mg' ? 'atgm' : 'mg')
+        }
+        return
+      }
+      if (atgmAvailable) {
+        const order: WeaponId[] = ['main', 'mg', 'atgm']
+        const i = order.indexOf(weapon)
+        this.setWeapon(order[(i + 1) % order.length]!)
+        return
+      }
       this.setWeapon(weapon === 'main' ? 'mg' : 'main')
     },
     getWeapon() {
@@ -981,6 +1012,18 @@ export function createFireSystem(
       beginLoad(id)
     },
     getHudState() {
+      if (weapon === 'atgm') {
+        return {
+          weapon,
+          chambered: null,
+          loading: loading === 'mg' ? 'aphe' : loading,
+          reloadLeft: 0,
+          reloadTotal: 1,
+          ready: true,
+          stock: cloneAmmoStock(stock),
+          noMainGun,
+        }
+      }
       if (weapon === 'mg') {
         return {
           weapon,
@@ -1062,6 +1105,8 @@ export function createFireSystem(
             console.info('[Steel] MG belt EMPTY')
           }
         }
+      } else if (weapon === 'atgm') {
+        // Seekers fired from samMissiles via main loop — no shell here.
       } else if (magazineSize > 0) {
         // Rack salvo at 2 rps until empty, then restock.
         if (
@@ -1126,6 +1171,7 @@ export function createFireSystem(
         let removed = false
         while (shell.accum >= SHELL_SUBSTEP) {
           shell.accum -= SHELL_SUBSTEP
+          _shellPrev.copy(shell.mesh.position)
           integrateShell(shell.mesh.position, shell.velocity, SHELL_SUBSTEP)
           if (wantsTrail) stepDist += shell.velocity.length() * SHELL_SUBSTEP
 
@@ -1146,7 +1192,12 @@ export function createFireSystem(
           if (
             propColliders &&
             propColliders.length > 0 &&
-            hitsPropCollider(shell.mesh.position, propColliders, shell.hitRadius)
+            segmentHitsPropCollider(
+              _shellPrev,
+              shell.mesh.position,
+              propColliders,
+              shell.hitRadius,
+            )
           ) {
             if (isRocket) detonateRocket(shell.mesh.position)
             else flashSpark(scene, shell.mesh.position, 0xb0a080, shell.ammoId === 'mg' ? 0.4 : 1)

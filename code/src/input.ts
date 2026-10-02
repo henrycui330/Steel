@@ -225,7 +225,7 @@ export function consumeAmmoSelect(): AmmoId | null {
   return id
 }
 
-/** Edge-triggered weapon select (1 = main, 2 = MG). */
+/** Edge-triggered weapon select (1 = main, 2 = MG, 3 = ATGM when equipped). */
 export function consumeWeaponSelect(): WeaponId | null {
   const id = weaponSelectQueued
   weaponSelectQueued = null
@@ -273,6 +273,9 @@ export function bindDriveInput(): void {
     }
     if (e.code === 'Digit2' && !e.repeat) {
       weaponSelectQueued = 'mg'
+    }
+    if (e.code === 'Digit3' && !e.repeat) {
+      weaponSelectQueued = 'atgm'
     }
     if (e.code === 'KeyU' && !e.repeat) {
       artilleryMapToggleQueued = true

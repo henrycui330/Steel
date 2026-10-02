@@ -107,7 +107,7 @@ export function createTankHitVolumes(
       normalLocal: new THREE.Vector3(0, 0, 1),
     },
     {
-      def: armorTable.tracks,
+      def: armorTable.tracksL,
       box: new THREE.Box3(
         new THREE.Vector3(min.x - 0.05, min.y, min.z + 0.05),
         new THREE.Vector3(min.x + sideWidth, trackHeight, max.z - 0.05),
@@ -115,12 +115,29 @@ export function createTankHitVolumes(
       normalLocal: new THREE.Vector3(-1, 0, 0),
     },
     {
-      def: armorTable.tracks,
+      def: armorTable.tracksR,
       box: new THREE.Box3(
         new THREE.Vector3(max.x - sideWidth, min.y, min.z + 0.05),
         new THREE.Vector3(max.x + 0.05, trackHeight, max.z - 0.05),
       ),
       normalLocal: new THREE.Vector3(1, 0, 0),
+    },
+    // Fuel — rear lower hull (checked before hullRear so pens can claim fuel).
+    {
+      def: armorTable.fuel,
+      box: new THREE.Box3(
+        new THREE.Vector3(
+          mid.x - (max.x - min.x) * 0.28,
+          min.y + (max.y - min.y) * 0.12,
+          min.z - 0.02,
+        ),
+        new THREE.Vector3(
+          mid.x + (max.x - min.x) * 0.28,
+          min.y + (max.y - min.y) * 0.48,
+          min.z + rearDepth * 0.85,
+        ),
+      ),
+      normalLocal: new THREE.Vector3(0, 0, -1),
     },
   // Hull plates stop below the ring so they don't steal ring hits.
   {

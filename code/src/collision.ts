@@ -183,6 +183,37 @@ export function hitsPropCollider(
   return false
 }
 
+const _segProbe = new THREE.Vector3()
+
+/**
+ * Sample along a travel segment so fast shells/missiles can't tunnel through
+ * thin walls between discrete steps.
+ */
+export function segmentHitsPropCollider(
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  colliders: readonly PropCollider[],
+  pointRadius = 0,
+  outHit?: THREE.Vector3,
+): boolean {
+  if (colliders.length === 0) return false
+  if (hitsPropCollider(to, colliders, pointRadius)) {
+    outHit?.copy(to)
+    return true
+  }
+  const dist = from.distanceTo(to)
+  if (dist < 0.05) return false
+  const steps = Math.min(40, Math.max(1, Math.ceil(dist / 0.65)))
+  for (let i = 1; i < steps; i++) {
+    _segProbe.lerpVectors(from, to, i / steps)
+    if (hitsPropCollider(_segProbe, colliders, pointRadius)) {
+      outHit?.copy(_segProbe)
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * Spiral-search for an XZ that clears prop solids (keeps tanks out of buildings).
  */

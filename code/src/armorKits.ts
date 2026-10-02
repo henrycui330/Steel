@@ -62,13 +62,29 @@ export function armorKit(mm: {
       critChance: 0.04,
       autoRicochetDeg: 75,
     },
-    tracks: {
-      id: 'tracks',
-      label: 'Tracks',
+    tracksL: {
+      id: 'tracksL',
+      label: 'Track L',
       armor: mm.tracks ?? Math.max(10, Math.round(mm.side * 0.35)),
       damageMult: 0.35,
       critChance: 0,
       autoRicochetDeg: 78,
+    },
+    tracksR: {
+      id: 'tracksR',
+      label: 'Track R',
+      armor: mm.tracks ?? Math.max(10, Math.round(mm.side * 0.35)),
+      damageMult: 0.35,
+      critChance: 0,
+      autoRicochetDeg: 78,
+    },
+    fuel: {
+      id: 'fuel',
+      label: 'Fuel tank',
+      armor: Math.max(14, Math.round(mm.rear * 1.1)),
+      damageMult: 1.1,
+      critChance: 0.08,
+      autoRicochetDeg: 72,
     },
   }
 }

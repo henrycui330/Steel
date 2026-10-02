@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { createSandstoneTexture } from './textures'
+import type { PropCollider } from './collision'
 
 const WALL_HEIGHT = 3.2
 const WALL_THICKNESS = 0.6
@@ -7,6 +8,52 @@ const WALL_THICKNESS = 0.6
 export type ArenaHalf = {
   x: number
   z: number
+}
+
+/** Solid boxes matching `addArenaWalls` geometry — blocks shells / missiles. */
+export function arenaWallColliders(sizeX: number, sizeZ: number = sizeX): PropCollider[] {
+  const halfX = sizeX / 2
+  const halfZ = sizeZ / 2
+  const t = WALL_THICKNESS / 2
+  const maxY = WALL_HEIGHT + 0.25
+  return [
+    {
+      x: 0,
+      z: -halfZ,
+      hx: halfX + t,
+      hz: t,
+      yaw: 0,
+      radius: Math.hypot(halfX + t, t),
+      maxY,
+    },
+    {
+      x: 0,
+      z: halfZ,
+      hx: halfX + t,
+      hz: t,
+      yaw: 0,
+      radius: Math.hypot(halfX + t, t),
+      maxY,
+    },
+    {
+      x: -halfX,
+      z: 0,
+      hx: t,
+      hz: halfZ + t,
+      yaw: 0,
+      radius: Math.hypot(t, halfZ + t),
+      maxY,
+    },
+    {
+      x: halfX,
+      z: 0,
+      hx: t,
+      hz: halfZ + t,
+      yaw: 0,
+      radius: Math.hypot(t, halfZ + t),
+      maxY,
+    },
+  ]
 }
 
 /**

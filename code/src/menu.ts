@@ -60,6 +60,13 @@ export type MenuSelection = {
   season: Season
   weather: WeatherKind
   gameMode: GameModeId
+  /**
+   * Mid-match KOTH chassis remount — skip parade and restore hill clocks.
+   */
+  remount?: boolean
+  kothHold?: { vostokHold: number; meridianHold: number }
+  /** Interactive training range (empty AI, coach overlay). */
+  tutorial?: 'land-basics' | 'air-basics' | 'systems-basics'
   /** Present when launching from Multiplayer lobby. */
   mp?: {
     isHost: boolean
@@ -241,6 +248,7 @@ function showHome(
       </p>
       <div class="home-actions">
         <button type="button" class="home-btn home-btn-play" data-go="play">Start Match</button>
+        <button type="button" class="home-btn" data-go="tutorial">Tutorials</button>
         <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" title="${onlineOk ? 'Create or join a room' : escapeHtml(mpBlockReason)}">Multiplayer</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>
         <button type="button" class="home-btn" data-go="settings">Settings</button>
@@ -252,6 +260,9 @@ function showHome(
   `
   root.querySelector('[data-go="play"]')!.addEventListener('click', () => {
     showVoteMap(root, resolve)
+  })
+  root.querySelector('[data-go="tutorial"]')!.addEventListener('click', () => {
+    showTutorials(root, resolve)
   })
   const mpBtn = root.querySelector('[data-go="mp"]') as HTMLButtonElement | null
   mpBtn?.addEventListener('click', () => {
@@ -521,6 +532,111 @@ function showPlaceholder(
     </div>
   `
   root.querySelector('.menu-back')!.addEventListener('click', () => goHome(root, resolve))
+}
+
+function showTutorials(
+  root: HTMLDivElement,
+  resolve: (s: MenuSelection) => void,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-tutorial', 'menu-wt')
+  const ground = TANK_OPTIONS.filter((t) => !t.aircraft)
+  const air = TANK_OPTIONS.filter((t) => !!t.aircraft && !t.jet)
+  const systems = TANK_OPTIONS.filter((t) => !!t.samMissiles && !t.aircraft)
+  let mode: 'land-basics' | 'air-basics' | 'systems-basics' = 'land-basics'
+  let tankId: TankId = ground.find((t) => t.id === 'sherman')?.id ?? ground[0]?.id ?? 'pz3'
+
+  function chassisList(): typeof ground {
+    if (mode === 'air-basics') return air
+    if (mode === 'systems-basics') return systems
+    return ground
+  }
+
+  function chassisOptions(): string {
+    const list = chassisList()
+    if (!list.some((t) => t.id === tankId)) {
+      tankId =
+        mode === 'air-basics'
+          ? (list.find((t) => t.id === 'corsair')?.id ?? list[0]?.id ?? 'corsair')
+          : mode === 'systems-basics'
+            ? (list.find((t) => t.id === 'bradley')?.id ?? list[0]?.id ?? 'bradley')
+            : (list.find((t) => t.id === 'sherman')?.id ?? list[0]?.id ?? 'pz3')
+    }
+    return list
+      .map((t) => `<option value="${t.id}" ${t.id === tankId ? 'selected' : ''}>${t.name}</option>`)
+      .join('')
+  }
+
+  function paint(): void {
+    root.innerHTML = `
+      <div class="menu-panel menu-panel-wide">
+        <p class="menu-kicker">Training</p>
+        <h1 class="menu-title">Tutorials</h1>
+        <p class="menu-sub">Interactive lessons — not a wall of text. Complete tasks in the range.</p>
+        <div class="tutor-menu-list">
+          <button type="button" class="tutor-menu-card is-available${mode === 'land-basics' ? ' is-selected' : ''}" data-tut="land">
+            <span class="tutor-menu-num">01</span>
+            <span class="tutor-menu-name">Basics — Land</span>
+            <span class="tutor-menu-blurb">Drive · cameras · test fire · paint</span>
+          </button>
+          <button type="button" class="tutor-menu-card is-available${mode === 'air-basics' ? ' is-selected' : ''}" data-tut="air">
+            <span class="tutor-menu-num">02</span>
+            <span class="tutor-menu-name">Basics — Air</span>
+            <span class="tutor-menu-blurb">Fly · guns · bombs · eject</span>
+          </button>
+          <button type="button" class="tutor-menu-card is-available${mode === 'systems-basics' ? ' is-selected' : ''}" data-tut="systems">
+            <span class="tutor-menu-num">03</span>
+            <span class="tutor-menu-name">Advanced — Systems</span>
+            <span class="tutor-menu-blurb">NVG · lock-on · ATGM</span>
+          </button>
+        </div>
+        <label class="auth-label tutor-tank-label">Training chassis
+          <select class="auth-input" data-tank>${chassisOptions()}</select>
+        </label>
+        <div class="menu-nav-row">
+          <button type="button" class="home-btn home-btn-back" data-back>Back</button>
+          <button type="button" class="deploy-btn" data-start>Enter range</button>
+        </div>
+      </div>
+    `
+    const tankSelect = root.querySelector('[data-tank]') as HTMLSelectElement
+    tankSelect.addEventListener('change', () => {
+      tankId = tankSelect.value as TankId
+    })
+    root.querySelector('[data-tut="land"]')!.addEventListener('click', () => {
+      mode = 'land-basics'
+      paint()
+    })
+    root.querySelector('[data-tut="air"]')!.addEventListener('click', () => {
+      mode = 'air-basics'
+      paint()
+    })
+    root.querySelector('[data-tut="systems"]')!.addEventListener('click', () => {
+      mode = 'systems-basics'
+      paint()
+    })
+    root.querySelector('[data-back]')!.addEventListener('click', () => goHome(root, resolve))
+    root.querySelector('[data-start]')!.addEventListener('click', () => {
+      console.info(`[Steel] Tutorial launch · ${mode} · ${tankId}`)
+      root.remove()
+      resolve({
+        mapId: 'forest',
+        tankId,
+        team: 'blue',
+        spawnIndex: 0,
+        redAi: [],
+        blueAi: [],
+        // Systems lesson needs night for NVG.
+        timeOfDay: mode === 'systems-basics' ? 'night' : 'day',
+        season: 'summer',
+        weather: 'clear',
+        gameMode: 'skirmish',
+        tutorial: mode,
+      })
+    })
+  }
+
+  paint()
 }
 
 function showCustomize(
@@ -1156,6 +1272,8 @@ export function showRespawnHangar(opts: {
   mapId: MapId
   gameMode: GameModeId
   team: TeamId
+  /** Preselect this chassis (defaults to first in list if missing). */
+  currentTankId?: TankId
   groundOnly?: boolean
   redAi?: TankId[]
   blueAi?: TankId[]
@@ -1185,7 +1303,11 @@ export function showRespawnHangar(opts: {
         : opts.groundOnly === false
           ? TANK_OPTIONS.filter((t) => !!t.aircraft)
           : [...TANK_OPTIONS]
-    let tankId: TankId = vehicles[0]?.id ?? 'pz3'
+    const preferred =
+      opts.currentTankId && vehicles.some((t) => t.id === opts.currentTankId)
+        ? opts.currentTankId
+        : (vehicles[0]?.id ?? 'pz3')
+    let tankId: TankId = preferred
     let preview: ReturnType<typeof createCustomizePreview> | null = null
 
     root.innerHTML = `
@@ -1229,10 +1351,12 @@ export function showRespawnHangar(opts: {
       }
     }
 
+    let preferredBtn: HTMLButtonElement | null = null
     for (const t of vehicles) {
       const btn = document.createElement('button')
       btn.type = 'button'
       btn.className = 'hangar-card'
+      btn.dataset.tankId = t.id
       btn.innerHTML = `
         <span class="hangar-card-name">${t.name}</span>
         <span class="hangar-card-role">${t.role}</span>
@@ -1246,8 +1370,9 @@ export function showRespawnHangar(opts: {
         void showPreview(tankId)
       })
       list.appendChild(btn)
+      if (t.id === preferred) preferredBtn = btn
     }
-    ;(list.querySelector('.hangar-card') as HTMLButtonElement | null)?.click()
+    ;(preferredBtn ?? (list.querySelector('.hangar-card') as HTMLButtonElement | null))?.click()
 
     root.querySelector('[data-to-spawn]')!.addEventListener('click', () => {
       preview?.dispose()

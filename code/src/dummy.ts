@@ -65,11 +65,100 @@ function destroyVisual(scene: THREE.Scene, root: THREE.Group): void {
   spawnDestroyedWreck(scene, root, null)
 }
 
+/** Ground ring + tall beacon so the practice target is obvious in tutorials. */
+function attachPracticeHighlight(root: THREE.Group, model: THREE.Object3D): void {
+  const box = new THREE.Box3().setFromObject(model)
+  const size = box.getSize(new THREE.Vector3())
+  const center = box.getCenter(new THREE.Vector3())
+  root.worldToLocal(center)
+
+  const mark = new THREE.Group()
+  mark.name = 'practiceHighlight'
+
+  const ringR = Math.max(3.2, Math.max(size.x, size.z) * 0.7)
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(ringR - 0.45, ringR, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xe8b84a,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  )
+  ring.rotation.x = -Math.PI / 2
+  ring.position.set(center.x, 0.12, center.z)
+  ring.renderOrder = 10
+  mark.add(ring)
+
+  const inner = new THREE.Mesh(
+    new THREE.RingGeometry(ringR * 0.35, ringR * 0.35 + 0.18, 40),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff0c8,
+      transparent: true,
+      opacity: 0.7,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  )
+  inner.rotation.x = -Math.PI / 2
+  inner.position.set(center.x, 0.14, center.z)
+  inner.renderOrder = 10
+  mark.add(inner)
+
+  // Tall beacon column — draws through foliage so you can find it in the trees.
+  const poleH = 14
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.12, 0.18, poleH, 10),
+    new THREE.MeshBasicMaterial({
+      color: 0xffc84a,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  )
+  pole.position.set(center.x, poleH * 0.5, center.z)
+  pole.renderOrder = 11
+  mark.add(pole)
+
+  const beacon = new THREE.Mesh(
+    new THREE.SphereGeometry(0.55, 14, 12),
+    new THREE.MeshBasicMaterial({
+      color: 0xffe080,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      depthTest: false,
+    }),
+  )
+  beacon.position.set(center.x, poleH + 0.4, center.z)
+  beacon.renderOrder = 12
+  mark.add(beacon)
+
+  model.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+    for (const m of mats) {
+      if (!m || !('emissive' in m)) continue
+      const std = m as THREE.MeshStandardMaterial
+      std.emissive = new THREE.Color(0x8a5a10)
+      std.emissiveIntensity = 0.55
+    }
+  })
+
+  root.add(mark)
+  console.info('[Steel] Practice target highlighted (ring + tall beacon)')
+}
+
 /** Static Pz-III J target with part armor / HP. */
 export async function spawnStaticPz3Dummy(
   scene: THREE.Scene,
   position: THREE.Vector3,
   yaw = Math.PI,
+  opts?: { highlight?: boolean },
 ): Promise<DummyTarget> {
   const url = tankOptionById('pz3').url
   const model = await cloneGltfScene(url)
@@ -99,8 +188,10 @@ export async function spawnStaticPz3Dummy(
   root.rotation.y = yaw
   scene.add(root)
   root.updateMatrixWorld(true)
+  if (opts?.highlight) attachPracticeHighlight(root, model)
 
-  const broad = new THREE.Box3().setFromObject(root).expandByScalar(0.4)
+  // Hull-only broadphase (exclude tall beacon so shells aren't "near" empty air).
+  const broad = new THREE.Box3().setFromObject(model).expandByScalar(0.4)
   const volumes = createTankHitVolumes(root)
 
   const maxHp = 1000
@@ -142,6 +233,8 @@ export async function spawnStaticPz3Dummy(
           console.info(
             `[Steel] ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}`,
           )
+          const hi = root.getObjectByName('practiceHighlight')
+          if (hi) root.remove(hi)
           destroyVisual(scene, root)
         } else {
           console.info(

@@ -12,6 +12,7 @@ import { clampToArena } from './arena'
 import {
   hitsPropCollider,
   resolvePropCollisions,
+  segmentHitsPropCollider,
   type PropCollider,
 } from './collision'
 import {
@@ -59,6 +60,7 @@ type EnemyShell = {
 export type AiSmoke = {
   muzzleBurst: (origin: THREE.Vector3, forward: THREE.Vector3) => void
   damageLeak: (origin: THREE.Vector3, intensity?: number) => void
+  fuelLeak: (origin: THREE.Vector3, intensity?: number, hot?: boolean) => void
   wreckPlume: (origin: THREE.Vector3) => void
   wreckFire: (origin: THREE.Vector3) => void
   wreckBurn: (origin: THREE.Vector3) => void
@@ -119,6 +121,7 @@ const _muzzlePos = new THREE.Vector3()
 const _muzzleQuat = new THREE.Quaternion()
 const _dir = new THREE.Vector3()
 const _look = new THREE.Vector3()
+const _shellPrev = new THREE.Vector3()
 const _spark = new THREE.Vector3()
 const _gunFwd = new THREE.Vector3()
 const _aimPoint = new THREE.Vector3()
@@ -253,6 +256,11 @@ export async function spawnAiPz3Enemy(
       opts.onDeath?.(r)
       spawnDestroyedWreck(scene, r, smoke, persistMesh)
     },
+    onFuelLeak: ({ intensity, empty }) => {
+      const p = root.position.clone()
+      p.y += 1.1
+      smoke?.fuelLeak(p, intensity, empty)
+    },
   })
 
   const wheels = collectWheels(root)
@@ -383,6 +391,7 @@ export async function spawnAiPz3Enemy(
     for (let i = shells.length - 1; i >= 0; i--) {
       const shell = shells[i]
       shell.age += dt
+      _shellPrev.copy(shell.mesh.position)
       integrateShell(shell.mesh.position, shell.velocity, dt)
       if (shell.velocity.lengthSq() > 1e-4) {
         _look.copy(shell.mesh.position).add(shell.velocity)
@@ -402,7 +411,14 @@ export async function spawnAiPz3Enemy(
         removeShell(i)
         continue
       }
-      if (hitsPropCollider(shell.mesh.position, colliders, SHELL_RADIUS)) {
+      if (
+        segmentHitsPropCollider(
+          _shellPrev,
+          shell.mesh.position,
+          colliders,
+          SHELL_RADIUS,
+        )
+      ) {
         removeShell(i)
         continue
       }
@@ -444,7 +460,8 @@ export async function spawnAiPz3Enemy(
         return
       }
 
-      const immobilized = combat.isImmobilized()
+      const trackDrive = combat.getTrackDriveMods()
+      const immobilized = trackDrive.immobilized
       const target = pickHostile(root.position, hostiles, aa)
       const targetAir = Boolean(target && isAirRoot(target.root))
       const hillDist = objective
@@ -570,13 +587,22 @@ export async function spawnAiPz3Enemy(
         root.rotation.y = yawToward(
           root.rotation.y,
           navYaw,
-          AI_TURN * (avoiding ? 1.55 : 1) * dt,
+          AI_TURN * (avoiding ? 1.55 : 1) * trackDrive.turnMul * dt,
         )
 
-        if (throttle > 0) speed = Math.min(AI_MAX_SPEED, speed + 8 * dt)
-        else if (throttle < 0) speed = Math.max(-4, speed - 6 * dt)
+        const maxSpd = AI_MAX_SPEED * trackDrive.forwardMul
+        if (throttle > 0)
+          speed = Math.min(maxSpd, speed + 8 * trackDrive.forwardMul * dt)
+        else if (throttle < 0)
+          speed = Math.max(-4 * trackDrive.forwardMul, speed - 6 * dt)
         else if (speed > 0) speed = Math.max(0, speed - 10 * dt)
         else if (speed < 0) speed = Math.min(0, speed + 10 * dt)
+
+        // One-track crawl: clamp absolute speed.
+        if (trackDrive.forwardMul < 1) {
+          const cap = AI_MAX_SPEED * trackDrive.forwardMul
+          speed = THREE.MathUtils.clamp(speed, -cap * 0.55, cap)
+        }
 
         const yaw = root.rotation.y
         root.position.x += Math.sin(yaw) * speed * dt
@@ -642,7 +668,7 @@ export async function spawnAiPz3Enemy(
       }
 
       leakAcc += dt
-      if (leakAcc > 0.35 && combat.hp < combat.maxHp * 0.55) {
+      if (leakAcc > 0.35 && combat.hp < combat.maxHp * 0.55 && !combat.getFuelState().leaking) {
         leakAcc = 0
         smoke?.damageLeak(
           root.position.clone().setY(1.4),

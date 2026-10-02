@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import type { HeightSampler } from './ballistics'
 import type { GunTarget } from './aircraftGuns'
 import { spawnExplosion } from './explosions'
+import { segmentHitsPropCollider, type PropCollider } from './collision'
 
 /**
  * Unguided wing rockets (Corsair HVAR-style).
@@ -64,10 +65,12 @@ export type RocketOptions = {
   heightAt: HeightSampler
   bounds: { x: number; z: number }
   velocity: THREE.Vector3
+  propColliders?: readonly PropCollider[]
 }
 
 export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   const { scene, root, heightAt, bounds, velocity } = opts
+  const walls = opts.propColliders ?? []
 
   const bodyGeo = new THREE.CylinderGeometry(0.07, 0.09, 1.15, 6)
   bodyGeo.rotateX(Math.PI / 2)
@@ -110,6 +113,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   const _nose = new THREE.Vector3()
   const _pos = new THREE.Vector3()
   const _dir = new THREE.Vector3()
+  const _segFrom = new THREE.Vector3()
   const _probe = new THREE.Vector3()
   const _local = new THREE.Vector3()
   const _q = new THREE.Quaternion()
@@ -283,6 +287,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
         r.age += dt
         r.vel.y -= GRAVITY * dt
         const step = r.vel.length() * dt
+        _segFrom.copy(r.root.position)
         r.root.position.addScaledVector(r.vel, dt)
         if (r.vel.lengthSq() > 1e-4) {
           _dir.copy(r.vel).normalize()
@@ -297,6 +302,15 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
 
         const p = r.root.position
         if (r.age > LIFE || outOfBounds(p)) {
+          killRocket(r)
+          live.splice(i, 1)
+          continue
+        }
+        if (
+          walls.length > 0 &&
+          segmentHitsPropCollider(_segFrom, p, walls, 0.4)
+        ) {
+          detonate(p, targets)
           killRocket(r)
           live.splice(i, 1)
           continue

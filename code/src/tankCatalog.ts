@@ -17,7 +17,12 @@ export type TankId =
   | 'challenger3'
   | 'sherman'
   | 'pershing'
+  | 'm55'
   | 'duster'
+  | 'sheridan'
+  | 'm901'
+  | 'bradley'
+  | 'm3a3'
   | 'abrams'
   | 't34'
   | 't3476'
@@ -107,8 +112,7 @@ export type TankOption = {
    */
   targetWidth: number
   /**
-   * WWII / early chassis — susceptible to summer crew heat and winter oil freeze.
-   * Modern MBTs ignore those climate penalties.
+   * WWII / early chassis flag (legacy). Climate heat/oil penalties removed.
    */
   vintageCrew: boolean
   /**
@@ -368,6 +372,34 @@ const DUSTER_DRIVE: DriveProfile = {
   tiltFromAccel: 0.01,
 }
 
+/** M551 Sheridan — light air-droppable · Shillelagh ATGM primary. */
+const SHERIDAN_DRIVE: DriveProfile = {
+  maxSpeed: 20,
+  maxReverse: 8,
+  accel: 13.5,
+  reverseAccel: 9,
+  brakeDecel: 26,
+  coastDrag: 5.0,
+  turnRate: 2.6,
+  turnInPlace: 1.3,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.012,
+}
+
+/** M901 ITV — M113 TOW hammerhead (soft skin, decent pace). */
+const M901_DRIVE: DriveProfile = {
+  maxSpeed: 17.5,
+  maxReverse: 7,
+  accel: 12,
+  reverseAccel: 8,
+  brakeDecel: 26,
+  coastDrag: 5.2,
+  turnRate: 2.35,
+  turnInPlace: 1.15,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.011,
+}
+
 /** ZSU-23-4 Shilka — tracked SPAAG (quad 23mm, radar turret). */
 const SHILKA_DRIVE: DriveProfile = {
   maxSpeed: 14.5,
@@ -422,6 +454,34 @@ const KHRIZANTEMA_DRIVE: DriveProfile = {
   turnInPlace: 1.1,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+}
+
+/** M2 Bradley — tracked IFV / 25mm Bushmaster (sprintier than MBTs). */
+const BRADLEY_DRIVE: DriveProfile = {
+  maxSpeed: 19,
+  maxReverse: 7.5,
+  accel: 12.5,
+  reverseAccel: 8.5,
+  brakeDecel: 26,
+  coastDrag: 5.2,
+  turnRate: 2.4,
+  turnInPlace: 1.2,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+}
+
+/** M3A3 Bradley CFV — lighter cavalry; slightly snappier than M2. */
+const M3A3_DRIVE: DriveProfile = {
+  maxSpeed: 20,
+  maxReverse: 8,
+  accel: 13,
+  reverseAccel: 9,
+  brakeDecel: 26,
+  coastDrag: 5.0,
+  turnRate: 2.5,
+  turnInPlace: 1.25,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
 }
 
 /** M1A1 Abrams — modern MBT / 120mm. */
@@ -548,6 +608,20 @@ const PZH_DRIVE: DriveProfile = {
   turnInPlace: 1.05,
   tiltMax: (4 * Math.PI) / 180,
   tiltFromAccel: 0.009,
+}
+
+/** M55 — vintage 155mm SPG on Pershing chassis. */
+const M55_DRIVE: DriveProfile = {
+  maxSpeed: 13.5,
+  maxReverse: 5,
+  accel: 9,
+  reverseAccel: 6,
+  brakeDecel: 22,
+  coastDrag: 5.8,
+  turnRate: 1.9,
+  turnInPlace: 1.0,
+  tiltMax: (4.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
 }
 
 /** Leopard 2A6 — modern MBT, heavy punch + good mobility. */
@@ -941,6 +1015,36 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'm55',
+    name: 'M55',
+    role: 'SPG · 155mm howitzer',
+    blurb: 'Open-top Pershing chassis · map-aim HE · stop to fire',
+    url: assetUrl('models/m55.glb?v=1'),
+    reloadSec: 9.5,
+    recoilScale: 0.55,
+    maxHp: 920,
+    targetWidth: 3.25,
+    vintageCrew: true,
+    nation: 'usa',
+    artillery: true,
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 65,
+    rigidRig: false,
+    drive: M55_DRIVE,
+    armor: armorKit({ front: 25, side: 13, rear: 13, turret: 13 }),
+    gun: {
+      aphePen: 70,
+      apheDmg: 320,
+      hePen: 48,
+      heDmg: 210,
+      heBlast: 480,
+      traverseRadPerSec: 3.8,
+      elevateRadPerSec: 3.2,
+      apLabel: 'AP',
+      heLabel: 'HE 155',
+    },
+  },
+  {
     id: 'duster',
     name: 'M42 Duster',
     role: 'SPAAG · twin 40mm',
@@ -967,6 +1071,151 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 7.2,
       apLabel: 'AP 40mm',
       heLabel: 'HE-T 40mm',
+    },
+  },
+  {
+    id: 'sheridan',
+    name: 'M551 Sheridan',
+    role: 'Light · Shillelagh ATGM',
+    blurb: 'Airborne light tank · MGM-51 Shillelagh primary · coax MG · aluminum',
+    url: assetUrl('models/m551_sheridan.glb?v=1'),
+    reloadSec: 6.0,
+    /** No conventional main shells — Shillelagh ATGM + coax. */
+    noMainGun: true,
+    maxHp: 680,
+    targetWidth: 2.8,
+    vintageCrew: false,
+    nation: 'usa',
+    samMissiles: true,
+    samAmmo: 8,
+    samReloadSec: 7.0,
+    samSpeed: 100,
+    samDamage: 1050,
+    samPen: 920,
+    samLabel: 'Shillelagh',
+    aimPitchMinDeg: -8,
+    aimPitchMaxDeg: 19,
+    rigidRig: false,
+    drive: SHERIDAN_DRIVE,
+    armor: armorKit({ front: 38, side: 25, rear: 20, turret: 38 }),
+    gun: {
+      aphePen: 0,
+      apheDmg: 0,
+      hePen: 0,
+      heDmg: 0,
+      heBlast: 0,
+      traverseRadPerSec: 7.2,
+      elevateRadPerSec: 5.5,
+      apLabel: '—',
+      heLabel: '—',
+    },
+  },
+  {
+    id: 'm901',
+    name: 'M901 ITV',
+    role: 'ATGM · twin TOW',
+    blurb: 'M113 hammerhead · TOW primary · lock+fire · soft aluminum',
+    url: assetUrl('models/m901_itv.glb?v=1'),
+    reloadSec: 6.0,
+    noMainGun: true,
+    maxHp: 620,
+    targetWidth: 2.7,
+    vintageCrew: false,
+    nation: 'usa',
+    samMissiles: true,
+    samAmmo: 10,
+    samReloadSec: 5.5,
+    samSpeed: 95,
+    samDamage: 980,
+    samPen: 900,
+    samLabel: 'TOW',
+    aimPitchMinDeg: -10,
+    aimPitchMaxDeg: 35,
+    rigidRig: false,
+    drive: M901_DRIVE,
+    armor: armorKit({ front: 28, side: 18, rear: 14, turret: 20 }),
+    gun: {
+      aphePen: 0,
+      apheDmg: 0,
+      hePen: 0,
+      heDmg: 0,
+      heBlast: 0,
+      traverseRadPerSec: 6.5,
+      elevateRadPerSec: 5.0,
+      apLabel: '—',
+      heLabel: '—',
+    },
+  },
+  {
+    id: 'bradley',
+    name: 'M2 Bradley',
+    role: 'IFV · 25mm + TOW',
+    blurb: 'Bushmaster · coax MG · TOW ATGM (1/2/3) · aluminum armor',
+    url: assetUrl('models/bradley.glb?v=2'),
+    reloadSec: 0.14,
+    recoilScale: 0.12,
+    maxHp: 780,
+    targetWidth: 3.2,
+    vintageCrew: false,
+    nation: 'usa',
+    samMissiles: true,
+    samAmmo: 4,
+    samReloadSec: 6.5,
+    samSpeed: 95,
+    samDamage: 920,
+    samPen: 850,
+    samLabel: 'TOW',
+    aimPitchMinDeg: -8,
+    aimPitchMaxDeg: 58,
+    rigidRig: false,
+    drive: BRADLEY_DRIVE,
+    armor: armorKit({ front: 38, side: 22, rear: 16, turret: 32 }),
+    gun: {
+      aphePen: 72,
+      apheDmg: 125,
+      hePen: 14,
+      heDmg: 78,
+      heBlast: 115,
+      traverseRadPerSec: 7.8,
+      elevateRadPerSec: 6.4,
+      apLabel: 'APDS-T 25mm',
+      heLabel: 'HEI-T 25mm',
+    },
+  },
+  {
+    id: 'm3a3',
+    name: 'M3A3 Bradley',
+    role: 'CFV · 25mm + TOW',
+    blurb: 'Cavalry Fighting Vehicle · Bushmaster · TOW ATGM (1/2/3) · aluminum armor',
+    url: assetUrl('models/bradley_m3a3.glb?v=1'),
+    reloadSec: 0.14,
+    recoilScale: 0.12,
+    maxHp: 740,
+    targetWidth: 3.15,
+    vintageCrew: false,
+    nation: 'usa',
+    samMissiles: true,
+    samAmmo: 4,
+    samReloadSec: 6.5,
+    samSpeed: 95,
+    samDamage: 920,
+    samPen: 850,
+    samLabel: 'TOW',
+    aimPitchMinDeg: -8,
+    aimPitchMaxDeg: 58,
+    rigidRig: false,
+    drive: M3A3_DRIVE,
+    armor: armorKit({ front: 36, side: 20, rear: 15, turret: 30 }),
+    gun: {
+      aphePen: 72,
+      apheDmg: 125,
+      hePen: 14,
+      heDmg: 78,
+      heBlast: 115,
+      traverseRadPerSec: 8.0,
+      elevateRadPerSec: 6.6,
+      apLabel: 'APDS-T 25mm',
+      heLabel: 'HEI-T 25mm',
     },
   },
   {
@@ -1256,7 +1505,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'Pantsir-S2',
     role: 'SPAAG / SAM · 30mm + missiles',
     blurb: 'Radar lock · off-boresight SAMs · shreds aircraft',
-    url: assetUrl('models/pantsir_s2.glb?v=1'),
+    url: assetUrl('models/pantsir_s2.glb?v=2'),
     reloadSec: 0.18,
     maxHp: 720,
     targetWidth: 3.0,
@@ -1338,7 +1587,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'F4U-1A Corsair',
     role: 'Fighter-bomber · air',
     blurb: 'Bent-wing carrier fighter · six .50s · bombs + HVAR rockets',
-    url: assetUrl('models/f4u_corsair.glb?v=7'),
+    url: assetUrl('models/f4u_corsair.glb?v=8'),
     reloadSec: 0.12,
     maxHp: 520,
     // Wingspan, not track gauge — the air rig scales from this.

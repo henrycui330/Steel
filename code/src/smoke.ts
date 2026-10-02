@@ -33,6 +33,8 @@ export type SmokeSystem = {
     intensity?: number,
   ) => void
   damageLeak: (origin: THREE.Vector3, intensity?: number) => void
+  /** Oily fuel vapour; `hot` when tank is empty / cooking. */
+  fuelLeak: (origin: THREE.Vector3, intensity?: number, hot?: boolean) => void
   wreckPlume: (origin: THREE.Vector3) => void
   /** Orange fire tongues + black smoke for burning wrecks (burst). */
   wreckFire: (origin: THREE.Vector3) => void
@@ -276,6 +278,38 @@ export async function createSmokeSystem(scene: THREE.Scene): Promise<SmokeSystem
             grow: 1.6,
             opacity: 0.35 * intensity,
             color: 0x6a6864,
+          },
+        )
+      }
+    },
+
+    /** Dark oily fuel vapour + occasional hot spark when tank is empty/cooking. */
+    fuelLeak(origin, intensity = 1, hot = false) {
+      const n = Math.max(1, Math.round(2 + intensity * 2))
+      for (let i = 0; i < n; i++) {
+        const isHot = hot && Math.random() < 0.35
+        spawn(
+          origin
+            .clone()
+            .add(
+              new THREE.Vector3(
+                (Math.random() - 0.5) * 0.8,
+                0.6 + Math.random() * 0.5,
+                (Math.random() - 0.5) * 0.8 - 0.4,
+              ),
+            ),
+          new THREE.Vector3(
+            (Math.random() - 0.5) * 0.5,
+            0.7 + Math.random() * (isHot ? 2.2 : 1.2),
+            (Math.random() - 0.5) * 0.5,
+          ),
+          {
+            size: 0.7 + Math.random() * 0.9,
+            life: 1.1 + Math.random() * 1.2,
+            grow: 1.8,
+            opacity: (isHot ? 0.55 : 0.4) * Math.min(1.4, intensity),
+            color: isHot ? 0xc45a2a : 0x3a3830,
+            hot: isHot,
           },
         )
       }

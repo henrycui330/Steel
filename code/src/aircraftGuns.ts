@@ -4,6 +4,7 @@ import { shellPenetrationAtSpeed } from './armor'
 import type { DummyTarget } from './dummy'
 import type { GunProfile } from './tankCatalog'
 import { playRocketFireSound } from './audio'
+import { segmentHitsPropCollider, type PropCollider } from './collision'
 
 /**
  * Six wing-mounted .50 cals for the Corsair.
@@ -78,6 +79,8 @@ export type GunOptions = {
   bounds: { x: number; z: number }
   /** Aircraft world velocity, added to muzzle velocity. */
   velocity: THREE.Vector3
+  /** Buildings / arena walls. */
+  propColliders?: readonly PropCollider[]
   /**
    * Local muzzle stations. Default = six wing .50s.
    * Pass a single nose station for jets (e.g. F-16 M61).
@@ -133,6 +136,8 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
   const _convergeW = new THREE.Vector3()
   const _dir = new THREE.Vector3()
   const _step = new THREE.Vector3()
+  const _prev = new THREE.Vector3()
+  const walls = opts.propColliders ?? []
 
   function takeMesh(tracer: boolean): THREE.Mesh {
     const mesh = pool.pop() ?? new THREE.Mesh(geometry, plainMat)
@@ -217,6 +222,7 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
       }
 
       b.velocity.y -= SHELL_GRAVITY * dt
+      _prev.copy(b.mesh.position)
       _step.copy(b.velocity).multiplyScalar(dt)
       b.mesh.position.add(_step)
       const p = b.mesh.position
@@ -227,6 +233,14 @@ export function createAircraftGuns(opts: GunOptions): AircraftGuns {
       }
 
       if (p.y <= heightAt(p.x, p.z)) {
+        retire(i)
+        continue
+      }
+
+      if (
+        walls.length > 0 &&
+        segmentHitsPropCollider(_prev, p, walls, BULLET_RADIUS)
+      ) {
         retire(i)
         continue
       }

@@ -2,8 +2,8 @@
 
 export type AmmoId = 'he' | 'aphe' | 'mg'
 
-/** Primary cannon vs coaxial machine gun. */
-export type WeaponId = 'main' | 'mg'
+/** Primary cannon vs coaxial machine gun vs ATGM / SAM. */
+export type WeaponId = 'main' | 'mg' | 'atgm'
 
 export type AmmoDef = {
   id: AmmoId
