@@ -122,8 +122,13 @@ export type ShellImpact = {
   speed: number
   basePenetration: number
   baseDamage: number
-  /** HE blast applied when the round cannot pen. */
+  /** HE blast applied when the round cannot pen (external). */
   blastDamage?: number
+  /**
+   * APHE filler — applied to the **hull** only after a successful penetration.
+   * Never used as fail-to-pen splash.
+   */
+  internalBlast?: number
 }
 
 /**

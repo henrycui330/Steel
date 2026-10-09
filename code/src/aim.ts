@@ -28,6 +28,8 @@ let pitchMin = THREE.MathUtils.degToRad(-8)
 let pitchMax = THREE.MathUtils.degToRad(20)
 let aimPitchMin = THREE.MathUtils.degToRad(-12)
 let aimPitchMax = THREE.MathUtils.degToRad(28)
+/** Casemate / fixed-superstructure gun: max |local yaw| (rad). null = full traverse. */
+let yawLimitRad: number | null = null
 
 let bound = false
 /** Turret yaw relative to hull (not world/map). */
@@ -38,6 +40,11 @@ let aimReady = false
 let heightAt: HeightSampler | null = null
 /** Hull used to lift local aim into world each frame. */
 let aimHull: THREE.Object3D | null = null
+
+function clampAimYaw(): void {
+  if (yawLimitRad == null) return
+  aimLocalYaw = THREE.MathUtils.clamp(aimLocalYaw, -yawLimitRad, yawLimitRad)
+}
 
 export type AimTarget = {
   root: THREE.Object3D
@@ -67,6 +74,7 @@ export function bindMouseAim(): void {
     if (!document.pointerLockElement) return
     const sens = aimPrecision ? AIM_SENS_ZOOMED : AIM_SENS
     aimLocalYaw -= e.movementX * sens
+    clampAimYaw()
     aimLocalPitch -= e.movementY * sens
     aimLocalPitch = THREE.MathUtils.clamp(aimLocalPitch, aimPitchMin, aimPitchMax)
   })
@@ -104,9 +112,29 @@ export function resetAimPitchLimits(): void {
   setAimPitchLimits(-8, 20)
 }
 
+/**
+ * Limit hull-relative gun yaw (casemate TD — Hetzer etc.).
+ * Pass null to restore full 360° turret traverse.
+ */
+export function setAimYawLimits(maxAbsDeg: number | null): void {
+  yawLimitRad =
+    maxAbsDeg == null ? null : THREE.MathUtils.degToRad(Math.abs(maxAbsDeg))
+  clampAimYaw()
+  console.info(
+    yawLimitRad == null
+      ? '[Steel] Aim yaw · full traverse'
+      : `[Steel] Aim yaw · casemate ±${(yawLimitRad * 57.3).toFixed(0)}°`,
+  )
+}
+
+export function resetAimYawLimits(): void {
+  setAimYawLimits(null)
+}
+
 /** Overwrite local aim (artillery location mark). */
 export function setAimLocalYawPitch(yaw: number, pitch: number): void {
   aimLocalYaw = yaw
+  clampAimYaw()
   aimLocalPitch = THREE.MathUtils.clamp(pitch, aimPitchMin, aimPitchMax)
 }
 
@@ -194,6 +222,7 @@ export function updateTurretAim(
   aimHull = tank
   if (!aimReady) resetAim()
 
+  clampAimYaw()
   const targetLocalYaw = aimLocalYaw
   const gunPitch = THREE.MathUtils.clamp(aimLocalPitch, pitchMin, pitchMax)
   const targetPitch = -gunPitch

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { DRACOLoader, DRACO_GLTF_CONFIG } from 'three/addons/loaders/DRACOLoader.js'
 import { GLTFLoader, type GLTF } from 'three/addons/loaders/GLTFLoader.js'
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js'
 import { fixPublicUrl } from './assetUrl'
 
 const gltfCache = new Map<string, Promise<GLTF>>()
@@ -268,9 +269,41 @@ export function loadGltfCached(url: string, retries = DEFAULT_RETRIES): Promise<
   return pending
 }
 
+/**
+ * `Object3D.clone` / `SkeletonUtils.clone` share materials + maps with the
+ * cached GLB. Paint, wraps, track UV scroll, wreck charcoal, dummy tint, and
+ * HUD clones then mutate (or dispose) those objects — every other AI/player
+ * of the same chassis goes pink / black / green.
+ *
+ * Clone materials per instance; keep GPU textures shared (except callers that
+ * need their own `map.offset`, e.g. track scroll).
+ */
+export function detachInstanceMaterials(root: THREE.Object3D): number {
+  const cloned = new Map<THREE.Material, THREE.Material>()
+  const cloneOne = (m: THREE.Material): THREE.Material => {
+    let next = cloned.get(m)
+    if (!next) {
+      next = m.clone()
+      cloned.set(m, next)
+    }
+    return next
+  }
+  root.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.material) return
+    const src = obj.material
+    obj.material = Array.isArray(src)
+      ? src.map((m) => (m ? cloneOne(m) : m))
+      : cloneOne(src)
+  })
+  return cloned.size
+}
+
 export async function cloneGltfScene(url: string): Promise<THREE.Object3D> {
   const gltf = await loadGltfCached(url)
-  return gltf.scene.clone(true)
+  const scene = cloneSkinned(gltf.scene)
+  const n = detachInstanceMaterials(scene)
+  console.info(`[Steel] GLB instance ${url.split('/').pop()} · ${n} materials detached`)
+  return scene
 }
 
 export function warmLoaders(): void {

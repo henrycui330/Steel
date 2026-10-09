@@ -29,7 +29,14 @@ export type CombatHitResult = {
   trackSide?: 'L' | 'R' | 'both'
   /** Module that absorbed the damage. */
   moduleId?: ModuleId
+  /** APHE filler damage applied to hull after pen (0 if none). */
+  internalDamage?: number
 }
+
+/** After APHE fuse kills the hull, wait this long before spawning the wreck. */
+const APHE_WRECK_DELAY_SEC = 0.22
+/** Ammo-cook bonus as a fraction of hull max HP (crit after pen — not instakill). */
+const APHE_CRIT_HULL_FRAC = 0.42
 
 export type TrackSideState = {
   leftOut: boolean
@@ -118,9 +125,10 @@ export type Combatant = {
   ) => CombatHitResult | null
   /**
    * Armour resolution **without** applying it — for the kill cam, which has to
-   * know whether a shell in flight is lethal before it lands. Compare
-   * `damage >= hp` to decide; `crit` is a fresh random roll here and will not
-   * match the one the real hit makes, so it can't be predicted.
+   * know whether a shell in flight is lethal before it lands. Compare hull
+   * threat (pen-to-hull + `internalBlast`) to `hp`; random `crit` is not
+   * predictable (saturated plates still add predictable fuse bonus in
+   * `lethalShot`).
    */
   previewShellHit: (
     p: THREE.Vector3,
@@ -193,6 +201,8 @@ export function createCombatant(
   let lastTrackDriveLog = ''
   let fuelWarned = false
   let cookWarned = false
+  /** Lethal APHE fuse — wreck/onDestroyed deferred so the boom reads first. */
+  let pendingApheWreck: { t: number; severe: boolean } | null = null
 
   console.info(
     `[Steel] Modules · ${label} · hull ${modules.hull.maxHp} · turret ${modules.turret.maxHp} · ` +
@@ -243,6 +253,18 @@ export function createCombatant(
       return p.y > -0.5 && p.y < 6
     },
     tickMobility(dt) {
+      if (pendingApheWreck) {
+        pendingApheWreck.t -= dt
+        if (pendingApheWreck.t <= 0) {
+          const severe = pendingApheWreck.severe
+          pendingApheWreck = null
+          console.info(
+            `[Steel] ${label} APHE wreck — fuse complete · severe=${severe}`,
+          )
+          opts.onDestroyed?.(root, { severe })
+        }
+      }
+
       if (trackLDisableLeft > 0) {
         trackLDisableLeft = Math.max(0, trackLDisableLeft - dt)
         if (trackLDisableLeft === 0) {
@@ -321,7 +343,7 @@ export function createCombatant(
           console.info(`[Steel] ${label} tracks BOTH OUT — immobilized`)
         } else if (key === 'L' || key === 'R') {
           console.info(
-            `[Steel] ${label} one-track drive · ${key} out · crawl×${ONE_TRACK_FORWARD} (no auto-steer)`,
+            `[Steel] ${label} track ${key} OUT — TR5 circle (dead side v=0)`,
           )
         }
       }
@@ -352,6 +374,7 @@ export function createCombatant(
       fuelCookAcc = 0
       fuelWarned = false
       cookWarned = false
+      pendingApheWreck = null
       lastTrackDriveLog = ''
       root.visible = true
       console.info(
@@ -372,8 +395,10 @@ export function createCombatant(
       let destroyed = false
       let tracksDisabled = false
       let trackSide: 'L' | 'R' | 'both' | undefined
+      let internalDamage = 0
       const moduleId = moduleForArmorPart(resolution.part.id)
       const mod = modules[moduleId]
+      const isAphe = ctx?.ammoId === 'aphe'
 
       if (resolution.kind === 'penetrated' || resolution.kind === 'blast') {
         const before = mod.hp
@@ -386,7 +411,7 @@ export function createCombatant(
         ) {
           const side: 'L' | 'R' = moduleId === 'trackL' ? 'L' : 'R'
           const force =
-            ctx?.ammoId === 'aphe' || mod.hp <= 0 || before > 0 && mod.hp === 0
+            isAphe || mod.hp <= 0 || (before > 0 && mod.hp === 0)
           if (force || mod.hp <= 0) {
             applyTrackDisable(side)
             tracksDisabled = true
@@ -411,35 +436,66 @@ export function createCombatant(
           })
         }
 
-        // Crit (ammo rack) still kills the tank outright.
+        // APHE: after pen, fuse detonates inside — hull takes filler (+ ammo cook bonus).
+        // Crit is NOT an instakill; it only adds internal hull damage.
+        if (resolution.kind === 'penetrated' && isAphe) {
+          let fuse = Math.max(0, Math.round(shellStats.internalBlast ?? 0))
+          if (resolution.crit) {
+            fuse += Math.round(modules.hull.maxHp * APHE_CRIT_HULL_FRAC)
+          }
+          if (fuse > 0) {
+            modules.hull.hp = Math.max(0, modules.hull.hp - fuse)
+            internalDamage = fuse
+            console.info(
+              `[Steel] ${label} APHE FUSE −${fuse}` +
+                (resolution.crit ? ' (ammo cook)' : '') +
+                ` · hull ${modules.hull.hp}/${modules.hull.maxHp}`,
+            )
+          }
+        }
+
         const hullDead = modules.hull.hp <= 0
-        if (resolution.crit || hullDead) {
+        if (hullDead) {
           alive = false
           destroyed = true
           modules.hull.hp = 0
           const severe = resolution.crit === true
-          const reason = severe ? 'AMMO RACK' : 'HULL DESTROYED'
+          const reason =
+            isAphe && severe
+              ? 'APHE FUSE · AMMO'
+              : isAphe
+                ? 'APHE FUSE · HULL'
+                : severe
+                  ? 'AMMO RACK'
+                  : 'HULL DESTROYED'
           console.info(
-            `[Steel] ${label} ${reason} — ${mod.label} ${resolution.kind} ${resolution.damage} ` +
-              `(${moduleId} ${mod.hp}/${mod.maxHp})`,
+            `[Steel] ${label} ${reason} — ${mod.label} ${resolution.kind} ${resolution.damage}` +
+              (internalDamage ? ` +fuse ${internalDamage}` : '') +
+              ` (${moduleId} ${mod.hp}/${mod.maxHp})`,
           )
           opts.onDamaged?.({
-            damage: resolution.damage,
-            kind: resolution.kind,
+            damage: resolution.damage + internalDamage,
+            kind: isAphe ? 'aphe-fuse' : resolution.kind,
             destroyed: true,
           })
-          opts.onDestroyed?.(root, { severe })
+          if (isAphe && resolution.kind === 'penetrated') {
+            // Boom first; wreck appears after a short fuse delay.
+            pendingApheWreck = { t: APHE_WRECK_DELAY_SEC, severe }
+          } else {
+            opts.onDestroyed?.(root, { severe })
+          }
         } else {
           console.info(
-            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${mod.label} −${resolution.damage} ` +
-              `(${moduleId} ${mod.hp}/${mod.maxHp}` +
+            `[Steel] ${label} ${resolution.kind.toUpperCase()} ${mod.label} −${resolution.damage}` +
+              (internalDamage ? ` · FUSE −${internalDamage}` : '') +
+              ` (${moduleId} ${mod.hp}/${mod.maxHp}` +
               (moduleId !== 'hull'
                 ? ` · hull ${modules.hull.hp}/${modules.hull.maxHp}`
                 : '') +
               `)`,
           )
           opts.onDamaged?.({
-            damage: resolution.damage,
+            damage: resolution.damage + internalDamage,
             kind: resolution.kind,
             destroyed: false,
           })
@@ -461,6 +517,7 @@ export function createCombatant(
         tracksDisabled,
         trackSide,
         moduleId,
+        internalDamage,
       }
     },
   }

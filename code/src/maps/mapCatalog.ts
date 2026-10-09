@@ -46,15 +46,23 @@ function triple(
 }
 
 const FOREST_SPAWNS: TeamSpawns = {
-  red: triple([-60, -860], [0, -900], [60, -860]),
-  blue: triple([-60, 860], [0, 900], [60, 860]),
+  red: triple(
+    [-90 * (FOREST_OVERWATCH_WIDTH / 2000), -880 * (FOREST_OVERWATCH_DEPTH / 2000)],
+    [0, -920 * (FOREST_OVERWATCH_DEPTH / 2000)],
+    [90 * (FOREST_OVERWATCH_WIDTH / 2000), -880 * (FOREST_OVERWATCH_DEPTH / 2000)],
+  ),
+  blue: triple(
+    [-90 * (FOREST_OVERWATCH_WIDTH / 2000), 880 * (FOREST_OVERWATCH_DEPTH / 2000)],
+    [0, 920 * (FOREST_OVERWATCH_DEPTH / 2000)],
+    [90 * (FOREST_OVERWATCH_WIDTH / 2000), 880 * (FOREST_OVERWATCH_DEPTH / 2000)],
+  ),
 }
 
 export const MAP_OPTIONS: MapOption[] = [
   {
     id: 'forest',
     name: 'Forest Overwatch',
-    blurb: '750×2000 pine hills · road clearings · 3 towns',
+    blurb: '5000×5000 pine hills · five towns on the diagonal · flank roads',
     sizeX: FOREST_OVERWATCH_WIDTH,
     sizeZ: FOREST_OVERWATCH_DEPTH,
     size: FOREST_OVERWATCH_SIZE,

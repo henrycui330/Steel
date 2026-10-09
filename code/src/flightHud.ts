@@ -1,6 +1,12 @@
 import './flightHud.css'
 import type { FlightTelemetry } from './aircraftFlight'
-import { createMinimapWidget, type HudKothState, type HudMinimapConfig } from './hud'
+import {
+  applyFrontlineHud,
+  createMinimapWidget,
+  type HudFrontlineState,
+  type HudKothState,
+  type HudMinimapConfig,
+} from './hud'
 import { nationByTeam, nationFlagSrc } from './nations'
 
 /**
@@ -73,6 +79,7 @@ export type FlightHud = {
   ) => void
   setVisible: (visible: boolean) => void
   setKoth: (state: HudKothState | null) => void
+  setFrontline: (state: HudFrontlineState | null) => void
   setRespawn: (secondsLeft: number | null) => void
   /** Top-right scope rect in CSS pixels (DOM coords, origin top-left). */
   scopeRect: () => ScopeRect
@@ -453,6 +460,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
     setKoth(state) {
       kothEl.hidden = !state
       if (!state) return
+      ;(kothEl.querySelector('.koth-label') as HTMLElement).textContent = 'HILL'
       const vPct = Math.min(1, state.vostokHold / state.winSec)
       const mPct = Math.min(1, state.meridianHold / state.winSec)
       ;(kothEl.querySelector('.koth-fill-v') as HTMLElement).style.transform = `scaleX(${vPct})`
@@ -475,6 +483,9 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       } else {
         ownerEl.textContent = 'NEUTRAL'
       }
+    },
+    setFrontline(state) {
+      applyFrontlineHud(kothEl, state)
     },
     setRespawn(secondsLeft) {
       if (secondsLeft == null || secondsLeft <= 0) {

@@ -13,8 +13,8 @@ import {
   createStallAlarm,
 } from './audio'
 import { addArenaWalls, arenaWallColliders, clampToArena, type ArenaHalf } from './arena'
-import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, updateTurretAim, type AimFrame } from './aim'
-import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, resetCameraShake, setTerrainCameraRumble, updatePlayerCamera } from './camera'
+import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, resetAimYawLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, setAimYawLimits, updateTurretAim, type AimFrame } from './aim'
+import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, resetAimCamSight, resetCameraShake, setAimCamSight, setTerrainCameraRumble, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
 import { createCombatant } from './combatant'
 import './cosmetics'
@@ -58,6 +58,7 @@ import { createFlightHud, type MissileHudState } from './flightHud'
 import { createAircraftGuns } from './aircraftGuns'
 import { createAircraftBombs } from './aircraftBombs'
 import { createAircraftRockets } from './aircraftRockets'
+import { resolveAircraftStores } from './aircraftLoadouts'
 import { createImpactCinematic, KILL_SHOT } from './impactCinematic'
 import { createDeathCam, type DeathKiller } from './deathCam'
 import { createMatchTape } from './matchTape'
@@ -67,7 +68,7 @@ import { createEjectAlert } from './ejectAlert'
 import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
 import { onGltfProgress, preloadUrls } from './loadGltf'
-import { showMainMenu, showRespawnHangar, pickLoadingTip, type MenuSelection, type TeamId } from './menu'
+import { showMainMenu, showRespawnHangar, pickLoadingTip, gameModeLabel, type MenuSelection, type TeamId } from './menu'
 import { createLandTutorial, type LandTutorialHandle } from './tutorialLand'
 import { createAirTutorial, type AirTutorialHandle } from './tutorialAir'
 import { createSystemsTutorial, type SystemsTutorialHandle } from './tutorialSystems'
@@ -85,6 +86,20 @@ import {
   setHillRingColor,
   tickKoth,
 } from './koth'
+import {
+  attackTown,
+  createFrontlineRings,
+  createFrontlineState,
+  FRONTLINE_CAPTURE_SEC,
+  FRONTLINE_MATCH_SEC,
+  FRONTLINE_RESPAWN_SEC,
+  frontlineHudPayload,
+  inFrontlineTown,
+  paintFrontlineRings,
+  spawnTown,
+  tickFrontline,
+  frontlineSpawnAnchor,
+} from './frontline'
 import { PALETTE } from './paint'
 import { lockPointer } from './pointerLock'
 import { punchShotRecoil, resetShotRecoil, updateShotRecoil } from './recoil'
@@ -92,6 +107,7 @@ import { createSmokeSystem } from './smoke'
 import { tankOptionById, type TankId } from './tankCatalog'
 import { collectWheels, updateWheels } from './wheels'
 import { collectTracks, updateTracks } from './tracks'
+import { createSuspension } from './suspension'
 import { spawnDestroyedWreck, updateWrecks } from './wreck'
 import { updateExplosions, disposeExplosions } from './explosions'
 import { createEnvironment } from './environment'
@@ -112,7 +128,7 @@ const TANK_RADIUS = 1.8
 /** Spawn altitude above the ground spawn point for aircraft. */
 const AIR_SPAWN_ALT = 140
 /** Aircraft ceiling above map ground level. */
-const AIR_CEILING = 460
+const AIR_CEILING = 2000
 /** Aircraft turn back this far inside the tank arena walls. */
 const AIR_WALL_INSET = 12
 /** Low-alt buzzer while AGL is at or below this (metres). */
@@ -187,7 +203,7 @@ scene.add(sun)
 /** Widen sun shadow frustum for large maps. */
 function configureShadowsForMap(sizeX: number, sizeZ: number): void {
   const arenaSize = Math.max(sizeX, sizeZ)
-  camera.far = Math.max(2000, arenaSize * 2.2)
+  camera.far = Math.max(4000, arenaSize * 2.2, AIR_CEILING + arenaSize * 0.6)
   renderer.shadowMap.enabled = true
   sun.shadow.mapSize.set(2048, 2048)
   const halfX = Math.max(120, sizeX * 0.55)
@@ -203,6 +219,10 @@ function configureShadowsForMap(sizeX: number, sizeZ: number): void {
   if (scene.fog instanceof THREE.Fog) {
     scene.fog.near = Math.min(80, arenaSize * 0.03)
     scene.fog.far = Math.max(900, arenaSize * 0.55)
+  } else if (scene.fog instanceof THREE.FogExp2 && scene.fog.density <= 0.0035) {
+    const vis = Math.max(1400, arenaSize * 0.42)
+    scene.fog.density = Math.min(scene.fog.density, 1.15 / vis)
+    console.info(`[Steel] Forest haze dens=${scene.fog.density.toFixed(5)} vis~${vis.toFixed(0)}m`)
   }
   camera.updateProjectionMatrix()
 }
@@ -264,6 +284,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const { mapId, tankId, team, spawnIndex, redAi, blueAi, timeOfDay, season, weather, gameMode, mp } =
     sel
   const isKoth = gameMode === 'koth'
+  const isFrontline = gameMode === 'frontline'
+  const isWave = isKoth || isFrontline
+  const waveRespawnSec = isFrontline ? FRONTLINE_RESPAWN_SEC : KOTH_RESPAWN_SEC
+  let frontline = createFrontlineState()
+  if (sel.frontlineHold) {
+    frontline = {
+      ...frontline,
+      taken: sel.frontlineHold.taken,
+      captureT: sel.frontlineHold.captureT,
+      recaptureT: sel.frontlineHold.recaptureT,
+      matchT: sel.frontlineHold.matchT,
+    }
+    console.info(
+      `[Steel] Frontline restored · towns ${frontline.taken} · t=${frontline.matchT.toFixed(0)}s`,
+    )
+  }
   const isRemount = !!sel.remount
   const isTutorial = sel.tutorial === 'land-basics'
   const isAirTutorial = sel.tutorial === 'air-basics'
@@ -296,6 +332,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
     setAimPitchLimits(option.aimPitchMinDeg ?? -5, option.aimPitchMaxDeg ?? 85)
   } else {
     resetAimPitchLimits()
+  }
+  if (option.gunTraverseDeg != null) {
+    setAimYawLimits(option.gunTraverseDeg)
+  } else {
+    resetAimYawLimits()
+  }
+  if (option.aimCamBack != null || option.aimCamHeight != null) {
+    setAimCamSight(option.aimCamBack ?? null, option.aimCamHeight ?? null)
+  } else {
+    resetAimCamSight()
   }
   resetShotRecoil()
   resetCameraShake()
@@ -518,7 +564,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         console.info(`[Steel] Air tutorial respawn in ${KOTH_RESPAWN_SEC}s`)
         return
       }
-      if (!isKoth) {
+      if (!isWave) {
         finishAirMatch(
           'lose',
           reason === 'eject' ? 'Ejected' : 'Shot Down',
@@ -527,8 +573,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
             : `You flew ${option.name} into the deck at ${Math.round(speed)} m/s.`,
         )
       } else {
-        flightHud.setRespawn(KOTH_RESPAWN_SEC)
-        console.info(`[Steel] Air KOTH respawn in ${KOTH_RESPAWN_SEC}s`)
+        flightHud.setRespawn(waveRespawnSec)
+        console.info(`[Steel] Air ${gameModeLabel(gameMode)} respawn in ${waveRespawnSec}s`)
       }
     }
 
@@ -607,7 +653,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     stopProgress()
     loading.remove()
     console.info(
-      `[Steel] ${option.name} · ${isKoth ? 'KOTH' : 'Skirmish'} — wingspan ${air.wingspan.toFixed(2)}m · spawn alt ${air.root.position.y.toFixed(0)}m`,
+      `[Steel] ${option.name} · ${gameModeLabel(gameMode)} — wingspan ${air.wingspan.toFixed(2)}m · spawn alt ${air.root.position.y.toFixed(0)}m`,
     )
 
     const chase = createAircraftChaseCamera({
@@ -697,9 +743,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
     if (airHillRing) {
       airHillRing.position.y = sampleY(KOTH_CENTER.x, KOTH_CENTER.z) + 0.12
     }
-    const airObjective = isKoth
-      ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS }
-      : undefined
+    const airFrontRings = isFrontline ? createFrontlineRings(scene, sampleY) : []
+    function airObjective(): { x: number; z: number; radius: number } | undefined {
+      if (isKoth) return { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS }
+      if (isFrontline) {
+        const t = attackTown(frontline)
+        if (!t) return undefined
+        return { x: t.x, z: t.z, radius: t.radius * 0.82 }
+      }
+      return undefined
+    }
     if (isKoth) {
       flightHud.setKoth({
         vostokHold: 0,
@@ -709,6 +762,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
       })
       console.info(
         `[Steel] Air KOTH — ground units hold Midwood ${KOTH_WIN_SEC}s · you strafe · respawn ${KOTH_RESPAWN_SEC}s`,
+      )
+    }
+    if (isFrontline) {
+      flightHud.setFrontline(frontlineHudPayload(frontline))
+      paintFrontlineRings(airFrontRings, frontline)
+      console.info(
+        `[Steel] Air Frontline — ${FRONTLINE_MATCH_SEC / 60} min · capture ${FRONTLINE_CAPTURE_SEC}s · respawn ${FRONTLINE_RESPAWN_SEC}s`,
       )
     }
 
@@ -809,7 +869,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           yaw,
           smoke: smokeEarly ?? undefined,
           heightAt: sampleY,
-          persistMesh: isKoth,
+          persistMesh: isWave,
           onKill: () => airBoard.noteKillById(id),
           onDeath: () => airBoard.noteDeathById(id),
           onStrikePlayer: creditAirStrike,
@@ -876,6 +936,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       },
     })
 
+    const stores = resolveAircraftStores(tankId)
+    console.info(
+      `[Steel] Hangar stores ${option.name}: ${stores.label} · bombs ×${stores.bombCount} · rockets ${stores.rockets ? 'yes' : 'no'}`,
+    )
+
     const guns = createAircraftGuns({
       scene,
       root: air.root,
@@ -896,44 +961,46 @@ async function startMission(sel: MenuSelection): Promise<void> {
       console.info(`[Steel] Corsair guns destroyed ${victim.name || 'target'}`)
     })
 
-    const bombs = createAircraftBombs({
-      scene,
-      root: air.root,
-      heightAt: sampleY,
-      bounds: playable,
-      velocity: flight.velocity,
-      bombCount: option.aircraftBombCount,
-      propColliders: mapColliders,
-    })
-    bombs.setOnKill((victim) => {
-      airBoard.noteKill(air.root)
-      console.info(`[Steel] Bomb destroyed ${victim.name || 'target'}`)
-    })
-    bombs.setOnRelease(() => {
-      tutorialBombDropped = true
-    })
-    if (option.aircraftBombCount && option.aircraftBombCount > 2) {
-      console.info(
-        `[Steel] ${option.name} armed — bombs ×${option.aircraftBombCount} · press B`,
-      )
-    }
-
-    const rockets =
-      tankId === 'corsair'
-        ? createAircraftRockets({
+    const bombs =
+      stores.bombCount > 0
+        ? createAircraftBombs({
             scene,
             root: air.root,
             heightAt: sampleY,
             bounds: playable,
             velocity: flight.velocity,
+            bombCount: stores.bombCount,
             propColliders: mapColliders,
           })
         : null
+    bombs?.setOnKill((victim) => {
+      airBoard.noteKill(air.root)
+      console.info(`[Steel] Bomb destroyed ${victim.name || 'target'}`)
+    })
+    bombs?.setOnRelease(() => {
+      tutorialBombDropped = true
+    })
+    if (stores.bombCount > 0) {
+      console.info(
+        `[Steel] ${option.name} armed — bombs ×${stores.bombCount} · press B`,
+      )
+    }
+
+    const rockets = stores.rockets
+      ? createAircraftRockets({
+          scene,
+          root: air.root,
+          heightAt: sampleY,
+          bounds: playable,
+          velocity: flight.velocity,
+          propColliders: mapColliders,
+        })
+      : null
     rockets?.setOnKill((victim) => {
       airBoard.noteKill(air.root)
-      console.info(`[Steel] Corsair HVAR destroyed ${victim.name || 'target'}`)
+      console.info(`[Steel] Hangar rockets destroyed ${victim.name || 'target'}`)
     })
-    if (rockets) console.info('[Steel] Corsair armed — HVAR ×8 · press R')
+    if (rockets) console.info(`[Steel] ${option.name} armed — rockets · press R`)
 
     // Bombsight scope renders the target area as a second, narrow-FOV pass.
     // Off by default so the extra draw call is opt-in.
@@ -1083,13 +1150,27 @@ async function startMission(sel: MenuSelection): Promise<void> {
       return n
     }
 
+    function countAirInTown(
+      town: { x: number; z: number; radius: number } | null,
+      side: TeamId,
+    ): number {
+      if (!town) return 0
+      let n = 0
+      const list = side === team ? airFriendlies : airEnemies
+      for (const u of list) {
+        if (u.aircraft) continue
+        if (u.alive && inFrontlineTown(town, u.root.position.x, u.root.position.z)) n++
+      }
+      return n
+    }
+
     function respawnAirPlayer(): void {
       const pos = spawnAt(team, spawnIndex)
       const yaw = Math.atan2(-pos.x, -pos.z)
       pos.y = sampleY(pos.x, pos.z) + (isAirTutorial ? 42 : AIR_SPAWN_ALT)
       flight.reset(pos, yaw, isAirTutorial ? 0.28 : 0.55)
       guns.refill()
-      bombs.refill()
+      bombs?.refill()
       rockets?.refill()
       airPlayerCombat.revive()
       chase.reset()
@@ -1105,20 +1186,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     function tickAirRespawns(dt: number): void {
-      if ((!isKoth && !isAirTutorial) || airEnded) return
+      if ((!isWave && !isAirTutorial) || airEnded) return
       if (airCrashed) {
         airDeadFor += dt
-        flightHud.setRespawn(Math.max(0, KOTH_RESPAWN_SEC - airDeadFor))
-        if (airDeadFor >= KOTH_RESPAWN_SEC) respawnAirPlayer()
+        flightHud.setRespawn(Math.max(0, waveRespawnSec - airDeadFor))
+        if (airDeadFor >= waveRespawnSec) respawnAirPlayer()
+        // Same as ground: don't refill AI while the player is waiting to respawn.
+        if (isWave) return
       }
-      if (!isKoth) return
+      if (!isWave) return
       for (const rec of airAiSlots) {
         if (rec.unit.alive) {
           rec.deadFor = 0
           continue
         }
         rec.deadFor += dt
-        if (rec.deadFor >= KOTH_RESPAWN_SEC) {
+        if (rec.deadFor >= waveRespawnSec) {
           const pos = spawnAt(rec.teamSide, rec.slot)
           rec.unit.reviveAt(pos, Math.atan2(-pos.x, -pos.z))
           rec.deadFor = 0
@@ -1286,7 +1369,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             playable,
             colliders: mapColliders,
             camera,
-            objective: airObjective,
+            objective: airObjective(),
           })
         }
         for (const unit of airFriendlies) {
@@ -1296,7 +1379,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             playable,
             colliders: mapColliders,
             camera,
-            objective: airObjective,
+            objective: airObjective(),
           })
         }
 
@@ -1309,7 +1392,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             scopeOn = !scopeOn
             console.info(`[Steel] Bombsight ${scopeOn ? 'ON' : 'OFF'}`)
           }
-          bombs.update(dt, input.dropBomb, gunTargets, camera)
+          bombs?.update(dt, input.dropBomb, gunTargets, camera)
           rockets?.update(dt, input.fireRocket, airEnemies)
         } else {
           rockets?.update(dt, false, airEnemies)
@@ -1324,7 +1407,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             bankDeg: tm.bank,
             firing: guns.firing(),
             bombDropped: tutorialBombDropped,
-            bombsLeft: bombs.remaining(),
+            bombsLeft: bombs?.remaining() ?? 0,
             ejectArmed: ejectAlert.active(),
             ejected: ejectCam.active() || airCrashed,
           })
@@ -1355,6 +1438,31 @@ async function startMission(sel: MenuSelection): Promise<void> {
               airKoth.winner,
             )
           }
+        } else if (isFrontline) {
+          const obj = attackTown(frontline)
+          const held = spawnTown(frontline)
+          frontline = tickFrontline(
+            frontline,
+            dt,
+            countAirInTown(obj, 'red'),
+            countAirInTown(obj, 'blue'),
+            countAirInTown(held, 'red'),
+            countAirInTown(held, 'blue'),
+          )
+          paintFrontlineRings(airFrontRings, frontline)
+          flightHud.setFrontline(frontlineHudPayload(frontline))
+          if (frontline.winner) {
+            const won = frontline.winner === team
+            const winner = nationByTeam(frontline.winner)
+            finishAirMatch(
+              won ? 'win' : 'lose',
+              won ? 'Victory' : 'Defeat',
+              frontline.winner === 'red'
+                ? `${winner.name} took every town.`
+                : `${winner.name} held the line.`,
+              frontline.winner,
+            )
+          }
         } else if (
           !isAirTutorial &&
           !airCrashed &&
@@ -1371,7 +1479,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
       updateExplosions(dt)
       smokeEarly?.update(dt, camera)
 
-      const pred = bombs.prediction()
+      const pred = bombs?.prediction() ?? {
+        point: air.root.position,
+        time: 0,
+        valid: false,
+        lethal: false,
+      }
       _mapNose.set(0, 0, 1).applyQuaternion(air.root.quaternion)
       let mapHeading = THREE.MathUtils.radToDeg(Math.atan2(_mapNose.x, _mapNose.z))
       if (mapHeading < 0) mapHeading += 360
@@ -1426,12 +1539,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
       flightHud.update(
         tm,
         { ammo: guns.ammo(), heat: guns.heat(), firing: guns.firing() },
-        {
-          remaining: bombs.remaining(),
-          fallTime: pred.valid ? pred.time : null,
-          onTarget: pred.valid && pred.lethal,
-          scopeOn,
-        },
+        bombs
+          ? {
+              remaining: bombs.remaining(),
+              fallTime: pred.valid ? pred.time : null,
+              onTarget: pred.valid && pred.lethal,
+              scopeOn,
+            }
+          : undefined,
         {
           hp: airPlayerCombat.hp,
           maxHp: option.maxHp,
@@ -1482,15 +1597,19 @@ async function startMission(sel: MenuSelection): Promise<void> {
   }
 
   function spawnAt(teamSide: TeamId, index: number): THREE.Vector3 {
-    const list = mapSpawns[teamSide]
-    const base = list[index] ?? list[0]!
-    // Spiral out of any leftover collider overlap.
-    const clear = findClearSpawnNear(base.x, base.z, mapColliders, {
+    const anchored = isFrontline
+      ? frontlineSpawnAnchor(frontline, teamSide, index, mapSpawns)
+      : (() => {
+          const list = mapSpawns[teamSide]
+          const base = list[index] ?? list[0]!
+          return { x: base.x, z: base.z }
+        })()
+    const clear = findClearSpawnNear(anchored.x, anchored.z, mapColliders, {
       radius: TANK_RADIUS + 1.2,
       playableHalfX: playable.x,
       playableHalfZ: playable.z,
       maxRange: 280,
-      y: sampleY(base.x, base.z) + 1.2,
+      y: sampleY(anchored.x, anchored.z) + 1.2,
     })
     const pos = new THREE.Vector3(clear.x, 0, clear.z)
     pos.y = sampleY(pos.x, pos.z)
@@ -1561,7 +1680,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             yaw,
             smoke,
             heightAt: sampleY,
-            persistMesh: isKoth,
+            persistMesh: isWave,
             onKill: () => board.noteKillById(id),
             onDeath: () => board.noteDeathById(id),
             onStrikePlayer: creditPlayerStrike,
@@ -1603,7 +1722,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             yaw,
             smoke,
             heightAt: sampleY,
-            persistMesh: isKoth,
+            persistMesh: isWave,
             onKill: () => board.noteKillById(id),
             onDeath: () => board.noteDeathById(id),
             onStrikePlayer: creditPlayerStrike,
@@ -1840,7 +1959,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       onDestroyed: (r) => {
         board.noteDeath(r)
         console.info('[Steel] Player destroyed')
-        spawnDestroyedWreck(scene, r, smoke, isKoth)
+        spawnDestroyedWreck(scene, r, smoke, isWave)
         tankTape.mark('death')
         if (lastKiller) pendingDeathCam = true
       },
@@ -1898,6 +2017,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const trackBands = collectTracks(tank, {
       hullInference: option.nation === 'germany',
     })
+    const suspension = createSuspension(tank, wheels, trackBands)
     console.info(
       `[Steel] TP2 drivetrain (${option.nation ?? '—'}) — wheels L/R ${wheels.left.length}/${wheels.right.length} · track bands ${trackBands.length}`,
     )
@@ -1929,6 +2049,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       ],
       hill: isKoth ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS } : undefined,
     })
+    hud.bindDamageTank(tank, turret, barrel)
     hud.setVisible(true)
 
     // L1 lock-on: SPAAG / ATGM (auto-aim in L2 for AA).
@@ -2091,9 +2212,16 @@ async function startMission(sel: MenuSelection): Promise<void> {
     if (hillRing) {
       hillRing.position.y = sampleY(KOTH_CENTER.x, KOTH_CENTER.z) + 0.12
     }
-    const kothObjective = isKoth
-      ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS }
-      : undefined
+    const frontRings = isFrontline ? createFrontlineRings(scene, sampleY) : []
+    function liveObjective(): { x: number; z: number; radius: number } | undefined {
+      if (isKoth) return { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS }
+      if (isFrontline) {
+        const t = attackTown(frontline)
+        if (!t) return undefined
+        return { x: t.x, z: t.z, radius: t.radius * 0.82 }
+      }
+      return undefined
+    }
     const _exhaust = new THREE.Vector3()
     const _muzzleWorld = new THREE.Vector3()
     const _fwd = new THREE.Vector3()
@@ -2173,6 +2301,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
         `[Steel] King of the Hill — hold Midwood ${KOTH_WIN_SEC}s · respawn ${KOTH_RESPAWN_SEC}s`,
       )
     }
+    if (isFrontline) {
+      hud.setFrontline(frontlineHudPayload(frontline))
+      paintFrontlineRings(frontRings, frontline)
+      console.info(
+        `[Steel] Push the Frontline — attackers take towns in order · capture ${FRONTLINE_CAPTURE_SEC}s · ${FRONTLINE_MATCH_SEC / 60} min · respawn ${FRONTLINE_RESPAWN_SEC}s`,
+      )
+    }
 
     function countOnHill(side: TeamId): number {
       let n = 0
@@ -2181,6 +2316,23 @@ async function startMission(sel: MenuSelection): Promise<void> {
       for (const u of list) {
         if (u.aircraft) continue
         if (u.alive && inHill(u.root.position.x, u.root.position.z)) n++
+      }
+      return n
+    }
+
+    function countInTown(
+      town: { x: number; z: number; radius: number } | null,
+      side: TeamId,
+    ): number {
+      if (!town) return 0
+      let n = 0
+      if (playerCombat.alive && team === side && inFrontlineTown(town, tank.position.x, tank.position.z)) {
+        n++
+      }
+      const list = side === team ? friendlies : enemies
+      for (const u of list) {
+        if (u.aircraft) continue
+        if (u.alive && inFrontlineTown(town, u.root.position.x, u.root.position.z)) n++
       }
       return n
     }
@@ -2213,7 +2365,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       respawnUiOpen = false
       hud.setRespawn(null)
       dieselEngine.setIntensity(0.2)
-      console.info(`[Steel] Player KOTH respawn · ${liveTankId} · spawn ${liveSpawnIndex + 1}`)
+      console.info(`[Steel] Player respawn · ${liveTankId} · spawn ${liveSpawnIndex + 1}`)
     }
 
     async function openRespawnHangarFlow(): Promise<void> {
@@ -2234,12 +2386,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
           timeOfDay,
           season,
           weather,
+          frontlineHold: isFrontline
+            ? {
+                taken: frontline.taken,
+                captureT: frontline.captureT,
+                recaptureT: frontline.recaptureT,
+                matchT: frontline.matchT,
+              }
+            : undefined,
         })
         liveSpawnIndex = pick.spawnIndex
         if (pick.tankId !== liveTankId) {
-          // Chassis swap needs a remount — keep hill clocks so the match doesn't rewind.
+          // Chassis swap needs a remount — keep clocks so the match doesn't rewind.
           console.info(
-            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting (KOTH clocks kept)`,
+            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting (clocks kept)`,
           )
           sessionStorage.setItem(
             'steel.rematch',
@@ -2259,6 +2419,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
                 vostokHold: koth.vostokHold,
                 meridianHold: koth.meridianHold,
               },
+              frontlineHold: {
+                taken: frontline.taken,
+                captureT: frontline.captureT,
+                recaptureT: frontline.recaptureT,
+                matchT: frontline.matchT,
+              },
             } satisfies MenuSelection),
           )
           window.location.reload()
@@ -2276,26 +2442,32 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     function tickRespawns(dt: number): void {
-      if (!isKoth || matchOver) return
+      if (!isWave || matchOver) return
       if (!playerCombat.alive) {
-        if (respawnUiOpen) return
-        playerDeadFor += dt
-        hud.setRespawn(Math.max(0, KOTH_RESPAWN_SEC - playerDeadFor))
-        if (playerDeadFor >= KOTH_RESPAWN_SEC) void openRespawnHangarFlow()
-      } else {
-        playerDeadFor = 0
-        hud.setRespawn(null)
+        if (!respawnUiOpen) {
+          playerDeadFor += dt
+          hud.setRespawn(Math.max(0, waveRespawnSec - playerDeadFor))
+          if (playerDeadFor >= waveRespawnSec) void openRespawnHangarFlow()
+        }
+        // Freeze AI respawns while the player is dead / in hangar — same 5s
+        // timer was bringing the whole map back the moment you redeployed.
+        return
       }
+      playerDeadFor = 0
+      hud.setRespawn(null)
       for (const rec of aiSlots) {
         if (rec.unit.alive) {
           rec.deadFor = 0
           continue
         }
         rec.deadFor += dt
-        if (rec.deadFor >= KOTH_RESPAWN_SEC) {
+        if (rec.deadFor >= waveRespawnSec) {
           const pos = spawnAt(rec.teamSide, rec.slot)
           rec.unit.reviveAt(pos, Math.atan2(-pos.x, -pos.z))
           rec.deadFor = 0
+          console.info(
+            `[Steel] AI respawn · ${rec.teamSide} slot ${rec.slot + 1}`,
+          )
         }
       }
     }
@@ -2321,6 +2493,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       sovietCrew?.stop()
       document.exitPointerLock()
       hud.setVisible(false)
+      hud.dispose()
       killInd.setVisible(false)
       unsubKill()
       killInd.dispose()
@@ -2377,6 +2550,21 @@ async function startMission(sel: MenuSelection): Promise<void> {
           team: koth.winner,
           title: won ? 'Victory' : 'Defeat',
           sub: `${winner.name} held Midwood.`,
+        })
+        return
+      }
+      if (isFrontline) {
+        if (!frontline.winner) return
+        const won = frontline.winner === team
+        const winner = nationByTeam(frontline.winner)
+        requestMatchEnd({
+          kind: won ? 'win' : 'lose',
+          team: frontline.winner,
+          title: won ? 'Victory' : 'Defeat',
+          sub:
+            frontline.winner === 'red'
+              ? `${winner.name} took every town.`
+              : `${winner.name} held the line.`,
         })
         return
       }
@@ -2443,18 +2631,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
         const mods = env.getDriveMods()
         drive.setMobilityMul(mods.mobilityMul)
         drive.setSlip(mods.slip)
-        const driveFwd = trackDrive.immobilized
-          ? 0
-          : forward * trackDrive.forwardMul
-        // Only turn when the player steers — never auto-yaw from a dead track.
-        const driveTurn = trackDrive.immobilized
-          ? 0
-          : turn * trackDrive.turnMul
+        // TR5 — drive zeros the dead track; no crawl mul / no mute steer.
+        drive.setTrackOut(trackDrive.leftOut, trackDrive.rightOut)
         drive.update(
           dt,
           {
-            forward: driveFwd,
-            turn: driveTurn,
+            forward: trackDrive.immobilized ? 0 : forward,
+            turn: trackDrive.immobilized ? 0 : turn,
             brake: trackDrive.immobilized || brake,
           },
           tank,
@@ -2481,21 +2664,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
           }
         }
         wasAirborne = airNow
+        suspension.update(dt, tank, sampleY)
         if (wheels) {
-          updateWheels(
-            wheels,
-            dt,
-            trackDrive.immobilized ? 0 : drive.getSpeed(),
-            trackDrive.immobilized ? 0 : driveTurn,
-          )
+          const ts = drive.getTrackSpeeds()
+          updateWheels(wheels, dt, ts.left, ts.right)
         }
         if (trackBands.length > 0) {
-          updateTracks(
-            trackBands,
-            dt,
-            trackDrive.immobilized ? 0 : drive.getSpeed(),
-            trackDrive.immobilized ? 0 : driveTurn,
-          )
+          const ts = drive.getTrackSpeeds()
+          updateTracks(trackBands, dt, ts.left, ts.right)
         }
         arty?.update(Math.abs(drive.getSpeed()))
       } else {
@@ -2797,7 +2973,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             playable,
             colliders: mapColliders,
             camera,
-            objective: kothObjective,
+            objective: liveObjective(),
           })
         }
       }
@@ -2815,6 +2991,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
           owner: koth.owner,
           winSec: KOTH_WIN_SEC,
         })
+      }
+      if (isFrontline && !matchOver) {
+        const obj = attackTown(frontline)
+        const held = spawnTown(frontline)
+        frontline = tickFrontline(
+          frontline,
+          dt,
+          countInTown(obj, 'red'),
+          countInTown(obj, 'blue'),
+          countInTown(held, 'red'),
+          countInTown(held, 'blue'),
+        )
+        paintFrontlineRings(frontRings, frontline)
+        hud.setFrontline(frontlineHudPayload(frontline))
       }
       checkMatchEnd()
 
@@ -2906,6 +3096,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       hud.updateCombat({
         hp: playerCombat.hp,
         maxHp: option.maxHp,
+        tankId,
         fire: fire.getHudState(),
         tracksDisableLeft: playerCombat.getTracksDisableLeft(),
         trackLeftOut: trackState.leftOut,
@@ -2920,6 +3111,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           ? `${samLabel} ${sam.ammo()} · 1 gun · 2 MG · 3 ATGM · P lock · LMB/M`
           : arty?.getHud().status,
         headingRad: tank.rotation.y,
+        turretRelRad: turret.rotation.y,
         speedU: drive.getSpeed(),
         rangeM: aim.rangeM,
         posX: tank.position.x,
@@ -2936,7 +3128,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     }
 
     console.info(
-      `[Steel] Deployed ${option.name} · ${isKoth ? 'KOTH' : 'Skirmish'} · ${nationByTeam(team).short} spawn ${spawnIndex + 1} — foes ${enemies.length}, allies ${friendlies.length} — ${timeOfDay}/${season}/${weather}`,
+      `[Steel] Deployed ${option.name} · ${gameModeLabel(gameMode)} · ${nationByTeam(team).short} spawn ${spawnIndex + 1} — foes ${enemies.length}, allies ${friendlies.length} — ${timeOfDay}/${season}/${weather}`,
     )
     animate()
   } catch (err) {

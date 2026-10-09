@@ -236,12 +236,13 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     console.warn(`[Steel] ${opts.name} propeller node not found — prop will not spin`)
   }
 
-  const propSpinners = propNodes.map((obj) => ({
-    obj,
-    axis: localSpinAxis(obj),
-  }))
+  const propSpinners = propNodes.map((obj) => {
+    const axis = localSpinAxis(obj)
+    const restQuat = obj.quaternion.clone()
+    return { obj, axis, restQuat, angle: 0 }
+  })
   const propeller = propSpinners[0]?.obj ?? null
-  const propAxis = propSpinners[0]?.axis ?? new THREE.Vector3(0, 1, 0)
+  const propAxis = propSpinners[0]?.axis.clone() ?? new THREE.Vector3(0, 1, 0)
   if (propSpinners.length > 0) {
     console.info(
       `[Steel] ${opts.name} prop×${propSpinners.length} · ${propSpinners
@@ -267,9 +268,12 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     spinProp(dt, throttle01) {
       if (propSpinners.length === 0) return
       const rps = PROP_IDLE_RPS + THREE.MathUtils.clamp(throttle01, 0, 1) * PROP_MAX_RPS
-      const ang = dt * rps * Math.PI * 2
+      const dang = dt * rps * Math.PI * 2
       for (const p of propSpinners) {
-        p.obj.rotateOnAxis(p.axis, ang)
+        p.angle += dang
+        // Rebuild from rest each frame so parent/Sketchfab frames can't drift the axis.
+        p.obj.quaternion.copy(p.restQuat)
+        p.obj.rotateOnAxis(p.axis, p.angle)
       }
     },
   }

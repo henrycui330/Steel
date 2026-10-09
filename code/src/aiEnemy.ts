@@ -23,6 +23,7 @@ import type { DummyTarget } from './dummy'
 import { showHitBanner, worldToScreen } from './hitFeedback'
 import { loadTankChassis } from './loadTank'
 import { tankOptionById, type TankId } from './tankCatalog'
+import { TRACK_GAUGE } from './drive'
 import { collectWheels, updateWheels } from './wheels'
 import { spawnDestroyedWreck } from './wreck'
 
@@ -332,6 +333,10 @@ export async function spawnAiPz3Enemy(
       basePenetration: option.gun.aphePen * 0.9,
       baseDamage: option.gun.apheDmg * 0.9,
       blastDamage: 0,
+      internalBlast: Math.max(
+        80,
+        Math.round(option.gun.apheDmg * 0.5 + option.gun.heBlast * 0.3),
+      ),
     }
     const result = target.resolveShellHit(shell.mesh.position, shell.velocity, stats, {
       ammoId: 'aphe',
@@ -471,7 +476,24 @@ export async function spawnAiPz3Enemy(
 
       if (!target && !goHill) {
         speed = Math.max(0, speed - 10 * dt)
-        updateWheels(wheels, dt, speed, 0)
+        let vL = speed
+        let vR = speed
+        if (trackDrive.leftOut) vL = 0
+        if (trackDrive.rightOut) vR = 0
+        if (trackDrive.immobilized) {
+          vL = 0
+          vR = 0
+          speed = 0
+        } else if (trackDrive.leftOut || trackDrive.rightOut) {
+          root.rotation.y += ((vR - vL) / TRACK_GAUGE) * dt
+          const moveSpeed = (vL + vR) * 0.5
+          root.position.x += Math.sin(root.rotation.y) * moveSpeed * dt
+          root.position.z += Math.cos(root.rotation.y) * moveSpeed * dt
+          root.position.y = heightAt
+            ? heightAt(root.position.x, root.position.z)
+            : flatY
+        }
+        updateWheels(wheels, dt, vL, vR)
         tickShells(dt, hostiles, playable, colliders, camera)
         return
       }
@@ -572,6 +594,7 @@ export async function spawnAiPz3Enemy(
 
         const avoiding = avoidSide !== 0
         const navYaw = avoiding ? hullYaw + avoidSide * 1.2 : desiredYaw
+        const oneTrack = trackDrive.leftOut || trackDrive.rightOut
 
         const facingOk = Math.cos(yawWrapHull) > 0.35
         let throttle = 0
@@ -584,29 +607,33 @@ export async function spawnAiPz3Enemy(
         } else if (dist > AI_ENGAGE && facingOk) throttle = 1
         else if (dist < AI_TOO_CLOSE) throttle = -0.55
 
-        root.rotation.y = yawToward(
-          root.rotation.y,
-          navYaw,
-          AI_TURN * (avoiding ? 1.55 : 1) * trackDrive.turnMul * dt,
-        )
-
-        const maxSpd = AI_MAX_SPEED * trackDrive.forwardMul
-        if (throttle > 0)
-          speed = Math.min(maxSpd, speed + 8 * trackDrive.forwardMul * dt)
-        else if (throttle < 0)
-          speed = Math.max(-4 * trackDrive.forwardMul, speed - 6 * dt)
+        // Commanded track speed (TR5: no crawl mul — dead side zeros in vL/vR).
+        const maxSpd = AI_MAX_SPEED
+        if (throttle > 0) speed = Math.min(maxSpd, speed + 8 * dt)
+        else if (throttle < 0) speed = Math.max(-4, speed - 6 * dt)
         else if (speed > 0) speed = Math.max(0, speed - 10 * dt)
         else if (speed < 0) speed = Math.min(0, speed + 10 * dt)
 
-        // One-track crawl: clamp absolute speed.
-        if (trackDrive.forwardMul < 1) {
-          const cap = AI_MAX_SPEED * trackDrive.forwardMul
-          speed = THREE.MathUtils.clamp(speed, -cap * 0.55, cap)
+        let vL = speed
+        let vR = speed
+        if (trackDrive.leftOut) vL = 0
+        if (trackDrive.rightOut) vR = 0
+        const moveSpeed = (vL + vR) * 0.5
+
+        if (oneTrack) {
+          // Forced circle toward dead side (same as player drive).
+          root.rotation.y += ((vR - vL) / TRACK_GAUGE) * dt
+        } else {
+          root.rotation.y = yawToward(
+            root.rotation.y,
+            navYaw,
+            AI_TURN * (avoiding ? 1.55 : 1) * dt,
+          )
         }
 
         const yaw = root.rotation.y
-        root.position.x += Math.sin(yaw) * speed * dt
-        root.position.z += Math.cos(yaw) * speed * dt
+        root.position.x += Math.sin(yaw) * moveSpeed * dt
+        root.position.z += Math.cos(yaw) * moveSpeed * dt
         root.position.y = heightAt
           ? heightAt(root.position.x, root.position.z)
           : flatY
@@ -628,15 +655,7 @@ export async function spawnAiPz3Enemy(
           if (avoidSide === 0) avoidSide = 1
         }
 
-        let hullErr = navYaw - root.rotation.y
-        while (hullErr > Math.PI) hullErr -= Math.PI * 2
-        while (hullErr < -Math.PI) hullErr += Math.PI * 2
-        updateWheels(
-          wheels,
-          dt,
-          speed,
-          Math.abs(hullErr) > 0.05 ? -Math.sign(hullErr) : 0,
-        )
+        updateWheels(wheels, dt, vL, vR)
       } else {
         speed = 0
         updateWheels(wheels, dt, 0, 0)

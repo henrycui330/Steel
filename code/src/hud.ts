@@ -1,15 +1,20 @@
 import type { AmmoId } from './ammo'
 import { AMMO_ORDER, AMMO_TYPES } from './ammo'
 import { getAimZoomLabel } from './camera'
+import { createDamagePreview } from './damagePreview'
+import { silhouetteForTank } from './damageSilhouette'
 import type { FireHudState } from './fire'
 import type { ModuleId, ModuleKit } from './modules'
 import { nationByTeam, nationFlagSrc } from './nations'
+import type { TankId } from './tankCatalog'
 import * as THREE from 'three'
 
 export type CombatHudState = {
   hp: number
   maxHp: number
   fire: FireHudState
+  /** Active chassis — drives per-tank damage silhouette. */
+  tankId?: TankId
   /** Seconds left immobilized (0 = mobile). */
   tracksDisableLeft?: number
   /** Per-side track disable (for L/R chip). */
@@ -28,6 +33,8 @@ export type CombatHudState = {
   artilleryStatus?: string
   /** Hull yaw, radians (Three.js Y). */
   headingRad?: number
+  /** Turret yaw relative to hull, radians (local Y). */
+  turretRelRad?: number
   /** Drive speed in world units / sec (≈ m/s). */
   speedU?: number
   /** Aim rangefinder distance in meters, or null if no hit. */
@@ -78,9 +85,53 @@ export type HudKothState = {
   winSec: number
 }
 
+export type HudFrontlineState = {
+  taken: number
+  townCount: number
+  townName: string
+  captureT: number
+  recaptureT: number
+  captureSec: number
+  matchLeft: number
+}
+
+export function applyFrontlineHud(el: HTMLElement, state: HudFrontlineState | null): void {
+  el.hidden = !state
+  if (!state) return
+  const cap = Math.min(1, state.captureT / state.captureSec)
+  const rec = Math.min(1, state.recaptureT / state.captureSec)
+  ;(el.querySelector('.koth-fill-v') as HTMLElement).style.transform = `scaleX(${cap})`
+  ;(el.querySelector('.koth-fill-m') as HTMLElement).style.transform = `scaleX(${rec})`
+  ;(el.querySelector('.koth-time-v') as HTMLElement).textContent =
+    `${state.taken}/${state.townCount}`
+  const left = Math.max(0, Math.ceil(state.matchLeft))
+  const mm = Math.floor(left / 60)
+  const ss = left % 60
+  ;(el.querySelector('.koth-time-m') as HTMLElement).textContent =
+    `${mm}:${ss.toString().padStart(2, '0')}`
+  const labelEl = el.querySelector('.koth-label') as HTMLElement
+  labelEl.textContent = 'FRONT'
+  const ownerEl = el.querySelector('.koth-owner') as HTMLElement
+  ownerEl.textContent = state.townName.toUpperCase()
+  el.classList.remove('is-vostok', 'is-meridian', 'is-contested')
+  if (state.captureT > 1 && state.recaptureT > 1) {
+    el.classList.add('is-contested')
+  } else if (state.captureT > state.recaptureT && state.captureT > 1) {
+    el.classList.add('is-vostok')
+  } else if (state.recaptureT > 1) {
+    el.classList.add('is-meridian')
+  }
+}
+
 export type GameHud = {
   setVisible: (visible: boolean) => void
   setAiming: (aiming: boolean) => void
+  /** Bind live player tank (+ aim pivots) for the schematic top-down dial. */
+  bindDamageTank: (
+    tank: THREE.Object3D,
+    turret?: THREE.Object3D | null,
+    barrel?: THREE.Object3D | null,
+  ) => void
   updateCrosshairs: (
     camera: THREE.Camera,
     mouseHit: THREE.Vector3,
@@ -89,6 +140,7 @@ export type GameHud = {
   ) => void
   updateCombat: (state: CombatHudState) => void
   setKoth: (state: HudKothState | null) => void
+  setFrontline: (state: HudFrontlineState | null) => void
   setRespawn: (secondsLeft: number | null) => void
   dispose: () => void
 }
@@ -495,40 +547,38 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     <div class="sight-bar"><i class="sight-bar-fill"></i></div>
   `
 
-  // Bottom-left: module HP + status chips
+  // Bottom-left: WT-style damage panel + status chips
   const status = document.createElement('div')
   status.className = 'hud-corner hud-bl'
   status.innerHTML = `
-    <div class="hud-plate combat-modules">
-      <div class="hud-plate-head">
-        <span class="combat-label">Modules</span>
+    <div class="dmg-panel" aria-label="Vehicle damage panel">
+      <div class="dmg-dial">
+        <svg class="dmg-svg" viewBox="0 0 120 120" aria-hidden="true">
+          <circle class="dmg-ring" cx="60" cy="60" r="52" />
+          <circle class="dmg-ring-inner" cx="60" cy="60" r="44" />
+          <g class="dmg-ticks"></g>
+        </svg>
+        <div class="dmg-stab">STAB</div>
+        <div class="dmg-tag" hidden></div>
+        <div class="dmg-crew" title="Crew">
+          <svg class="dmg-crew-ico" viewBox="0 0 16 12" aria-hidden="true">
+            <circle cx="4.5" cy="3.2" r="2" />
+            <path d="M1.5 11c0-2.2 1.3-3.5 3-3.5s3 1.3 3 3.5" />
+            <circle cx="11.5" cy="3.2" r="2" />
+            <path d="M8.5 11c0-2.2 1.3-3.5 3-3.5s3 1.3 3 3.5" />
+          </svg>
+          <span class="dmg-crew-n">4</span>
+        </div>
       </div>
-      <div class="module-rows">
-        <div class="module-row" data-mod="hull">
-          <span class="module-name">Hull</span>
-          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
-          <span class="module-val">—</span>
-        </div>
-        <div class="module-row" data-mod="turret">
-          <span class="module-name">Turret</span>
-          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
-          <span class="module-val">—</span>
-        </div>
-        <div class="module-row" data-mod="trackL">
-          <span class="module-name">Trk L</span>
-          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
-          <span class="module-val">—</span>
-        </div>
-        <div class="module-row" data-mod="trackR">
-          <span class="module-name">Trk R</span>
-          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
-          <span class="module-val">—</span>
-        </div>
-        <div class="module-row" data-mod="fuel">
-          <span class="module-name">Fuel</span>
-          <div class="combat-bar"><i class="combat-bar-fill module-fill"></i></div>
-          <span class="module-val">—</span>
-        </div>
+      <div class="dmg-legend">
+        <span class="dmg-leg dmg-leg-armor">ARMOR</span>
+        <span class="dmg-leg dmg-leg-fuel">FUEL</span>
+        <span class="dmg-leg dmg-leg-ammo">AMMO</span>
+      </div>
+      <div class="dmg-drive">
+        <div><span class="dmg-k">GEAR</span> <span class="dmg-gear">N</span></div>
+        <div><span class="dmg-k">RPM</span> <span class="dmg-rpm">0</span></div>
+        <div><span class="dmg-k">SPD</span> <span class="dmg-spd">0</span> <span class="dmg-k">km/h</span></div>
       </div>
     </div>
     <div class="hud-chips">
@@ -550,6 +600,25 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       </div>
     </div>
   `
+
+  // Tick marks around the damage ring (like WT). Cardinals are longer.
+  const dmgTicks = status.querySelector('.dmg-ticks') as SVGGElement
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2
+    const major = i % 3 === 0
+    const inner = major ? 46 : 48
+    const x1 = 60 + Math.sin(a) * inner
+    const y1 = 60 - Math.cos(a) * inner
+    const x2 = 60 + Math.sin(a) * 52
+    const y2 = 60 - Math.cos(a) * 52
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('x1', String(x1))
+    line.setAttribute('y1', String(y1))
+    line.setAttribute('x2', String(x2))
+    line.setAttribute('y2', String(y2))
+    line.setAttribute('class', major ? 'dmg-tick dmg-tick-major' : 'dmg-tick')
+    dmgTicks.appendChild(line)
+  }
 
   // Bottom-right: speed + weapon + ammo
   const weapon = document.createElement('div')
@@ -630,14 +699,30 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
   document.body.appendChild(root)
 
-  const moduleRows = {
-    hull: status.querySelector('[data-mod="hull"]') as HTMLElement,
-    turret: status.querySelector('[data-mod="turret"]') as HTMLElement,
-    trackL: status.querySelector('[data-mod="trackL"]') as HTMLElement,
-    trackR: status.querySelector('[data-mod="trackR"]') as HTMLElement,
-    fuel: status.querySelector('[data-mod="fuel"]') as HTMLElement,
-  } as const satisfies Record<ModuleId, HTMLElement>
-  const modulesPlate = status.querySelector('.combat-modules') as HTMLElement
+  const dmgPanel = status.querySelector('.dmg-panel') as HTMLElement
+  const dmgDial = status.querySelector('.dmg-dial') as HTMLElement
+  const dmgTag = status.querySelector('.dmg-tag') as HTMLElement
+  const dmgCrewN = status.querySelector('.dmg-crew-n') as HTMLElement
+  const dmgGear = status.querySelector('.dmg-gear') as HTMLElement
+  const dmgRpm = status.querySelector('.dmg-rpm') as HTMLElement
+  const dmgSpd = status.querySelector('.dmg-spd') as HTMLElement
+  let dmgTankId: TankId | undefined
+  const dmgPreview = createDamagePreview(dmgDial)
+
+  function ensureMeta(tankId: TankId | undefined): void {
+    if (tankId === dmgTankId) return
+    dmgTankId = tankId
+    const sil = silhouetteForTank(tankId)
+    dmgCrewN.textContent = String(sil.crew)
+    if (sil.tag) {
+      dmgTag.hidden = false
+      dmgTag.textContent = sil.tag
+    } else {
+      dmgTag.hidden = true
+      dmgTag.textContent = ''
+    }
+  }
+  ensureMeta(undefined)
   const tracksChip = status.querySelector('.combat-tracks') as HTMLElement
   const fuelChip = status.querySelector('.combat-fuel') as HTMLElement
   const envChip = status.querySelector('.combat-env') as HTMLElement
@@ -666,6 +751,29 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     return `${t.slice(0, max - 1)}…`
   }
 
+  function modulePct(
+    mods: Readonly<ModuleKit> | undefined,
+    id: ModuleId,
+    fallbackHp: number,
+    fallbackMax: number,
+  ): number {
+    const m = mods?.[id]
+    const hp = m?.hp ?? fallbackHp
+    const max = m?.maxHp ?? fallbackMax
+    return max > 0 ? THREE.MathUtils.clamp(hp / max, 0, 1) : 0
+  }
+
+  function arcadeGearRpm(speedU: number): { gear: string; rpm: number } {
+    const spd = Math.abs(speedU)
+    if (spd < 0.4) return { gear: 'N', rpm: 750 }
+    const gearN =
+      spd < 3.5 ? 1 : spd < 7 ? 2 : spd < 11 ? 3 : spd < 15 ? 4 : spd < 19 ? 5 : 6
+    const band = spd < 3.5 ? 3.5 : spd < 7 ? 3.5 : spd < 11 ? 4 : spd < 15 ? 4 : 4
+    const inBand = ((spd % band) / band) * 0.85 + 0.15
+    const rpm = Math.round(1100 + inBand * 1600)
+    return { gear: String(gearN), rpm }
+  }
+
   return {
     setVisible(visible) {
       root.style.display = visible ? 'block' : 'none'
@@ -673,6 +781,9 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     setAiming(aiming) {
       root.classList.toggle('is-aiming', aiming)
       if (aiming) opticZoomTag.textContent = getAimZoomLabel()
+    },
+    bindDamageTank(tank, turret = null, barrel = null) {
+      dmgPreview.setSource({ root: tank, turret, barrel })
     },
     updateCrosshairs(camera, mouseHit, barrelHit, gunSynced = false) {
       const mousePt = projectToScreen(camera, mouseHit)
@@ -686,35 +797,35 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         opticZoomTag.textContent = getAimZoomLabel()
       }
 
+      ensureMeta(state.tankId)
+
       const mods = state.modules
-      const ids = Object.keys(moduleRows) as ModuleId[]
-      for (const id of ids) {
-        const row = moduleRows[id]
-        const fill = row.querySelector('.module-fill') as HTMLElement
-        const val = row.querySelector('.module-val') as HTMLElement
-        const m = mods?.[id]
-        const hp = m?.hp ?? (id === 'hull' ? state.hp : 0)
-        const max = m?.maxHp ?? (id === 'hull' ? state.maxHp : 1)
-        const pct = max > 0 ? THREE.MathUtils.clamp(hp / max, 0, 1) : 0
-        fill.style.transform = `scaleX(${pct})`
-        val.textContent = String(Math.round(hp))
-        row.classList.toggle('is-critical', pct <= 0.25)
-        row.classList.toggle('is-low', pct > 0.25 && pct <= 0.5)
-        row.classList.toggle('is-dead', pct <= 0)
-      }
-      const hullPct =
-        mods && mods.hull.maxHp > 0
-          ? mods.hull.hp / mods.hull.maxHp
-          : state.maxHp > 0
-            ? state.hp / state.maxHp
-            : 0
-      modulesPlate.classList.toggle('is-critical', hullPct <= 0.25)
+      const hullPct = modulePct(mods, 'hull', state.hp, state.maxHp)
+      const headingRad = state.headingRad ?? 0
+      const turretRel = state.turretRelRad ?? 0
+      dmgPreview.update(headingRad, turretRel, {
+        modules: mods,
+        hp: state.hp,
+        maxHp: state.maxHp,
+        trackLeftOut: state.trackLeftOut,
+        trackRightOut: state.trackRightOut,
+        fuelLeaking: state.fuelLeaking,
+        fuelEmpty: state.fuelEmpty,
+      })
+      dmgPanel.classList.toggle('is-critical', hullPct <= 0.25)
+      dmgPanel.classList.toggle('is-fuel-leak', !!state.fuelLeaking)
+      dmgPanel.classList.toggle('is-fuel-empty', !!state.fuelEmpty)
 
       const kmh = Math.round(speedToKmh(state.speedU ?? 0))
       speedText.textContent = `${kmh}`
       speedText.classList.toggle('is-rev', (state.speedU ?? 0) < -0.15)
 
-      const heading = yawToHeadingDeg(state.headingRad ?? 0)
+      const { gear, rpm } = arcadeGearRpm(state.speedU ?? 0)
+      dmgGear.textContent = gear
+      dmgRpm.textContent = String(rpm)
+      dmgSpd.textContent = String(kmh)
+
+      const heading = yawToHeadingDeg(headingRad)
       compassDeg.textContent = `${String(Math.round(heading)).padStart(3, '0')}°`
       compassCardinal.textContent = headingCardinal(heading)
       const px = (heading / 360) * TICKS_PER_CIRCLE * TICK_W
@@ -934,6 +1045,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     setKoth(state) {
       kothEl.hidden = !state
       if (!state) return
+      ;(kothEl.querySelector('.koth-label') as HTMLElement).textContent = 'HILL'
       const vPct = Math.min(1, state.vostokHold / state.winSec)
       const mPct = Math.min(1, state.meridianHold / state.winSec)
       ;(kothEl.querySelector('.koth-fill-v') as HTMLElement).style.transform = `scaleX(${vPct})`
@@ -957,6 +1069,9 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         ownerEl.textContent = 'NEUTRAL'
       }
     },
+    setFrontline(state) {
+      applyFrontlineHud(kothEl, state)
+    },
     setRespawn(secondsLeft) {
       if (secondsLeft == null || secondsLeft <= 0) {
         respawnEl.hidden = true
@@ -967,6 +1082,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         String(Math.ceil(secondsLeft))
     },
     dispose() {
+      dmgPreview.dispose()
       root.remove()
     },
   }

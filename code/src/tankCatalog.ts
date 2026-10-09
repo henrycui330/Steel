@@ -5,6 +5,7 @@ import { assetUrl } from './assetUrl'
 export type TankId =
   | 'tiger'
   | 'pz3'
+  | 'hetzer'
   | 'pz4'
   | 'leopard'
   | 'leopard2'
@@ -13,6 +14,8 @@ export type TankId =
   | 'cromwell'
   | 'churchill'
   | 'conqueror'
+  | 'chieftain'
+  | 'desertWarrior'
   | 'challenger2'
   | 'challenger3'
   | 'sherman'
@@ -23,6 +26,7 @@ export type TankId =
   | 'm901'
   | 'bradley'
   | 'm3a3'
+  | 'lav25'
   | 'abrams'
   | 't34'
   | 't3476'
@@ -51,6 +55,8 @@ export type TankId =
   | 'su25'
   | 'su27'
 
+export type MassClass = 'light' | 'medium' | 'heavy'
+
 export type DriveProfile = {
   maxSpeed: number
   maxReverse: number
@@ -63,6 +69,8 @@ export type DriveProfile = {
   /** Max hull pitch from accel (radians). */
   tiltMax: number
   tiltFromAccel: number
+  /** TR4 — inertia / grade feel class. */
+  massClass: MassClass
 }
 
 /** Absolute gun power — not multipliers on a shared weak shell. */
@@ -171,6 +179,18 @@ export type TankOption = {
   aimPitchMinDeg?: number
   /** Override gun elevation (degrees). */
   aimPitchMaxDeg?: number
+  /**
+   * Casemate / fixed superstructure: max |gun yaw| vs hull (degrees).
+   * Undefined = full rotating turret.
+   */
+  gunTraverseDeg?: number
+  /**
+   * RMB gunsight: metres behind the muzzle (default 1.4).
+   * Short barrels / rail racks need a smaller value so the optic isn’t inside the hull.
+   */
+  aimCamBack?: number
+  /** RMB gunsight: metres above the muzzle (default 0.15). */
+  aimCamHeight?: number
   /** Tech-tree nation — used for country-by-country track/wheel passes. */
   nation?: 'germany' | 'usa' | 'soviet' | 'britain'
 }
@@ -202,6 +222,22 @@ const PZ3_DRIVE: DriveProfile = {
   turnInPlace: 1.4,
   tiltMax: (6.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'light',
+}
+
+/** Jagdpanzer 38(t) Hetzer — light casemate TD. */
+const HETZER_DRIVE: DriveProfile = {
+  maxSpeed: 15.5,
+  maxReverse: 6,
+  accel: 11,
+  reverseAccel: 8,
+  brakeDecel: 26,
+  coastDrag: 5.5,
+  turnRate: 2.55,
+  turnInPlace: 1.25,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.012,
+  massClass: 'light',
 }
 
 /** Panther A — heavy medium / long 75mm (slot id still `tiger`). */
@@ -216,6 +252,7 @@ const TIGER_DRIVE: DriveProfile = {
   turnInPlace: 0.9,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.013,
+  massClass: 'heavy',
 }
 
 /** Pz-IV — versatile medium workhorse. */
@@ -230,6 +267,7 @@ const PZ4_DRIVE: DriveProfile = {
   turnInPlace: 1.05,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.012,
+  massClass: 'medium',
 }
 
 /** Leopard 1 — cold-war MBT, mobility over armor. */
@@ -244,6 +282,7 @@ const LEOPARD_DRIVE: DriveProfile = {
   turnInPlace: 1.35,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** M24 Chaffee — light / infantry support (fast, thin skin, 75mm). */
@@ -258,6 +297,7 @@ const CHAFFEE_DRIVE: DriveProfile = {
   turnInPlace: 1.45,
   tiltMax: (6.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** Cromwell IV — British cruiser · fast medium · 75mm. */
@@ -272,6 +312,7 @@ const CROMWELL_DRIVE: DriveProfile = {
   turnInPlace: 1.35,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** Churchill VII — British infantry heavy · slow · thick plate · 75mm. */
@@ -286,6 +327,7 @@ const CHURCHILL_DRIVE: DriveProfile = {
   turnInPlace: 0.95,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.012,
+  massClass: 'heavy',
 }
 
 /** Conqueror — British heavy · 120mm · cold-war bruiser. */
@@ -300,6 +342,37 @@ const CONQUEROR_DRIVE: DriveProfile = {
   turnInPlace: 1.0,
   tiltMax: (4.8 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'heavy',
+}
+
+/** Chieftain/T95 — British MBT · 120mm L11 (heavy, sluggish). */
+const CHIEFTAIN_DRIVE: DriveProfile = {
+  maxSpeed: 15.5,
+  maxReverse: 6,
+  accel: 10,
+  reverseAccel: 7,
+  brakeDecel: 25,
+  coastDrag: 5.8,
+  turnRate: 2.1,
+  turnInPlace: 1.08,
+  tiltMax: (4.8 * Math.PI) / 180,
+  tiltFromAccel: 0.011,
+  massClass: 'heavy',
+}
+
+/** Desert Warrior — tracked IFV · 30mm RARDEN (sprintier than MBTs). */
+const DESERT_WARRIOR_DRIVE: DriveProfile = {
+  maxSpeed: 18.5,
+  maxReverse: 7.2,
+  accel: 12.2,
+  reverseAccel: 8.2,
+  brakeDecel: 26,
+  coastDrag: 5.2,
+  turnRate: 2.35,
+  turnInPlace: 1.18,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** Challenger 2 — British MBT · Dorchester · L30 120mm. */
@@ -314,6 +387,7 @@ const CHALLENGER2_DRIVE: DriveProfile = {
   turnInPlace: 1.18,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** Challenger 3 — British MBT · Trophy · L55A1 120mm. */
@@ -328,6 +402,7 @@ const CHALLENGER3_DRIVE: DriveProfile = {
   turnInPlace: 1.22,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** M4 Sherman Firefly — medium / 17-pdr (slower than Chaffee, hard AP). */
@@ -342,6 +417,7 @@ const SHERMAN_DRIVE: DriveProfile = {
   turnInPlace: 1.1,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /** M26 Pershing — heavy medium / 90mm. */
@@ -356,6 +432,7 @@ const PERSHING_DRIVE: DriveProfile = {
   turnInPlace: 0.95,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.012,
+  massClass: 'heavy',
 }
 
 /** M42 Duster — SPAAG on M41 chassis (fast traverse, light skin). */
@@ -370,6 +447,7 @@ const DUSTER_DRIVE: DriveProfile = {
   turnInPlace: 1.35,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** M551 Sheridan — light air-droppable · Shillelagh ATGM primary. */
@@ -384,6 +462,7 @@ const SHERIDAN_DRIVE: DriveProfile = {
   turnInPlace: 1.3,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.012,
+  massClass: 'light',
 }
 
 /** M901 ITV — M113 TOW hammerhead (soft skin, decent pace). */
@@ -398,6 +477,7 @@ const M901_DRIVE: DriveProfile = {
   turnInPlace: 1.15,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'light',
 }
 
 /** ZSU-23-4 Shilka — tracked SPAAG (quad 23mm, radar turret). */
@@ -412,6 +492,7 @@ const SHILKA_DRIVE: DriveProfile = {
   turnInPlace: 1.05,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /** Pantsir-S2 — wheeled SPAAG/SAM (fast road sprint). */
@@ -426,6 +507,7 @@ const PANTSIR_DRIVE: DriveProfile = {
   turnInPlace: 1.15,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** BTR-82A — wheeled IFV / 30mm (very fast on roads). */
@@ -440,6 +522,22 @@ const BTR82A_DRIVE: DriveProfile = {
   turnInPlace: 1.25,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.009,
+  massClass: 'light',
+}
+
+/** LAV-25 — USMC 8×8 · 25mm Bushmaster. */
+const LAV25_DRIVE: DriveProfile = {
+  maxSpeed: 22,
+  maxReverse: 8.5,
+  accel: 13.5,
+  reverseAccel: 8.5,
+  brakeDecel: 29,
+  coastDrag: 4.9,
+  turnRate: 2.5,
+  turnInPlace: 1.2,
+  tiltMax: (6 * Math.PI) / 180,
+  tiltFromAccel: 0.009,
+  massClass: 'light',
 }
 
 /** 9P157 Khrizantema-S — BMP-3 chassis / twin ATGM (mid pace). */
@@ -454,6 +552,7 @@ const KHRIZANTEMA_DRIVE: DriveProfile = {
   turnInPlace: 1.1,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /** M2 Bradley — tracked IFV / 25mm Bushmaster (sprintier than MBTs). */
@@ -468,6 +567,7 @@ const BRADLEY_DRIVE: DriveProfile = {
   turnInPlace: 1.2,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** M3A3 Bradley CFV — lighter cavalry; slightly snappier than M2. */
@@ -482,6 +582,7 @@ const M3A3_DRIVE: DriveProfile = {
   turnInPlace: 1.25,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'light',
 }
 
 /** M1A1 Abrams — modern MBT / 120mm. */
@@ -496,6 +597,7 @@ const ABRAMS_DRIVE: DriveProfile = {
   turnInPlace: 1.2,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** T-34 — Soviet medium / 76mm. */
@@ -510,6 +612,7 @@ const T34_DRIVE: DriveProfile = {
   turnInPlace: 1.15,
   tiltMax: (5.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /** BM-13 Katyusha — truck MLRS (road sprint, soft skin). */
@@ -524,6 +627,7 @@ const KATYUSHA_DRIVE: DriveProfile = {
   turnInPlace: 1.2,
   tiltMax: (7 * Math.PI) / 180,
   tiltFromAccel: 0.012,
+  massClass: 'light',
 }
 
 /** T-44-100 — late-war / early cold-war medium · 100mm. */
@@ -538,6 +642,7 @@ const T44_DRIVE: DriveProfile = {
   turnInPlace: 1.1,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /** T-55 — cold-war MBT · 100mm. */
@@ -552,6 +657,7 @@ const T55_DRIVE: DriveProfile = {
   turnInPlace: 1.15,
   tiltMax: (5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** T-64 — early 125mm MBT (bridge to T-72). */
@@ -566,6 +672,7 @@ const T64_DRIVE: DriveProfile = {
   turnInPlace: 1.18,
   tiltMax: (4.8 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** T-72 Ural — cold-war MBT · 125mm. */
@@ -580,6 +687,7 @@ const T72_DRIVE: DriveProfile = {
   turnInPlace: 1.2,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** T-90 — modern MBT · 125mm. */
@@ -594,6 +702,7 @@ const T90_DRIVE: DriveProfile = {
   turnInPlace: 1.25,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'medium',
 }
 
 /** PzH 2000 — SPG · slow chassis, long 155mm. */
@@ -608,6 +717,7 @@ const PZH_DRIVE: DriveProfile = {
   turnInPlace: 1.05,
   tiltMax: (4 * Math.PI) / 180,
   tiltFromAccel: 0.009,
+  massClass: 'heavy',
 }
 
 /** M55 — vintage 155mm SPG on Pershing chassis. */
@@ -622,6 +732,7 @@ const M55_DRIVE: DriveProfile = {
   turnInPlace: 1.0,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.01,
+  massClass: 'heavy',
 }
 
 /** Leopard 2A6 — modern MBT, heavy punch + good mobility. */
@@ -636,6 +747,7 @@ const LEOPARD2_DRIVE: DriveProfile = {
   turnInPlace: 1.15,
   tiltMax: (4.5 * Math.PI) / 180,
   tiltFromAccel: 0.011,
+  massClass: 'medium',
 }
 
 /**
@@ -654,6 +766,7 @@ const CORSAIR_DRIVE: DriveProfile = {
   turnInPlace: 0,
   tiltMax: 0,
   tiltFromAccel: 0,
+  massClass: 'medium',
 }
 
 /** Selectable player vehicles (files in public/models/). */
@@ -705,6 +818,37 @@ export const TANK_OPTIONS: TankOption[] = [
       traverseRadPerSec: 8.5,
       elevateRadPerSec: 5.5,
       apLabel: 'APHE',
+      heLabel: 'HE',
+    },
+  },
+  {
+    id: 'hetzer',
+    name: 'Jagdpanzer 38(t) Hetzer',
+    role: 'Casemate TD',
+    blurb: 'Low · sloped · 75mm PaK · hull-aim; gun only elevates / tiny traverse',
+    url: assetUrl('models/hetzer.glb?v=1'),
+    reloadSec: 5.2,
+    maxHp: 720,
+    targetWidth: 2.45,
+    vintageCrew: true,
+    nation: 'germany',
+    gunTraverseDeg: 8,
+    aimPitchMinDeg: -6,
+    aimPitchMaxDeg: 12,
+    /** Short PaK — sit close behind the muzzle so RMB optic clears the casemate. */
+    aimCamBack: 0.45,
+    aimCamHeight: 0.12,
+    drive: HETZER_DRIVE,
+    armor: armorKit({ front: 100, side: 22, rear: 14, turret: 60 }),
+    gun: {
+      aphePen: 125,
+      apheDmg: 340,
+      hePen: 15,
+      heDmg: 80,
+      heBlast: 145,
+      traverseRadPerSec: 3.2,
+      elevateRadPerSec: 4.2,
+      apLabel: 'APCBC',
       heLabel: 'HE',
     },
   },
@@ -885,6 +1029,68 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 3.8,
       apLabel: 'APDS',
       heLabel: 'HE',
+    },
+  },
+  {
+    id: 'chieftain',
+    name: 'Chieftain/T95',
+    role: 'MBT · British · 120mm',
+    blurb: 'L11 120mm · stillhouse armour · slow and stubborn',
+    url: assetUrl('models/chieftain_t95.glb?v=1'),
+    reloadSec: 6.2,
+    maxHp: 1420,
+    targetWidth: 3.5,
+    vintageCrew: false,
+    nation: 'britain',
+    rigidRig: false,
+    drive: CHIEFTAIN_DRIVE,
+    armor: armorKit({ front: 400, side: 140, rear: 70, turret: 390, modern: true }),
+    gun: {
+      aphePen: 480,
+      apheDmg: 900,
+      hePen: 34,
+      heDmg: 165,
+      heBlast: 250,
+      traverseRadPerSec: 5.2,
+      elevateRadPerSec: 3.9,
+      apLabel: 'APDS',
+      heLabel: 'HESH',
+    },
+  },
+  {
+    id: 'desertWarrior',
+    name: 'Desert Warrior',
+    role: 'IFV · 30mm + TOW',
+    blurb: 'FV510 desert kit · RARDEN 30mm · TOW ATGM (1/2/3) · aluminium armour',
+    url: assetUrl('models/desert_warrior.glb?v=1'),
+    reloadSec: 0.13,
+    recoilScale: 0.14,
+    maxHp: 760,
+    targetWidth: 2.95,
+    vintageCrew: false,
+    nation: 'britain',
+    samMissiles: true,
+    samAmmo: 4,
+    samReloadSec: 6.5,
+    samSpeed: 95,
+    samDamage: 920,
+    samPen: 850,
+    samLabel: 'TOW',
+    aimPitchMinDeg: -8,
+    aimPitchMaxDeg: 55,
+    rigidRig: false,
+    drive: DESERT_WARRIOR_DRIVE,
+    armor: armorKit({ front: 36, side: 20, rear: 14, turret: 30 }),
+    gun: {
+      aphePen: 78,
+      apheDmg: 132,
+      hePen: 15,
+      heDmg: 82,
+      heBlast: 120,
+      traverseRadPerSec: 7.6,
+      elevateRadPerSec: 6.2,
+      apLabel: 'APDS-T 30mm',
+      heLabel: 'HEI-T 30mm',
     },
   },
   {
@@ -1219,6 +1425,35 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'lav25',
+    name: 'LAV-25',
+    role: 'Wheeled IFV · 25mm',
+    blurb: 'USMC 8×8 · Bushmaster · thin skin, fast on roads',
+    url: assetUrl('models/lav25.glb?v=1'),
+    reloadSec: 0.14,
+    recoilScale: 0.12,
+    maxHp: 700,
+    targetWidth: 2.55,
+    vintageCrew: false,
+    nation: 'usa',
+    aimPitchMinDeg: -8,
+    aimPitchMaxDeg: 58,
+    rigidRig: false,
+    drive: LAV25_DRIVE,
+    armor: armorKit({ front: 24, side: 16, rear: 12, turret: 20 }),
+    gun: {
+      aphePen: 68,
+      apheDmg: 118,
+      hePen: 13,
+      heDmg: 74,
+      heBlast: 108,
+      traverseRadPerSec: 8.2,
+      elevateRadPerSec: 6.8,
+      apLabel: 'APDS-T 25mm',
+      heLabel: 'HEI-T 25mm',
+    },
+  },
+  {
     id: 'abrams',
     name: 'M1A1 Abrams',
     role: 'Modern MBT · 120mm',
@@ -1310,6 +1545,9 @@ export const TANK_OPTIONS: TankOption[] = [
     nation: 'soviet',
     aimPitchMinDeg: 0,
     aimPitchMaxDeg: 45,
+    /** Rail rack is short — optic sits just aft of the rail tips, not in the cab. */
+    aimCamBack: 0.55,
+    aimCamHeight: 0.2,
     rigidRig: false,
     drive: KATYUSHA_DRIVE,
     armor: armorKit({ front: 8, side: 6, rear: 5, turret: 6 }),

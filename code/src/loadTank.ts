@@ -56,6 +56,15 @@ function sanitizeImportedLook(root: THREE.Object3D): void {
   })
 }
 
+function wantsDoubleSide(obj: THREE.Object3D): boolean {
+  let p: THREE.Object3D | null = obj
+  while (p) {
+    if (p.userData.forceDoubleSide) return true
+    p = p.parent
+  }
+  return false
+}
+
 /**
  * After yaw/pitch reparenting, stale bounds make meshes pop in/out while rotating.
  * Also harden depth state to reduce z-fight flicker on armor plates.
@@ -73,7 +82,7 @@ function hardenMeshRendering(root: THREE.Object3D): void {
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
     for (const m of mats) {
       if (!m) continue
-      m.side = THREE.FrontSide
+      m.side = wantsDoubleSide(obj) ? THREE.DoubleSide : THREE.FrontSide
       m.depthTest = true
       m.depthWrite = true
       m.needsUpdate = true
@@ -104,6 +113,87 @@ function findBarrelMesh(root: THREE.Object3D, turretMesh: THREE.Object3D): THREE
     findNamed(turretMesh, ['Barrel', 'Gun', 'barrel', 'gun', 'Cannon', 'cannon']) ??
     findNamed(root, ['Barrel', 'Gun', 'barrel', 'gun', 'Cannon', 'cannon'])
   )
+}
+
+/**
+ * Jagdpanzer 38(t) Hetzer — War Thunder / Sketchfab Object_* casemate TD.
+ * No rotating turret: fixed superstructure + elevating barrel (+ tiny gun traverse via yaw pivot).
+ * Object_13 hull body · Object_15 gun tube (+ Object_7 tip) · +Z forward (already upright).
+ */
+function prepareHetzer(root: THREE.Object3D): boolean {
+  let isHetzer = false
+  root.traverse((o) => {
+    if (/jagdpanzer_38|hetzer/i.test(o.name)) isHetzer = true
+  })
+  if (!isHetzer) return false
+
+  const hull = root.getObjectByName('Object_13')
+  const barrel = root.getObjectByName('Object_15')
+  if (!(hull instanceof THREE.Mesh) || !(barrel instanceof THREE.Mesh)) {
+    return false
+  }
+
+  hull.name = 'Hull'
+  barrel.name = 'Barrel'
+  const tip = root.getObjectByName('Object_7')
+  if (tip && tip !== barrel) barrel.attach(tip)
+
+  root.userData.casemateGun = true
+  console.info('[Steel] Hetzer: casemate Hull + Barrel (Object_13 + Object_15, no turret)')
+  return true
+}
+
+/**
+ * LAV-25 — named Sketchfab pack (FBX → +X). −90° Y so hull nose is +Z.
+ * Body41 hull · Body1 turret (25mm is baked in — peel the forward tube).
+ * Stock1 + Mg21 are the LEFT pintle MG: keep on turret, never name them Barrel
+ * (that made the MG pitch with the gun).
+ */
+function prepareLav25(root: THREE.Object3D): boolean {
+  if (!root.getObjectByName('LAV-25')) return false
+
+  const hull = root.getObjectByName('LAV-25_Body41Mtl_0')
+  const turret = root.getObjectByName('LAV-25_Body1Mtl_0')
+  if (!(hull instanceof THREE.Mesh) || !(turret instanceof THREE.Mesh)) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+
+  for (const n of [
+    'LAV-25_Body41Mtl_0_1',
+    'LAV-25_RlWheel1Mtl001_0',
+    'LAV-25_SpareWheel1Mtl_0',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part && part !== hull) hull.attach(part)
+  }
+  const spare = hull.getObjectByName('LAV-25_SpareWheel1Mtl_0')
+  if (spare) spare.name = 'LavSpareTire'
+
+  for (const n of [
+    'LAV-25_Glass1Mtl001_0',
+    'LAV-25_AmmoBox1Mtl_0',
+    'LAV-25_RlWheel1Mtl_0',
+    'LAV-25_Stock1Mtl_0',
+    'LAV-25_Mg21Mtl_0',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part && part !== turret) turret.attach(part)
+  }
+
+  const fakeWheel = turret.getObjectByName('LAV-25_RlWheel1Mtl_0')
+  if (fakeWheel) fakeWheel.name = 'LavTurretFixture'
+
+  const peeled = peelForwardGunStick(turret, 0.82)
+  if (!peeled) {
+    console.warn('[Steel] LAV-25: Bushmaster peel failed — elevation will tip turret')
+  }
+
+  console.info('[Steel] LAV-25: Body41 hull + Body1 turret; Stock/MG on turret; peeled Barrel (−90° Y)')
+  return true
 }
 
 /**
@@ -367,6 +457,85 @@ function prepareChallenger2(root: THREE.Object3D): boolean {
   if (upper) turret.attach(upper)
   barrel.name = 'Barrel'
   console.info('[Steel] Challenger 2: Object_5 turret + Object_6 barrel (+90° Y)')
+  return true
+}
+
+/**
+ * WoT Chieftain/T95 — Hull.pri / Turret_01 / Gun_01 (+ Chassis track runs).
+ * GLTFLoader strips `.` / `\\` from names (`Hull.pri` → `Hullpri`). Gun −Z → 180° Y.
+ */
+function findNodeNameMatch(root: THREE.Object3D, re: RegExp): THREE.Object3D | null {
+  let group: THREE.Object3D | null = null
+  let mesh: THREE.Mesh | null = null
+  root.traverse((o) => {
+    if (!o.name || !re.test(o.name)) return
+    if (o instanceof THREE.Mesh) {
+      if (!mesh) mesh = o
+    } else if (!group) {
+      group = o
+    }
+  })
+  return group ?? mesh
+}
+
+function prepareChieftain(root: THREE.Object3D): boolean {
+  let isChieftain = false
+  root.traverse((o) => {
+    if (/gb87_chieftain|chieftain_t95|chieftaint95|chieftain.?t95/i.test(o.name)) {
+      isChieftain = true
+    }
+  })
+  if (!isChieftain) return false
+
+  const hull = findNodeNameMatch(root, /hullpri|hull\.pri/i)
+  const turret = findNodeNameMatch(root, /turret_01/i)
+  const barrel = findNodeNameMatch(root, /gun_01/i)
+  if (!hull || !turret || !barrel) {
+    const names: string[] = []
+    root.traverse((o) => {
+      if (o.name && names.length < 24) names.push(o.name)
+    })
+    console.warn('[Steel] Chieftain prep miss hull=', !!hull, 'turret=', !!turret, 'barrel=', !!barrel, names)
+    return false
+  }
+
+  // Pack already faces game +Z after Sketchfab Z-up. Extra 180 put the bustle
+  // in the camera and the gun in the sky.
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+  // Keep gun as a sibling of turret so the cam mount AABB is the turret body,
+  // not the bore.
+  root.userData.forceDoubleSide = true
+
+  const chassis: THREE.Object3D[] = []
+  root.traverse((o) => {
+    if (o !== hull && /chassispri|chassis\.pri/i.test(o.name) && !(o instanceof THREE.Mesh)) {
+      chassis.push(o)
+    }
+  })
+  if (chassis.length === 0) {
+    root.traverse((o) => {
+      if (o instanceof THREE.Mesh && o !== hull && /chassispri|chassis\.pri/i.test(o.name)) {
+        chassis.push(o)
+      }
+    })
+  }
+  const size = new THREE.Vector3()
+  const _c = new THREE.Vector3()
+  const _b = new THREE.Box3()
+  for (const node of chassis) {
+    if (node.parent !== hull) hull.attach(node)
+    _b.setFromObject(node)
+    _b.getCenter(_c)
+    _b.getSize(size)
+    const longest = Math.max(size.x, size.y, size.z)
+    if (longest > 5) {
+      node.name = _c.x < 0 ? 'TrackL' : 'TrackR'
+    }
+  }
+
+  console.info('[Steel] Chieftain/T95: Hull + Turret_01 + Gun_01 (no extra yaw, double-side)')
   return true
 }
 
@@ -944,6 +1113,107 @@ function prepareT34(root: THREE.Object3D): boolean {
     }
   }
   console.info('[Steel] T-34-85: Hull/Turret + peeled Barrel')
+  return true
+}
+
+/**
+ * Desert Warrior IFV (War Thunder Seek & Destroy) — Object_* SpecGloss→metalrough.
+ * Object_25 hull · Object_18 turret · Object_16 30mm RARDEN (+Z) · Object_4/7 tracks.
+ * Fingerprint `/desert.?warrior/i` — must beat shared Object_* ids (Sheridan/M3A3).
+ */
+function prepareDesertWarrior(root: THREE.Object3D): boolean {
+  let isWarrior = false
+  root.traverse((o) => {
+    if (/desert.?warrior/i.test(o.name)) isWarrior = true
+  })
+  if (!isWarrior) return false
+
+  const hull = root.getObjectByName('Object_25')
+  const turret = root.getObjectByName('Object_18')
+  const barrel = root.getObjectByName('Object_16')
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turret instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh)
+  ) {
+    console.warn(
+      '[Steel] Desert Warrior prep miss — hull=',
+      !!hull,
+      'turret=',
+      !!turret,
+      'barrel=',
+      !!barrel,
+    )
+    return false
+  }
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  barrel.name = 'Barrel'
+
+  // Turret roof / optics / hatches / antenna
+  for (const n of [
+    'Object_19',
+    'Object_20',
+    'Object_15',
+    'Object_3',
+    'Object_13',
+    'Object_8',
+    'Object_5',
+    'Object_11',
+    'Object_9',
+    'Object_33',
+  ]) {
+    const extra = root.getObjectByName(n)
+    if (extra && extra !== turret && extra !== barrel) turret.attach(extra)
+  }
+
+  if (barrel.parent !== turret) turret.attach(barrel)
+  const tip = root.getObjectByName('Object_10')
+  if (tip) barrel.attach(tip)
+
+  const trackL = root.getObjectByName('Object_4')
+  const trackR = root.getObjectByName('Object_7')
+  if (trackL) {
+    trackL.name = 'TrackL'
+    if (trackL.parent !== hull) hull.attach(trackL)
+  }
+  if (trackR) {
+    trackR.name = 'TrackR'
+    if (trackR.parent !== hull) hull.attach(trackR)
+  }
+  // Road-wheel / skirt strips beside the belts
+  for (const [n, side] of [
+    ['Object_26', trackL],
+    ['Object_28', trackR],
+  ] as const) {
+    const strip = root.getObjectByName(n)
+    const parent = side ?? hull
+    if (strip && strip.parent !== parent) parent.attach(strip)
+  }
+
+  // Remaining loose Object_* → hull (don't steal meshes already under turret/barrel/tracks)
+  const chassis: THREE.Object3D[] = []
+  root.traverse((o) => {
+    if (!(o instanceof THREE.Mesh)) return
+    if (!/^Object_\d+$/i.test(o.name)) return
+    let p: THREE.Object3D | null = o
+    while (p) {
+      if (p === hull || p === turret || p === barrel) return
+      if (trackL && p === trackL) return
+      if (trackR && p === trackR) return
+      p = p.parent
+    }
+    chassis.push(o)
+  })
+  for (const m of chassis) {
+    hull.attach(m)
+  }
+
+  root.userData.forceDoubleSide = true
+  console.info(
+    '[Steel] Desert Warrior: Object_25 hull + Object_18 turret + Object_16 barrel (+Z, double-side)',
+  )
   return true
 }
 
@@ -1613,17 +1883,31 @@ function createMgMuzzle(
   return mg
 }
 
-/** Muzzle on pitch-pivot +Z at ~barrel length (matches gun-forward used for aim/fire). */
+/**
+ * Muzzle at the barrel/rail forward tip (pitch-pivot local +Z).
+ * Old 0.55×longest heuristic parked the tip mid-tube on short guns
+ * (Hetzer / Katyusha) so the aim scope sat inside the hull.
+ */
 function placeMuzzle(pitchPivot: THREE.Object3D, barrelMesh: THREE.Object3D): THREE.Object3D {
   pitchPivot.updateMatrixWorld(true)
   barrelMesh.updateMatrixWorld(true)
-  const size = new THREE.Box3().setFromObject(barrelMesh).getSize(new THREE.Vector3())
-  const length = Math.max(size.x, size.y, size.z, 1) * 0.55
+  const box = new THREE.Box3().setFromObject(barrelMesh)
+  const tipWorld = new THREE.Vector3(
+    (box.min.x + box.max.x) * 0.5,
+    (box.min.y + box.max.y) * 0.5,
+    box.max.z,
+  )
+  const tipLocal = pitchPivot.worldToLocal(tipWorld.clone())
+  // Stay on +Z; never sit behind the elevation hinge.
+  const z = Math.max(0.55, tipLocal.z)
 
   const muzzle = new THREE.Object3D()
   muzzle.name = 'muzzle'
-  muzzle.position.set(0, 0, length)
+  muzzle.position.set(tipLocal.x, tipLocal.y, z)
   pitchPivot.add(muzzle)
+  console.info(
+    `[Steel] Muzzle at tip · local z=${z.toFixed(2)}m (barrel span ${(box.max.z - box.min.z).toFixed(2)}m)`,
+  )
   return muzzle
 }
 
@@ -1649,7 +1933,16 @@ function createTurretMount(yawPivot: THREE.Object3D, turretMesh: THREE.Object3D)
       box.setFromObject(turretMesh)
     }
   } else {
+    const hidden: THREE.Object3D[] = []
+    turretMesh.traverse((o) => {
+      if (o === turretMesh) return
+      if (/^barrel$|^gun$|gun_01/i.test(o.name)) {
+        hidden.push(o)
+        o.visible = false
+      }
+    })
     box.setFromObject(turretMesh)
+    for (const o of hidden) o.visible = true
   }
   const worldPos = new THREE.Vector3(
     (box.min.x + box.max.x) * 0.5,
@@ -1751,6 +2044,59 @@ function finishRigidRig(root: THREE.Group): PlayerTankHandle {
   return { root, turret: yawPivot, barrel: pitchPivot, muzzle, turretMount, mgMuzzle }
 }
 
+/**
+ * Casemate TD — yaw/pitch pivots move only the barrel (superstructure stays on hull).
+ * Limited traverse is enforced in aim.ts via `gunTraverseDeg`.
+ */
+function finishCasemateGunRig(
+  root: THREE.Group,
+  barrelMesh: THREE.Object3D,
+): PlayerTankHandle {
+  root.updateMatrixWorld(true)
+  barrelMesh.updateMatrixWorld(true)
+
+  const yawPivot = new THREE.Group()
+  yawPivot.name = 'turretYawPivot'
+
+  const bBox = barrelGeometryWorldBox(barrelMesh)
+  const size = bBox.getSize(new THREE.Vector3())
+  // Hinge near aft of tube (mantlet), +Z = gun forward.
+  const hingeWorld = new THREE.Vector3(
+    (bBox.min.x + bBox.max.x) * 0.5,
+    (bBox.min.y + bBox.max.y) * 0.5,
+    bBox.min.z + Math.min(0.18, size.z * 0.1),
+  )
+  root.worldToLocal(hingeWorld)
+  yawPivot.position.copy(hingeWorld)
+  root.add(yawPivot)
+
+  const pitchPivot = new THREE.Group()
+  pitchPivot.name = 'barrelPitchPivot'
+  yawPivot.add(pitchPivot)
+  pitchPivot.attach(barrelMesh)
+  console.info('[Steel] Casemate gun: elevation pivot on', barrelMesh.name)
+
+  const muzzle = placeMuzzle(pitchPivot, barrelMesh)
+
+  const hull = findNamed(root, ['Hull', 'hull']) ?? root
+  hull.updateMatrixWorld(true)
+  const hBox = new THREE.Box3().setFromObject(hull)
+  const mountWorld = new THREE.Vector3(
+    (hBox.min.x + hBox.max.x) * 0.5,
+    hBox.max.y + 0.12,
+    (hBox.min.z + hBox.max.z) * 0.5 + 0.15,
+  )
+  const turretMount = new THREE.Object3D()
+  turretMount.name = 'turretCamMount'
+  root.worldToLocal(mountWorld)
+  turretMount.position.copy(mountWorld)
+  root.add(turretMount)
+
+  const mgMuzzle = createMgMuzzle(yawPivot, size)
+  hardenMeshRendering(root)
+  return { root, turret: yawPivot, barrel: pitchPivot, muzzle, turretMount, mgMuzzle }
+}
+
 function finishRig(root: THREE.Group, turretMesh: THREE.Object3D): PlayerTankHandle {
   root.updateMatrixWorld(true)
   const barrelMesh = findBarrelMesh(root, turretMesh)
@@ -1786,6 +2132,9 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
   if (!rigid) {
     preparePzh2000(model) ||
       prepareLeopard1(model) ||
+      prepareHetzer(model) ||
+      prepareLav25(model) ||
+      prepareDesertWarrior(model) ||
       preparePz3(model) ||
       prepareT90(model) ||
       prepareShilka(model) ||
@@ -1809,6 +2158,7 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareDuster(model) ||
       preparePershing(model) ||
       prepareShermanFirefly(model) ||
+      prepareChieftain(model) ||
       prepareChallenger2(model) ||
       prepareConqueror(model) ||
       prepareChurchill(model) ||
@@ -1835,6 +2185,17 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
   if (rigid) {
     console.info('[Steel] Loaded rigid tank GLB from', url)
     return finishRigidRig(root)
+  }
+
+  if (model.userData.casemateGun) {
+    const barrelMesh =
+      findNamed(root, ['Barrel', 'Gun', 'barrel', 'gun']) ??
+      root.getObjectByName('Barrel')
+    if (barrelMesh) {
+      console.info('[Steel] Loaded casemate TD from', url, 'barrel=', barrelMesh.name)
+      return finishCasemateGunRig(root, barrelMesh)
+    }
+    console.warn('[Steel] casemateGun set but no Barrel — falling back to turret rig')
   }
 
   const turretMesh = findTurretMesh(root)

@@ -5,10 +5,27 @@ export type CameraMode = 'turret' | 'chase' | 'hull'
 
 const TURRET_CAM_HEIGHT = 0.85
 const TURRET_CAM_BACK = 4.8
-const AIM_CAM_HEIGHT = 0.15
-const AIM_CAM_BACK = 1.4
+const AIM_CAM_HEIGHT_DEFAULT = 0.15
+const AIM_CAM_BACK_DEFAULT = 1.4
 /** Look-at distance along the shoot/aim line (reticle converge). */
 const AIM_LOOK_DISTANCE = 72
+
+/** Per-chassis gunsight offsets (short casemate / MLRS need a tighter back). */
+let aimCamBack = AIM_CAM_BACK_DEFAULT
+let aimCamHeight = AIM_CAM_HEIGHT_DEFAULT
+
+/** Override RMB optic camera sit (metres behind / above muzzle). null = defaults. */
+export function setAimCamSight(backM: number | null, heightM: number | null = null): void {
+  aimCamBack = backM == null ? AIM_CAM_BACK_DEFAULT : Math.max(0.2, backM)
+  aimCamHeight = heightM == null ? AIM_CAM_HEIGHT_DEFAULT : heightM
+  console.info(
+    `[Steel] Aim sight cam · back ${aimCamBack.toFixed(2)}m · height ${aimCamHeight.toFixed(2)}m`,
+  )
+}
+
+export function resetAimCamSight(): void {
+  setAimCamSight(null, null)
+}
 
 const CHASE_DISTANCE = 11.5
 const CHASE_HEIGHT = 5.2
@@ -214,8 +231,8 @@ export function updateTurretCamera(
   _back.copy(_aimDir).multiplyScalar(-1)
   _up.set(0, 1, 0)
 
-  const back = aiming ? AIM_CAM_BACK : TURRET_CAM_BACK
-  const height = aiming ? AIM_CAM_HEIGHT : TURRET_CAM_HEIGHT
+  const back = aiming ? aimCamBack : TURRET_CAM_BACK
+  const height = aiming ? aimCamHeight : TURRET_CAM_HEIGHT
 
   camera.position
     .copy(_muzzlePos)

@@ -10,8 +10,6 @@ export type WheelSet = {
 const _box = new THREE.Box3()
 const _size = new THREE.Vector3()
 const _pos = new THREE.Vector3()
-const _quat = new THREE.Quaternion()
-const _axis = new THREE.Vector3()
 
 /**
  * If mesh verts are far from the object origin, spin orbits the wrong pivot
@@ -44,6 +42,8 @@ function isWheelMesh(obj: THREE.Object3D): obj is THREE.Mesh {
   // Fused Sketchfab assemblies (whole bogie / track run) — never spin these
   if (n === 'wheels' || n === 'tracks' || n === 'track') return false
   if (/tread|m1-tank-track|pzh_2000tracks/.test(n)) return false
+  // Stowage / spare on the hull — not a driven road wheel
+  if (/spare|backup|stow/.test(n)) return false
   // Named road wheels / idlers / sprockets (not tires-only deco without wheel parent)
   const looksWheel =
     n.includes('wheel') ||
@@ -73,31 +73,34 @@ function sideOf(obj: THREE.Object3D): 'left' | 'right' | 'unknown' {
 }
 
 /**
- * Local axis that best matches world left/right (tank lateral = +X when facing +Z).
- * Abrams (rotated −90° Y) uses local Y; Newc42-style wheels use local X.
+ * Axle = thinnest local AABB axis (disc thickness). Sketchfab M901 wheels are
+ * pancakes in XZ (spin Y); baked Panther hubs are YZ discs (spin X).
  */
-function detectSpinAxis(obj: THREE.Object3D): 'x' | 'y' | 'z' {
-  const tagged = obj.userData.wheelSpinAxis
+function detectLocalAxle(mesh: THREE.Mesh): 'x' | 'y' | 'z' {
+  const tagged = mesh.userData.wheelSpinAxis
   if (tagged === 'x' || tagged === 'y' || tagged === 'z') return tagged
-
-  obj.getWorldQuaternion(_quat)
-  let best: 'x' | 'y' | 'z' = 'x'
-  let bestDot = -1
-  for (const axis of ['x', 'y', 'z'] as const) {
-    _axis.set(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0)
-    _axis.applyQuaternion(_quat)
-    const d = Math.abs(_axis.x) // world lateral
-    if (d > bestDot) {
-      bestDot = d
-      best = axis
-    }
+  const geom = mesh.geometry
+  if (!geom.boundingBox) geom.computeBoundingBox()
+  const bb = geom.boundingBox
+  if (!bb) {
+    mesh.userData.wheelSpinAxis = 'x'
+    return 'x'
   }
-  obj.userData.wheelSpinAxis = best
-  return best
+  bb.getSize(_size)
+  let axis: 'x' | 'y' | 'z' = 'x'
+  let thinnest = _size.x
+  if (_size.y < thinnest) {
+    thinnest = _size.y
+    axis = 'y'
+  }
+  if (_size.z < thinnest) axis = 'z'
+  mesh.userData.wheelSpinAxis = axis
+  return axis
 }
 
 function applySpin(obj: THREE.Object3D, delta: number): void {
-  const axis = detectSpinAxis(obj)
+  const axis =
+    obj instanceof THREE.Mesh ? detectLocalAxle(obj) : (obj.userData.wheelSpinAxis as 'x' | 'y' | 'z' | undefined) ?? 'x'
   if (axis === 'y') obj.rotation.y += delta
   else if (axis === 'z') obj.rotation.z += delta
   else obj.rotation.x += delta
@@ -113,7 +116,7 @@ export function collectWheels(root: THREE.Object3D): WheelSet {
   root.traverse((obj) => {
     if (!isWheelMesh(obj)) return
     ensureHubOrigin(obj)
-    detectSpinAxis(obj)
+    detectLocalAxle(obj)
     const side = sideOf(obj)
     if (side === 'left') left.push(obj)
     else if (side === 'right') right.push(obj)
@@ -131,29 +134,36 @@ export function collectWheels(root: THREE.Object3D): WheelSet {
 
   console.info(
     `[Steel] Wheels TP2: L=${left.length} R=${right.length} radius≈${radius.toFixed(2)}` +
+      (left[0] instanceof THREE.Mesh
+        ? ` · axle ${detectLocalAxle(left[0])}`
+        : '') +
       (left.length + right.length === 0 ? ' — will rely on track scroll if present' : ''),
   )
   return { left, right, radius }
 }
 
 /**
- * Spin wheels from drive speed (m/s). Turn adds differential so pivots look alive.
- * Axle = local axis aligned with world left/right (see detectSpinAxis).
+ * Spin wheels from drive speed (m/s). Axle = thinnest local disc axis.
  */
 export function updateWheels(
   wheels: WheelSet,
   dt: number,
-  speed: number,
-  turn: number,
+  leftSpeed: number,
+  rightSpeed: number,
 ): void {
   if (wheels.left.length + wheels.right.length === 0) return
   const r = Math.max(0.15, wheels.radius)
-  // Differential: positive turn = left (A) → left track slower / reverse bias
-  const diff = turn * Math.max(1.2, Math.abs(speed) * 0.35 + 1.8)
-  const leftSpeed = speed - diff
-  const rightSpeed = speed + diff
   const leftOmega = -leftSpeed / r
   const rightOmega = -rightSpeed / r
   for (const w of wheels.left) applySpin(w, leftOmega * dt)
   for (const w of wheels.right) applySpin(w, rightOmega * dt)
+}
+
+/** Fake L/R from hull speed + turn (−1…+1) for AI / callers without dual-track. */
+export function trackSpeedsFromTurn(
+  speed: number,
+  turn: number,
+): { left: number; right: number } {
+  const diff = turn * Math.max(1.2, Math.abs(speed) * 0.35 + 1.8)
+  return { left: speed - diff, right: speed + diff }
 }

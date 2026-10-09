@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import { mapOptionById, type MapId } from './maps/mapCatalog'
 import { TANK_OPTIONS, tankOptionById, type TankId } from './tankCatalog'
-import { FOREST_PROP_URLS } from './maps/forestOverwatch'
+import { FOREST_PROP_URLS, FOREST_TOWNS } from './maps/forestOverwatch'
+import { createFrontlineState, FRONTLINE_ATTACKER, frontlineSpawnAnchor } from './frontline'
 import { preloadUrls, warmLoaders } from './loadGltf'
 import type { Season, TimeOfDay, WeatherKind } from './environment'
 import {
@@ -10,6 +11,15 @@ import {
   type TankCosmetics,
 } from './cosmetics'
 import { createCustomizePreview } from './customizePreview'
+import {
+  LOADOUT_OPTIONS,
+  getAircraftLoadout,
+  loadoutOptionById,
+  resolveAircraftStores,
+  resolveStores,
+  setAircraftLoadout,
+  type LoadoutId,
+} from './aircraftLoadouts'
 import {
   WRAP_OPTIONS,
   setSelectedWrapId,
@@ -44,7 +54,13 @@ import {
 
 export type { TeamId }
 
-export type GameModeId = 'skirmish' | 'koth'
+export type GameModeId = 'skirmish' | 'koth' | 'frontline'
+
+export function gameModeLabel(mode: GameModeId): string {
+  if (mode === 'koth') return 'King of the Hill'
+  if (mode === 'frontline') return 'Push the Frontline'
+  return 'Skirmish'
+}
 
 export type MenuSelection = {
   mapId: MapId
@@ -65,6 +81,7 @@ export type MenuSelection = {
    */
   remount?: boolean
   kothHold?: { vostokHold: number; meridianHold: number }
+  frontlineHold?: { taken: number; captureT: number; recaptureT: number; matchT: number }
   /** Interactive training range (empty AI, coach overlay). */
   tutorial?: 'land-basics' | 'air-basics' | 'systems-basics'
   /** Present when launching from Multiplayer lobby. */
@@ -94,6 +111,30 @@ type MatchDraft = {
 const AI_SLOT_MAX = 3
 const DEFAULT_AI_TANK: TankId = 'tiger'
 const SVG_SIZE = 320
+
+function spawnTownPins(
+  toSvg: (x: number, z: number) => { cx: number; cy: number },
+  svgW: number,
+  svgH: number,
+): string {
+  return FOREST_TOWNS.map((t) => {
+    const { cx, cy } = toSvg(t.x, t.z)
+    return `<div class="spawn-town" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" title="${t.name}">${t.name}</div>`
+  }).join('')
+}
+
+function spawnModeOverlay(
+  gameMode: GameModeId,
+  toSvg: (x: number, z: number) => { cx: number; cy: number },
+  svgW: number,
+  svgH: number,
+): string {
+  if (gameMode === 'koth') {
+    return `<div class="spawn-hill" style="left:50%;top:50%" title="King of the Hill"></div>`
+  }
+  if (gameMode === 'frontline') return spawnTownPins(toSvg, svgW, svgH)
+  return ''
+}
 
 function warmupMatchAssets(tankIds: readonly TankId[] = []): void {
   warmLoaders()
@@ -251,6 +292,7 @@ function showHome(
         <button type="button" class="home-btn" data-go="tutorial">Tutorials</button>
         <button type="button" class="home-btn${onlineOk ? '' : ' is-disabled'}" data-go="mp" title="${onlineOk ? 'Create or join a room' : escapeHtml(mpBlockReason)}">Multiplayer</button>
         <button type="button" class="home-btn" data-go="customize">Customize</button>
+        <button type="button" class="home-btn" data-go="hangar">Hangar</button>
         <button type="button" class="home-btn" data-go="settings">Settings</button>
         <button type="button" class="home-btn" data-go="credits">Credits</button>
         <button type="button" class="home-btn home-btn-logout" data-go="logout">Log out</button>
@@ -279,6 +321,9 @@ function showHome(
   })
   root.querySelector('[data-go="customize"]')!.addEventListener('click', () => {
     showCustomize(root, resolve)
+  })
+  root.querySelector('[data-go="hangar"]')!.addEventListener('click', () => {
+    showPlaneHangar(root, resolve)
   })
   root.querySelector('[data-go="settings"]')!.addEventListener('click', () => {
     showPlaceholder(root, resolve, 'Settings', 'Audio, graphics, and controls — coming soon.')
@@ -832,6 +877,194 @@ function showCustomize(
   queueShow()
 }
 
+/**
+ * Aircraft hangar — pick a plane, orbit it, assign a weapons loadout.
+ * Mirrors Customize (tanks / wraps) so later mission briefs can read saved stores.
+ */
+function showPlaneHangar(
+  root: HTMLDivElement,
+  resolve: (s: MenuSelection) => void,
+): void {
+  clearRoot(root)
+  root.classList.add('menu-screen-customize', 'menu-screen-plane-hangar')
+
+  const planes = TANK_OPTIONS.filter((t) => t.aircraft)
+  let planeId: TankId = planes[0]?.id ?? 'corsair'
+  let draft = getAircraftLoadout(planeId)
+  let rotDeg = { x: 0, y: 36, z: 0 }
+  let preview: ReturnType<typeof createCustomizePreview> | null = null
+  let previewReady: Promise<void> = Promise.resolve()
+
+  function degToRad(d: number): number {
+    return (d * Math.PI) / 180
+  }
+
+  function syncRotation(): void {
+    preview?.setRotation(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z))
+  }
+
+  function queueShow(): void {
+    const id = planeId
+    previewReady = previewReady.then(async () => {
+      await preview?.show(id, { wrapId: 'stock' })
+      syncRotation()
+    })
+  }
+
+  function planeChipsHtml(): string {
+    return planes
+      .map((t) => {
+        const active = t.id === planeId ? ' is-selected' : ''
+        return `<button type="button" class="customize-tank-chip${active}" data-plane="${t.id}">${t.name}</button>`
+      })
+      .join('')
+  }
+
+  function loadoutCardsHtml(): string {
+    return LOADOUT_OPTIONS.map((w) => {
+      const active = w.id === draft.loadoutId ? ' is-selected' : ''
+      return `
+        <button type="button" class="wrap-card loadout-card${active}" data-loadout="${w.id}">
+          <span class="wrap-thumb"><span class="wrap-thumb-stock">${w.name}</span></span>
+          <span class="wrap-card-name">${w.blurb}</span>
+        </button>`
+    }).join('')
+  }
+
+  function axisSlidersHtml(): string {
+    return `
+      <label class="customize-slider">
+        <span>X</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.x}" data-axis="x" />
+        <span class="customize-axis-val" data-axis-val="x">${rotDeg.x}°</span>
+      </label>
+      <label class="customize-slider">
+        <span>Y</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.y}" data-axis="y" />
+        <span class="customize-axis-val" data-axis-val="y">${rotDeg.y}°</span>
+      </label>
+      <label class="customize-slider">
+        <span>Z</span>
+        <input type="range" min="-180" max="180" value="${rotDeg.z}" data-axis="z" />
+        <span class="customize-axis-val" data-axis-val="z">${rotDeg.z}°</span>
+      </label>`
+  }
+
+  function storesLine(loadoutId: LoadoutId): string {
+    const stores = resolveStores(planeId, loadoutId)
+    const bits: string[] = ['guns']
+    if (stores.bombCount > 0) bits.push(`bombs ×${stores.bombCount}`)
+    if (stores.rockets) bits.push('rockets')
+    return bits.join(' · ')
+  }
+
+  function metaHtml(): string {
+    const t = tankOptionById(planeId)
+    return `<p class="wrap-preview-name">${t.name}</p>
+      <p class="wrap-preview-blurb">${loadoutOptionById(draft.loadoutId).name} · ${storesLine(draft.loadoutId)} · drag to orbit</p>`
+  }
+
+  function refreshChrome(): void {
+    const planeRow = root.querySelector('[data-plane-row]')
+    const loadoutGrid = root.querySelector('[data-loadout-grid]')
+    const axisRow = root.querySelector('[data-axis-sliders]')
+    const meta = root.querySelector('[data-preview-meta]')
+    if (planeRow) planeRow.innerHTML = planeChipsHtml()
+    if (loadoutGrid) loadoutGrid.innerHTML = loadoutCardsHtml()
+    if (axisRow) axisRow.innerHTML = axisSlidersHtml()
+    if (meta) meta.innerHTML = metaHtml()
+    bindSelectors()
+    bindAxisSliders()
+  }
+
+  function bindAxisSliders(): void {
+    root.querySelectorAll('[data-axis]').forEach((el) => {
+      el.addEventListener('input', () => {
+        const axis = (el as HTMLInputElement).dataset.axis as 'x' | 'y' | 'z'
+        const v = Number((el as HTMLInputElement).value)
+        rotDeg = { ...rotDeg, [axis]: v }
+        const label = root.querySelector(`[data-axis-val="${axis}"]`)
+        if (label) label.textContent = `${v}°`
+        syncRotation()
+      })
+    })
+  }
+
+  function bindSelectors(): void {
+    root.querySelectorAll('[data-plane]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = (btn as HTMLButtonElement).dataset.plane as TankId
+        if (id === planeId) return
+        planeId = id
+        draft = getAircraftLoadout(planeId)
+        rotDeg = { x: 0, y: 36, z: 0 }
+        refreshChrome()
+        queueShow()
+      })
+    })
+    root.querySelectorAll('[data-loadout]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const loadoutId = (btn as HTMLButtonElement).dataset.loadout as LoadoutId
+        if (loadoutId === draft.loadoutId) return
+        draft = { loadoutId }
+        refreshChrome()
+      })
+    })
+  }
+
+  root.innerHTML = `
+    <div class="menu-panel menu-panel-wide customize-panel">
+      <p class="menu-brand">Steel</p>
+      <h1 class="menu-title">Hangar</h1>
+      <p class="menu-sub">Pick a plane · orbit · assign a loadout · Apply (this airframe only).</p>
+
+      <p class="menu-section">Aircraft</p>
+      <div class="customize-tank-row" data-plane-row>${planeChipsHtml()}</div>
+
+      <div class="customize-stage">
+        <div class="customize-viewport" data-viewport>
+          <p class="customize-loading" data-loading-label>Loading airframe…</p>
+        </div>
+        <div class="customize-stage-meta" data-preview-meta>${metaHtml()}</div>
+      </div>
+
+      <p class="menu-section">Rotation</p>
+      <div class="customize-axis-sliders" data-axis-sliders>${axisSlidersHtml()}</div>
+
+      <p class="menu-section">Loadout</p>
+      <div class="wrap-grid" data-loadout-grid>${loadoutCardsHtml()}</div>
+
+      <div class="wrap-actions">
+        <button type="button" class="deploy-btn wrap-apply" data-apply>Apply</button>
+        <button type="button" class="deploy-btn menu-back">Back</button>
+      </div>
+      <p class="wrap-status" data-status></p>
+    </div>
+  `
+
+  bindSelectors()
+  bindAxisSliders()
+  root.querySelector('[data-apply]')!.addEventListener('click', () => {
+    setAircraftLoadout(planeId, draft)
+    const status = root.querySelector('[data-status]') as HTMLParagraphElement
+    const planeName = tankOptionById(planeId).name
+    const loadName = loadoutOptionById(draft.loadoutId).name
+    const stores = resolveAircraftStores(planeId)
+    status.textContent = `Saved ${planeName}: ${loadName} (${storesLine(draft.loadoutId)}).`
+    refreshChrome()
+    console.info('[Steel] Hangar applied', planeId, stores)
+  })
+  root.querySelector('.menu-back')!.addEventListener('click', () => {
+    preview?.dispose()
+    preview = null
+    goHome(root, resolve)
+  })
+
+  const viewport = root.querySelector('[data-viewport]') as HTMLElement
+  preview = createCustomizePreview(viewport)
+  queueShow()
+}
+
 const LOADING_TIPS = [
   "Don't forget to take cover — you'll need it :3",
   'An angled plate beats a flat one. Side shots hurt.',
@@ -917,6 +1150,10 @@ function showVoteMode(
           <span class="vote-card-name">King of the Hill</span>
           <span class="vote-card-blurb">Hold Midwood 90s. Respawn. Change vehicles after death.</span>
         </button>
+        <button type="button" class="vote-card" data-val="frontline">
+          <span class="vote-card-name">Push the Frontline</span>
+          <span class="vote-card-blurb">Attackers take towns in order. Defenders spawn on the road ahead. Recapture steals the attacker spawn.</span>
+        </button>
         <button type="button" class="vote-card" data-val="skirmish">
           <span class="vote-card-name">Skirmish</span>
           <span class="vote-card-blurb">Wipe the enemy force. One life.</span>
@@ -954,7 +1191,8 @@ function showVoteMode(
     btn.addEventListener('click', () => {
       modeGrid.querySelectorAll('.vote-card').forEach((el) => el.classList.remove('is-selected'))
       btn.classList.add('is-selected')
-      gameMode = (btn as HTMLElement).dataset.val === 'skirmish' ? 'skirmish' : 'koth'
+      const v = (btn as HTMLElement).dataset.val
+      gameMode = v === 'skirmish' || v === 'frontline' || v === 'koth' ? v : 'koth'
     })
   })
 
@@ -1044,11 +1282,11 @@ function showVoteMode(
 
 function tankStatsLine(tank: (typeof TANK_OPTIONS)[number]): string {
   if (tank.aircraft) {
-    if (tank.id === 'corsair') return 'Air · guns + bombs + HVAR'
-    if (tank.aircraftBombCount && tank.aircraftBombCount > 2) {
-      return `Air · guns + bombs ×${tank.aircraftBombCount}`
-    }
-    return 'Air · guns + bombs'
+    const stores = resolveAircraftStores(tank.id)
+    const bits: string[] = ['guns']
+    if (stores.bombCount > 0) bits.push(`bombs ×${stores.bombCount}`)
+    if (stores.rockets) bits.push('rockets')
+    return `Air · ${bits.join(' + ')}`
   }
   return `Pen ${tank.gun.aphePen} · Armor ${tank.armor.hullFront.armor} · HP ${tank.maxHp}`
 }
@@ -1075,7 +1313,7 @@ function showHangar(
       <header class="hangar-header">
         <p class="menu-kicker">Briefing · 3 / 4</p>
         <h1 class="menu-title">Select vehicle</h1>
-        <p class="menu-sub">${map.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} — preview left, roster right.</p>
+        <p class="menu-sub">${map.name} · ${gameModeLabel(draft.gameMode)} — preview left, roster right.</p>
       </header>
       <div class="hangar-body">
         <div class="hangar-preview" data-viewport>
@@ -1182,31 +1420,49 @@ function showSpawnSelect(
     }
   }
 
+  const flPreview = draft.gameMode === 'frontline' ? createFrontlineState() : null
   const dots = markers
     .map((m) => {
-      const { cx, cy } = toSvg(m.pos.x, m.pos.z)
-      return `<button type="button" class="spawn-dot spawn-${m.team}" data-team="${m.team}" data-index="${m.index}" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" aria-label="${nationByTeam(m.team).short} spawn ${m.index + 1}"></button>`
+      const pos = flPreview
+        ? frontlineSpawnAnchor(flPreview, m.team, m.index, map.spawns)
+        : { x: m.pos.x, z: m.pos.z }
+      const { cx, cy } = toSvg(pos.x, pos.z)
+      const role =
+        draft.gameMode === 'frontline'
+          ? m.team === FRONTLINE_ATTACKER
+            ? 'Attackers'
+            : 'Defenders'
+          : nationByTeam(m.team).short
+      return `<button type="button" class="spawn-dot spawn-${m.team}" data-team="${m.team}" data-index="${m.index}" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" aria-label="${role} spawn ${m.index + 1}"></button>`
     })
     .join('')
+
+  const roleLegend =
+    draft.gameMode === 'frontline'
+      ? `<div class="spawn-legend spawn-legend-nations">
+          <span class="spawn-legend-nation spawn-picked is-red">Attackers · Vostok</span>
+          <span class="spawn-legend-nation spawn-picked is-blue">Defenders · Meridian</span>
+        </div>`
+      : `<div class="spawn-legend spawn-legend-nations">
+          ${NATIONS.map(
+            (n) =>
+              `<span class="spawn-legend-nation"><img src="${nationFlagSrc(n)}" alt="" width="28" height="20" />${n.short}</span>`,
+          ).join('')}
+        </div>`
 
   root.innerHTML = `
     <div class="menu-panel menu-panel-wide menu-panel-spawn">
       <p class="menu-kicker">Briefing · 4 / 4</p>
       <h1 class="menu-title">Choose deploy point</h1>
-      <p class="menu-sub">${map.name} · ${tank.name} · ${draft.gameMode === 'koth' ? 'King of the Hill' : 'Skirmish'} — click a spawn, then enter the field.</p>
+      <p class="menu-sub">${map.name} · ${tank.name} · ${gameModeLabel(draft.gameMode)} — click a spawn, then enter the field.</p>
 
       <div class="spawn-map-wrap">
         <div class="spawn-map" style="width:${svgW}px;height:${svgH}px">
           <div class="spawn-map-grid"></div>
-          ${draft.gameMode === 'koth' ? `<div class="spawn-hill" style="left:50%;top:50%" title="King of the Hill"></div>` : ''}
+          ${spawnModeOverlay(draft.gameMode, toSvg, svgW, svgH)}
           ${dots}
         </div>
-        <div class="spawn-legend spawn-legend-nations">
-          ${NATIONS.map(
-            (n) =>
-              `<span class="spawn-legend-nation"><img src="${nationFlagSrc(n)}" alt="" width="28" height="20" />${n.short}</span>`,
-          ).join('')}
-        </div>
+        ${roleLegend}
       </div>
 
       <p class="spawn-picked" data-picked>No spawn selected</p>
@@ -1231,7 +1487,10 @@ function showSpawnSelect(
       btn.classList.add('is-selected')
       team = (btn as HTMLElement).dataset.team as TeamId
       spawnIndex = Number((btn as HTMLElement).dataset.index)
-      picked.textContent = `${nationByTeam(team).name} · spawn ${spawnIndex + 1}`
+      picked.textContent =
+        draft.gameMode === 'frontline'
+          ? `${team === FRONTLINE_ATTACKER ? 'Attackers' : 'Defenders'} · ${nationByTeam(team).name} · slot ${spawnIndex + 1}`
+          : `${nationByTeam(team).name} · spawn ${spawnIndex + 1}`
       picked.classList.toggle('is-red', team === 'red')
       picked.classList.toggle('is-blue', team === 'blue')
       refreshDeploy()
@@ -1280,6 +1539,7 @@ export function showRespawnHangar(opts: {
   timeOfDay?: TimeOfDay
   season?: Season
   weather?: WeatherKind
+  frontlineHold?: { taken: number; captureT: number; recaptureT: number; matchT: number }
 }): Promise<RespawnPick> {
   return new Promise((resolve) => {
     const root = ensureRoot()
@@ -1315,7 +1575,7 @@ export function showRespawnHangar(opts: {
         <header class="hangar-header">
           <p class="menu-kicker">Respawn</p>
           <h1 class="menu-title">Change vehicle</h1>
-          <p class="menu-sub">${map.name} · ${nationByTeam(opts.team).short} — pick a chassis, then a spawn.</p>
+          <p class="menu-sub">${map.name} · ${nationByTeam(opts.team).short}${opts.gameMode === 'frontline' ? ` · ${opts.team === FRONTLINE_ATTACKER ? 'Attackers' : 'Defenders'}` : ''} — pick a chassis, then a spawn.</p>
         </header>
         <div class="hangar-body">
           <div class="hangar-preview" data-viewport>
@@ -1380,7 +1640,7 @@ export function showRespawnHangar(opts: {
       showRespawnSpawn(root, draft, opts.team, tankId, (pick) => {
         root.remove()
         resolve(pick)
-      })
+      }, opts.frontlineHold)
     })
   })
 }
@@ -1391,6 +1651,7 @@ function showRespawnSpawn(
   team: TeamId,
   tankId: TankId,
   done: (p: RespawnPick) => void,
+  frontlineHold?: { taken: number; captureT: number; recaptureT: number; matchT: number },
 ): void {
   clearRoot(root)
   root.classList.add('menu-screen-spawn', 'menu-wt', 'menu-respawn')
@@ -1408,9 +1669,16 @@ function showRespawnSpawn(
       cy: ((mapH / 2 - z) / mapH) * svgH,
     }
   }
+  const flPreview =
+    draft.gameMode === 'frontline'
+      ? { ...createFrontlineState(), ...(frontlineHold ?? {}) }
+      : null
   const dots = map.spawns[team]
     .map((p, i) => {
-      const { cx, cy } = toSvg(p.x, p.z)
+      const pos = flPreview
+        ? frontlineSpawnAnchor(flPreview, team, i, map.spawns)
+        : { x: p.x, z: p.z }
+      const { cx, cy } = toSvg(pos.x, pos.z)
       return `<button type="button" class="spawn-dot spawn-${team}" data-index="${i}" style="left:${(cx / svgW) * 100}%;top:${(cy / svgH) * 100}%" aria-label="Spawn ${i + 1}"></button>`
     })
     .join('')
@@ -1419,11 +1687,11 @@ function showRespawnSpawn(
     <div class="menu-panel menu-panel-wide menu-panel-spawn">
       <p class="menu-kicker">Respawn</p>
       <h1 class="menu-title">Deploy ${tank.name}</h1>
-      <p class="menu-sub">Select a ${nationByTeam(team).short} spawn point.</p>
+      <p class="menu-sub">Select a ${nationByTeam(team).short}${draft.gameMode === 'frontline' ? (team === FRONTLINE_ATTACKER ? ' attacker' : ' defender') : ''} spawn point.</p>
       <div class="spawn-map-wrap">
         <div class="spawn-map" style="width:${svgW}px;height:${svgH}px">
           <div class="spawn-map-grid"></div>
-          ${draft.gameMode === 'koth' ? `<div class="spawn-hill" style="left:50%;top:50%"></div>` : ''}
+          ${spawnModeOverlay(draft.gameMode, toSvg, svgW, svgH)}
           ${dots}
         </div>
       </div>

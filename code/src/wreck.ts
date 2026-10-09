@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { detachInstanceMaterials } from './loadGltf'
 
 export type WreckFx = {
   wreckPlume: (origin: THREE.Vector3) => void
@@ -79,6 +80,7 @@ export function spawnDestroyedWreck(
 
 function cloneWreck(scene: THREE.Scene, root: THREE.Object3D): THREE.Object3D {
   const clone = root.clone(true)
+  detachInstanceMaterials(clone)
   clone.name = `${root.name || 'tank'}-wreck`
   clone.visible = true
   clone.traverse((obj) => {

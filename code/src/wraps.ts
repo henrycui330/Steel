@@ -90,7 +90,8 @@ function loadWrapTexture(url: string): Promise<THREE.Texture> {
   let pending = textureCache.get(url)
   if (!pending) {
     pending = (async () => {
-      const tex = await loadTextureCached(url)
+      const base = await loadTextureCached(url)
+      const tex = base.clone()
       tex.wrapS = THREE.RepeatWrapping
       tex.wrapT = THREE.RepeatWrapping
       tex.repeat.set(2.4, 2.4)

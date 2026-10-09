@@ -1,6 +1,7 @@
 This is the Tech Tree info page. The first tanks listed are the cheaper ones, and the ones towards the bottom are the late game tanks.
 Germany:
 Panzer III
+Jagdpanzer 38(t) Hetzer
 Panzer IV
 Tiger II
 Leopard 1
@@ -16,6 +17,7 @@ PzH 2000
     M901 ITV
     M2 Bradley
     M3A3 Bradley
+    LAV-25
     M1 Abrams
     P-51 Mustang
     F-16A Fighting Falcon
@@ -23,6 +25,8 @@ Britain:
  Cromwell IV
  Churchill VII
  Conqueror
+ Chieftain/T95
+ Desert Warrior
  Challenger 2
  Challenger 3
  Spitfire Mk.IIa

@@ -141,7 +141,7 @@ export function createGrassTexture(repeat = 48): THREE.CanvasTexture {
   }, repeat)
 }
 
-/** Dark asphalt grit — for road ribbons (not a GLB atlas). */
+/** Dark asphalt grit — cracks, tar patches, oil stains, aggregate (not a GLB atlas). */
 export function createAsphaltTexture(repeatU = 1, repeatV = 1): THREE.CanvasTexture {
   const tex = canvasTexture(256, (ctx, size) => {
     const img = ctx.createImageData(size, size)
@@ -152,20 +152,93 @@ export function createAsphaltTexture(repeatU = 1, repeatV = 1): THREE.CanvasText
         const grit = hash2(x * 1.9, y * 1.3)
         const patch = fbm(x * 0.03 + 5, y * 0.028, 3)
         const t = n * 0.55 + grit * 0.3 + patch * 0.15
-        // Charcoal asphalt with slight warm/cool flecks
-        const r = Math.floor(38 + t * 42 + grit * 8)
-        const g = Math.floor(38 + t * 40)
-        const b = Math.floor(40 + t * 38 + (1 - grit) * 6)
+        // Charcoal base
+        let r = 38 + t * 42 + grit * 8
+        let g = 38 + t * 40
+        let b = 40 + t * 38 + (1 - grit) * 6
+
+        // Light aggregate flecks
+        if (hash2(x * 3.1, y * 2.7) > 0.92) {
+          r += 28
+          g += 26
+          b += 22
+        }
+
+        // Tar / seal patches (darker warm blobs)
+        const tar = fbm(x * 0.055 + 2.1, y * 0.05 - 1.4, 3)
+        if (tar > 0.62) {
+          const k = (tar - 0.62) / 0.38
+          r = r * (1 - 0.35 * k) + 22 * k
+          g = g * (1 - 0.35 * k) + 20 * k
+          b = b * (1 - 0.35 * k) + 18 * k
+        }
+
+        // Oil stains (cooler dark spots)
+        const oil = fbm(x * 0.08 - 4, y * 0.07 + 3, 2)
+        if (oil > 0.72 && grit > 0.4) {
+          const k = (oil - 0.72) / 0.28
+          r *= 1 - 0.45 * k
+          g *= 1 - 0.4 * k
+          b = Math.min(255, b * (1 - 0.25 * k) + 8 * k)
+        }
+
+        // Hairline cracks — darken along noise ridges
+        const crack = Math.abs(fbm(x * 0.22, y * 0.22, 2) - 0.5)
+        if (crack < 0.028) {
+          const k = 1 - crack / 0.028
+          r *= 1 - 0.55 * k
+          g *= 1 - 0.55 * k
+          b *= 1 - 0.5 * k
+        }
+
         const i = (y * size + x) * 4
-        d[i] = r
-        d[i + 1] = g
-        d[i + 2] = b
+        d[i] = Math.floor(Math.min(255, Math.max(0, r)))
+        d[i + 1] = Math.floor(Math.min(255, Math.max(0, g)))
+        d[i + 2] = Math.floor(Math.min(255, Math.max(0, b)))
         d[i + 3] = 255
       }
     }
     ctx.putImageData(img, 0, 0)
   }, 1)
   tex.repeat.set(repeatU, repeatV)
+  return tex
+}
+
+/**
+ * Dashed paint for road centerline. UV: U across stripe, V along path (dist/16).
+ * One texture cycle ≈ 16 m → ~7 m dash / ~9 m gap.
+ */
+export function createRoadDashTexture(repeatV = 1): THREE.CanvasTexture {
+  const size = 64
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('[Steel] 2D canvas unavailable for road dash')
+  ctx.clearRect(0, 0, size, size)
+  // Soft worn paint — not pure white
+  const g = ctx.createLinearGradient(0, 0, size, 0)
+  g.addColorStop(0, 'rgba(210, 195, 140, 0)')
+  g.addColorStop(0.18, 'rgba(220, 205, 150, 0.92)')
+  g.addColorStop(0.82, 'rgba(220, 205, 150, 0.92)')
+  g.addColorStop(1, 'rgba(210, 195, 140, 0)')
+  ctx.fillStyle = g
+  // Dash occupies top ~44% of V; rest transparent gap
+  ctx.fillRect(0, 0, size, Math.floor(size * 0.44))
+  // Wear chips in the dash
+  ctx.fillStyle = 'rgba(40, 36, 28, 0.35)'
+  for (let i = 0; i < 8; i++) {
+    const px = (hash2(i * 1.7, 3.2) * size) | 0
+    const py = (hash2(i * 2.3, 1.1) * size * 0.4) | 0
+    ctx.fillRect(px, py, 2 + (i % 3), 1 + (i % 2))
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.RepeatWrapping
+  tex.repeat.set(1, repeatV)
+  tex.anisotropy = 8
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.needsUpdate = true
   return tex
 }
 
@@ -484,4 +557,88 @@ export function createTrackTreadTexture(): THREE.CanvasTexture {
   _trackTreadTex = tex
   console.info('[Steel] Track tread sheet ready (black + gray cleats)')
   return tex
+}
+
+export type GrassTuft = {
+  geometry: THREE.BufferGeometry
+  material: THREE.MeshStandardMaterial
+  unitHeight: number
+}
+
+/** One painted blade (alpha taper) for procedural tuft cards. */
+function createGrassBladeMap(): THREE.CanvasTexture {
+  const tex = canvasTexture(64, (ctx, size) => {
+    ctx.clearRect(0, 0, size, size)
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    const mid = (size - 1) * 0.5
+    for (let y = 0; y < size; y++) {
+      const t = y / (size - 1)
+      const half = (0.42 - t * 0.38) * size
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4
+        const dx = Math.abs(x - mid)
+        let a = 0
+        if (dx < half) {
+          const edge = 1 - dx / Math.max(half, 1)
+          a = Math.floor(255 * Math.min(1, edge * 1.35) * (0.35 + t * 0.65))
+        }
+        const n = hash2(x * 0.8, y * 1.1)
+        d[i] = Math.floor(48 + t * 70 + n * 18)
+        d[i + 1] = Math.floor(92 + t * 90 + n * 20)
+        d[i + 2] = Math.floor(28 + t * 32)
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  tex.repeat.set(1, 1)
+  return tex
+}
+
+/**
+ * Crossed-card tuft (no GLB). Unit height 1m — instance scale is world metres.
+ */
+export function createGrassTuft(): GrassTuft {
+  const positions: number[] = []
+  const uvs: number[] = []
+  const indices: number[] = []
+  const cards = 4
+  for (let i = 0; i < cards; i++) {
+    const yaw = (i / cards) * Math.PI
+    const c = Math.cos(yaw)
+    const s = Math.sin(yaw)
+    const w = 0.32
+    const h = 1
+    const ox = Math.cos(yaw * 2.1) * 0.06
+    const oz = Math.sin(yaw * 2.1) * 0.06
+    const b = positions.length / 3
+    // base-L, base-R, tip-R, tip-L
+    positions.push(ox - c * w, 0, oz - s * w)
+    positions.push(ox + c * w, 0, oz + s * w)
+    positions.push(ox + c * w * 0.22, h, oz + s * w * 0.22)
+    positions.push(ox - c * w * 0.22, h, oz - s * w * 0.22)
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1)
+    indices.push(b, b + 1, b + 2, b, b + 2, b + 3)
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  geometry.computeBoundingSphere()
+
+  const material = new THREE.MeshStandardMaterial({
+    map: createGrassBladeMap(),
+    color: 0xd8f0b0,
+    roughness: 1,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    alphaTest: 0.38,
+    depthWrite: true,
+    envMapIntensity: 0.15,
+  })
+  return { geometry, material, unitHeight: 1 }
 }

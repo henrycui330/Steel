@@ -56,7 +56,7 @@ export const AMMO_TYPES: Record<AmmoId, AmmoDef> = {
   aphe: {
     id: 'aphe',
     name: 'APHE',
-    role: 'Armor — high pen, fuse after armor',
+    role: 'Armor — pen, then fuse explodes inside (not contact kill)',
     key: '↓',
     penetration: 58,
     penDamage: 280,

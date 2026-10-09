@@ -14,6 +14,8 @@ export type DummyHitResult = {
   /** Remaining HP after the hit. */
   hp: number
   tracksDisabled?: boolean
+  /** APHE filler applied after pen. */
+  internalDamage?: number
 }
 
 export type DummyTarget = {
@@ -216,29 +218,52 @@ export async function spawnStaticPz3Dummy(
       volumes.updateWorld()
       return volumes.resolveHit(p, velocity, shellStats)
     },
-    resolveShellHit(p, velocity, shellStats) {
+    resolveShellHit(p, velocity, shellStats, ctx) {
       if (!alive) return null
       volumes.updateWorld()
       const resolution = volumes.resolveHit(p, velocity, shellStats)
       if (!resolution) return null
 
       let destroyed = false
+      let internalDamage = 0
       if (resolution.kind === 'penetrated' || resolution.kind === 'blast') {
         hp = Math.max(0, hp - resolution.damage)
-        if (resolution.crit || hp <= 0) {
+        // APHE fuse after pen — crit adds filler, never contact instakill.
+        if (resolution.kind === 'penetrated' && ctx?.ammoId === 'aphe') {
+          let fuse = Math.max(0, Math.round(shellStats.internalBlast ?? 0))
+          if (resolution.crit) fuse += Math.round(maxHp * 0.42)
+          if (fuse > 0) {
+            hp = Math.max(0, hp - fuse)
+            internalDamage = fuse
+            console.info(
+              `[Steel] APHE FUSE −${fuse}` +
+                (resolution.crit ? ' (ammo cook)' : '') +
+                ` · HP ${hp}/${maxHp}`,
+            )
+          }
+        }
+        if (hp <= 0) {
           alive = false
           destroyed = true
           hp = 0
-          const reason = resolution.crit ? 'AMMO RACK' : 'DESTROYED'
+          const reason =
+            ctx?.ammoId === 'aphe'
+              ? resolution.crit
+                ? 'APHE FUSE · AMMO'
+                : 'APHE FUSE'
+              : 'DESTROYED'
           console.info(
-            `[Steel] ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}`,
+            `[Steel] ${reason} — ${resolution.part.label} ${resolution.kind} ${resolution.damage}` +
+              (internalDamage ? ` +fuse ${internalDamage}` : ''),
           )
           const hi = root.getObjectByName('practiceHighlight')
           if (hi) root.remove(hi)
           destroyVisual(scene, root)
         } else {
           console.info(
-            `[Steel] ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage} HP (${hp}/${maxHp})`,
+            `[Steel] ${resolution.kind.toUpperCase()} ${resolution.part.label} −${resolution.damage}` +
+              (internalDamage ? ` · FUSE −${internalDamage}` : '') +
+              ` HP (${hp}/${maxHp})`,
           )
         }
       } else if (resolution.kind === 'ricochet') {
@@ -251,7 +276,7 @@ export async function spawnStaticPz3Dummy(
         )
       }
 
-      return { resolution, destroyed, hp }
+      return { resolution, destroyed, hp, internalDamage }
     },
   }
 }

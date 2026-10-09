@@ -3,18 +3,27 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { estimatePropCollider, type PropCollider } from '../collision'
 import { assetUrl } from '../assetUrl'
 import { loadGltfCached, preloadUrls } from '../loadGltf'
-import { createAsphaltTexture, createGravelShoulderTexture, createPineForestFloorMaps, sampleForestGroundTint } from '../textures'
+import {
+  createAsphaltTexture,
+  createGravelShoulderTexture,
+  createPineForestFloorMaps,
+  createRoadDashTexture,
+  sampleForestGroundTint,
+} from '../textures'
 
-/** Playable arena — width (X) × depth/height (Z). */
-export const FOREST_OVERWATCH_WIDTH = 750
-export const FOREST_OVERWATCH_DEPTH = 2000
+/** 2000 m layout × this = playable size. */
+const MAP_SCALE = 2.5
+
+/** Playable arena — width (X) × depth/height (Z). Square so east/west flanks exist. */
+export const FOREST_OVERWATCH_WIDTH = 2000 * MAP_SCALE
+export const FOREST_OVERWATCH_DEPTH = 2000 * MAP_SCALE
 /** Max axis — fog / shadow helpers. */
 export const FOREST_OVERWATCH_SIZE = Math.max(
   FOREST_OVERWATCH_WIDTH,
   FOREST_OVERWATCH_DEPTH,
 )
 /** Legacy AI hint — north side. */
-export const FOREST_OVERWATCH_DUMMY = new THREE.Vector3(0, 0, 280)
+export const FOREST_OVERWATCH_DUMMY = new THREE.Vector3(0, 0, 280 * MAP_SCALE)
 
 export type ForestTown = {
   id: string
@@ -25,34 +34,37 @@ export type ForestTown = {
 }
 
 /**
- * Three open clearings — ruined hamlets (houses + crates + rubble).
- * Middle = largest. Flattened in the heightfield; trees kept out.
+ * Five pads on the SW→NE attack road.
+ * Capture order: south → west → mid → east → north.
  */
 export const FOREST_TOWNS: readonly ForestTown[] = [
-  { id: 'south', name: 'South Hollow', x: 14, z: -520, radius: 92 },
-  { id: 'mid', name: 'Midwood', x: 0, z: 0, radius: 110 },
-  { id: 'north', name: 'North Ridge', x: -16, z: 520, radius: 92 },
+  { id: 'south', name: 'South Hollow', x: -540 * MAP_SCALE, z: -520 * MAP_SCALE, radius: 160 },
+  { id: 'west', name: 'West Mill', x: -300 * MAP_SCALE, z: -260 * MAP_SCALE, radius: 150 },
+  { id: 'mid', name: 'Midwood', x: 0, z: 0, radius: 180 },
+  { id: 'east', name: 'East Ford', x: 300 * MAP_SCALE, z: 280 * MAP_SCALE, radius: 150 },
+  { id: 'north', name: 'North Ridge', x: 540 * MAP_SCALE, z: 520 * MAP_SCALE, radius: 160 },
 ]
 
 /** Soft hills placed away from clearings / roads (peak height ≈ h). */
 const FOREST_HILLS: ReadonlyArray<{ x: number; z: number; h: number; r: number }> = [
-  { x: 220, z: 380, h: 18, r: 115 },
-  { x: -210, z: -420, h: 20, r: 125 },
-  { x: 180, z: -700, h: 14, r: 100 },
-  { x: -230, z: 680, h: 16, r: 105 },
-  { x: 120, z: 820, h: 12, r: 85 },
-  { x: -140, z: -860, h: 13, r: 92 },
-  { x: 280, z: -160, h: 15, r: 105 },
-  { x: -270, z: 120, h: 12, r: 90 },
-  { x: 70, z: -300, h: 9, r: 58 },
-  { x: -90, z: 280, h: 10.5, r: 65 },
-  { x: 150, z: 160, h: 8.5, r: 55 },
-  { x: -160, z: -180, h: 9.5, r: 62 },
-  // Extra mid-scale bumps for a slightly rougher floor
-  { x: 250, z: 540, h: 11, r: 72 },
-  { x: -255, z: -560, h: 12, r: 78 },
-  { x: 95, z: -480, h: 8, r: 48 },
-  { x: -110, z: 460, h: 8.5, r: 52 },
+  { x: 520 * MAP_SCALE, z: -620 * MAP_SCALE, h: 22, r: 140 * MAP_SCALE },
+  { x: -540 * MAP_SCALE, z: 640 * MAP_SCALE, h: 24, r: 150 * MAP_SCALE },
+  { x: 720 * MAP_SCALE, z: 180 * MAP_SCALE, h: 18, r: 120 * MAP_SCALE },
+  { x: -740 * MAP_SCALE, z: -160 * MAP_SCALE, h: 19, r: 125 * MAP_SCALE },
+  { x: 280 * MAP_SCALE, z: 780 * MAP_SCALE, h: 16, r: 110 * MAP_SCALE },
+  { x: -300 * MAP_SCALE, z: -800 * MAP_SCALE, h: 17, r: 115 * MAP_SCALE },
+  { x: 820 * MAP_SCALE, z: -280 * MAP_SCALE, h: 15, r: 105 * MAP_SCALE },
+  { x: -800 * MAP_SCALE, z: 260 * MAP_SCALE, h: 14, r: 100 * MAP_SCALE },
+  { x: 160 * MAP_SCALE, z: -360 * MAP_SCALE, h: 11, r: 70 * MAP_SCALE },
+  { x: -180 * MAP_SCALE, z: 340 * MAP_SCALE, h: 12, r: 74 * MAP_SCALE },
+  { x: 380 * MAP_SCALE, z: 120 * MAP_SCALE, h: 10, r: 62 * MAP_SCALE },
+  { x: -400 * MAP_SCALE, z: -140 * MAP_SCALE, h: 11, r: 68 * MAP_SCALE },
+  { x: 640 * MAP_SCALE, z: -780 * MAP_SCALE, h: 14, r: 88 * MAP_SCALE },
+  { x: -660 * MAP_SCALE, z: 800 * MAP_SCALE, h: 15, r: 92 * MAP_SCALE },
+  { x: 90 * MAP_SCALE, z: -620 * MAP_SCALE, h: 9, r: 55 * MAP_SCALE },
+  { x: -110 * MAP_SCALE, z: 600 * MAP_SCALE, h: 9.5, r: 58 * MAP_SCALE },
+  { x: 430 * MAP_SCALE, z: -200 * MAP_SCALE, h: 10, r: 60 * MAP_SCALE },
+  { x: -450 * MAP_SCALE, z: 220 * MAP_SCALE, h: 10.5, r: 64 * MAP_SCALE },
 ]
 
 export type ForestMapLoadResult = {
@@ -67,7 +79,6 @@ const PINE_URL = assetUrl('maps/props/pine_tree.glb')
 const RUIN_HOUSE_URL = assetUrl('maps/props/ruined_house_low_poly.glb')
 const WORN_SHED_URL = assetUrl('maps/props/worn_shed.glb')
 const FANCY_CAR_URL = assetUrl('maps/props/fancy_cardestroyed.glb')
-const DESTROYED_CAR_URL = assetUrl('maps/props/destroyed_car.glb')
 const ROCKS_URL = assetUrl('maps/props/stylised_rocks_asset_pack.glb')
 
 export const FOREST_PROP_URLS: readonly string[] = [
@@ -75,19 +86,18 @@ export const FOREST_PROP_URLS: readonly string[] = [
   RUIN_HOUSE_URL,
   WORN_SHED_URL,
   FANCY_CAR_URL,
-  DESTROYED_CAR_URL,
   ROCKS_URL,
 ]
 /** Kept moderate — pines share 1–2 merged meshes via InstancedMesh. */
-const TREE_COUNT = 168
+const TREE_COUNT = 450
 /** Individual rock instances (clustered into small cliff piles + field scatter). */
-const ROCK_COUNT = 120
+const ROCK_COUNT = 220
 /** How many unique Plain_Rock meshes to keep as instance templates. */
 const ROCK_TEMPLATE_COUNT = 8
 /** Cap mid-distance wrecks (fancy + destroyed). */
-const WRECK_CAP = 14
-const CLEAR_SPAWN_HALF_X = 70
-const CLEAR_SPAWN_Z = 820
+const WRECK_CAP = 24
+const CLEAR_SPAWN_HALF_X = 90 * MAP_SCALE
+const CLEAR_SPAWN_Z = 840 * MAP_SCALE
 
 /** Native tile scale unused — roads are continuous ribbons now. */
 const ROAD_CLEAR_HALF = 22
@@ -95,49 +105,71 @@ const ROAD_CLEAR_HALF = 22
 const ROAD_FLAT_HALF = 18
 const ROAD_Y = 0.05
 /** Heightfield resolution (segments per axis). */
-const TERRAIN_SEG_X = 96
-const TERRAIN_SEG_Z = 200
+const TERRAIN_SEG_X = 320
+const TERRAIN_SEG_Z = 320
 
 type RoadPt = { x: number; z: number }
 
+function roadPt(x: number, z: number): RoadPt {
+  return { x: x * MAP_SCALE, z: z * MAP_SCALE }
+}
+
 /** Gentle control points — densified into smooth curves (not stair-steps). */
 const ROAD_CTRL: readonly (readonly RoadPt[])[] = [
-  // Main S–N winding spine
+  // S–N spawn spine (direct push)
   [
-    { x: 0, z: -920 },
-    { x: 35, z: -740 },
-    { x: 95, z: -560 },
-    { x: -50, z: -380 },
-    { x: 55, z: -200 },
-    { x: 0, z: -40 },
-    { x: -65, z: 140 },
-    { x: 70, z: 320 },
-    { x: -45, z: 500 },
-    { x: 25, z: 680 },
-    { x: 0, z: 860 },
-    { x: 0, z: 940 },
+    roadPt(0, -940),
+    roadPt(45, -700),
+    roadPt(-40, -420),
+    roadPt(30, -180),
+    roadPt(0, 0),
+    roadPt(-35, 180),
+    roadPt(40, 420),
+    roadPt(-30, 700),
+    roadPt(0, 940),
   ],
-  // Midwood west spur
+  // SW→NE diagonal through all five towns
   [
-    { x: -320, z: 10 },
-    { x: -200, z: -25 },
-    { x: -90, z: 20 },
-    { x: 0, z: -40 },
+    roadPt(-80, -920),
+    roadPt(-280, -740),
+    roadPt(-500, -600),
+    roadPt(-540, -520),
+    roadPt(-300, -260),
+    roadPt(-80, -80),
+    roadPt(0, 0),
+    roadPt(80, 80),
+    roadPt(300, 280),
+    roadPt(540, 520),
+    roadPt(280, 740),
+    roadPt(40, 920),
   ],
-  // Midwood east spur
+  // West flank (NW empty quadrant)
   [
-    { x: 320, z: -10 },
-    { x: 200, z: 30 },
-    { x: 85, z: -15 },
-    { x: 0, z: -40 },
+    roadPt(-820, -900),
+    roadPt(-760, -480),
+    roadPt(-800, 0),
+    roadPt(-740, 480),
+    roadPt(-820, 900),
   ],
-  // Soft spur into North Ridge
+  // East flank (SE empty quadrant)
   [
-    { x: -45, z: 500 },
-    { x: -55, z: 545 },
-    { x: 5, z: 575 },
-    { x: 50, z: 545 },
-    { x: 15, z: 510 },
+    roadPt(820, -900),
+    roadPt(760, -480),
+    roadPt(800, 0),
+    roadPt(740, 480),
+    roadPt(820, 900),
+  ],
+  // South Hollow spur off west flank
+  [
+    roadPt(-760, -480),
+    roadPt(-640, -500),
+    roadPt(-540, -520),
+  ],
+  // North Ridge spur off east flank
+  [
+    roadPt(740, 480),
+    roadPt(640, 500),
+    roadPt(540, 520),
   ],
 ]
 
@@ -281,6 +313,24 @@ const ROAD_POLYLINES: readonly (readonly RoadPt[])[] = ROAD_CTRL.map((c) =>
   densifyRoad(c, 20),
 )
 
+/** Snap a world point onto the nearest road ribbon (frontline defender rallies). */
+export function nearestRoadPoint(x: number, z: number): { x: number; z: number } {
+  let bestX = x
+  let bestZ = z
+  let bestD = Infinity
+  for (const line of ROAD_POLYLINES) {
+    for (const p of line) {
+      const d = (p.x - x) * (p.x - x) + (p.z - z) * (p.z - z)
+      if (d < bestD) {
+        bestD = d
+        bestX = p.x
+        bestZ = p.z
+      }
+    }
+  }
+  return { x: bestX, z: bestZ }
+}
+
 const _box = new THREE.Box3()
 const _size = new THREE.Vector3()
 const _dummy = new THREE.Object3D()
@@ -361,14 +411,15 @@ function flattenMask(x: number, z: number): number {
 }
 
 function rawRelief(x: number, z: number): number {
-  // Multi-scale bumps — slightly rougher than the original soft roll
+  // Multi-scale bumps — slightly more rugged than the old 750×2000 roll
   let h =
-    Math.sin(x * 0.009) * Math.cos(z * 0.0085) * 5.4 +
-    Math.sin(x * 0.019 + 1.1) * Math.cos(z * 0.017 - 0.5) * 4.0 +
-    Math.sin(x * 0.038 + z * 0.015) * Math.cos(z * 0.034) * 2.5 +
-    Math.sin(x * 0.072) * Math.sin(z * 0.068 + 2.2) * 1.55 +
-    Math.sin(x * 0.13 + 0.7) * Math.cos(z * 0.11) * 0.8 +
-    Math.sin(x * 0.21 + z * 0.17) * Math.cos(z * 0.19 - 0.4) * 0.45
+    Math.sin(x * 0.0085) * Math.cos(z * 0.008) * 6.8 +
+    Math.sin(x * 0.018 + 1.1) * Math.cos(z * 0.016 - 0.5) * 5.2 +
+    Math.sin(x * 0.036 + z * 0.014) * Math.cos(z * 0.032) * 3.4 +
+    Math.sin(x * 0.068) * Math.sin(z * 0.064 + 2.2) * 2.15 +
+    Math.sin(x * 0.12 + 0.7) * Math.cos(z * 0.105) * 1.15 +
+    Math.sin(x * 0.2 + z * 0.16) * Math.cos(z * 0.18 - 0.4) * 0.7 +
+    Math.sin(x * 0.31 + 1.4) * Math.cos(z * 0.28) * 0.38
 
   for (const hill of FOREST_HILLS) {
     const dx = x - hill.x
@@ -402,7 +453,6 @@ function blockedForTree(x: number, z: number): boolean {
   if (onRoadCorridor(x, z)) return true
   if (inTownClearing(x, z)) return true
   if (Math.abs(x) < CLEAR_SPAWN_HALF_X && Math.abs(z) > CLEAR_SPAWN_Z * 0.55) return true
-  if (Math.abs(x) < 28 && Math.abs(z) < CLEAR_SPAWN_Z) return true
   return false
 }
 
@@ -906,9 +956,42 @@ function loadRoadRutMaterial(): THREE.MeshStandardMaterial {
   })
 }
 
+/** Dashed centerline paint (alphaTest — no soft blend z-fight). */
+function loadRoadDashMaterial(): THREE.MeshStandardMaterial {
+  const map = createRoadDashTexture(1)
+  return new THREE.MeshStandardMaterial({
+    map,
+    color: 0xffffff,
+    roughness: 0.88,
+    metalness: 0.02,
+    envMapIntensity: 0,
+    transparent: true,
+    alphaTest: 0.35,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  })
+}
+
+/** Solid worn edge line. */
+function loadRoadEdgeLineMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0xc8b878,
+    roughness: 0.9,
+    metalness: 0.02,
+    envMapIntensity: 0,
+    side: THREE.DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  })
+}
+
 /**
  * Smooth curved road ribbons (Catmull-Rom densified). Climbable — no colliders.
- * V5: gravel skirts under asphalt + dual tire ruts.
+ * V5: gravel skirts + dual tire ruts. V6: worn asphalt + dashed center + edge lines.
  */
 async function placeRoads(root: THREE.Group): Promise<{
   tileCount: number
@@ -917,12 +1000,11 @@ async function placeRoads(root: THREE.Group): Promise<{
   const mat = loadRoadAsphaltMaterial()
   const skirtMat = loadRoadSkirtMaterial()
   const rutMat = loadRoadRutMaterial()
-  const edgeMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2a2a,
-    roughness: 0.96,
-    metalness: 0.02,
-    side: THREE.DoubleSide,
-  })
+  const dashMat = loadRoadDashMaterial()
+  const edgeLineMat = loadRoadEdgeLineMaterial()
+  const ROAD_EDGE_HALF = ROAD_WIDTH * 0.5 - 0.45
+  const ROAD_EDGE_W = 0.28
+  const ROAD_DASH_W = 0.22
 
   const roads = new THREE.Group()
   roads.name = 'ForestRoads'
@@ -931,6 +1013,7 @@ async function placeRoads(root: THREE.Group): Promise<{
   let ribbonCount = 0
   let skirtCount = 0
   let rutCount = 0
+  let markCount = 0
   for (let i = 0; i < ROAD_POLYLINES.length; i++) {
     const line = ROAD_POLYLINES[i]!
 
@@ -949,12 +1032,31 @@ async function placeRoads(root: THREE.Group): Promise<{
       ribbonCount++
     }
 
-    // Narrow darker center stripe
-    const stripe = makeRoadRibbon(line, ROAD_WIDTH * 0.08, edgeMat, `roadStripe_${i}`, {
-      y: ROAD_Y + 0.01,
+    // V6 — dashed centerline (cream paint, ~7 m on / ~9 m off via UV V)
+    const dash = makeRoadRibbon(line, ROAD_DASH_W, dashMat, `roadDash_${i}`, {
+      y: ROAD_Y + 0.018,
     })
-    if (stripe) {
-      roads.add(stripe)
+    if (dash) {
+      roads.add(dash)
+      markCount++
+    }
+
+    // V6 — solid edge lines inset from asphalt lip
+    const edgeL = makeRoadRibbon(line, ROAD_EDGE_W, edgeLineMat, `roadEdgeL_${i}`, {
+      y: ROAD_Y + 0.016,
+      lateral: -ROAD_EDGE_HALF,
+    })
+    const edgeR = makeRoadRibbon(line, ROAD_EDGE_W, edgeLineMat, `roadEdgeR_${i}`, {
+      y: ROAD_Y + 0.016,
+      lateral: ROAD_EDGE_HALF,
+    })
+    if (edgeL) {
+      roads.add(edgeL)
+      markCount++
+    }
+    if (edgeR) {
+      roads.add(edgeR)
+      markCount++
     }
 
     // V5b — soft dual tire ruts (no z-fight vs asphalt via slight lift + polygonOffset)
@@ -979,7 +1081,7 @@ async function placeRoads(root: THREE.Group): Promise<{
   roads.updateMatrixWorld(true)
   _box.setFromObject(roads)
   console.info(
-    `[Steel] Forest roads — ${ribbonCount} asphalt · ${skirtCount} skirts · ${rutCount} ruts · width ${ROAD_WIDTH}m · V5 · bbox ` +
+    `[Steel] Forest roads — ${ribbonCount} asphalt · ${skirtCount} skirts · ${rutCount} ruts · ${markCount} markings · width ${ROAD_WIDTH}m · V6 · bbox ` +
       `x[${_box.min.x.toFixed(0)}…${_box.max.x.toFixed(0)}] z[${_box.min.z.toFixed(0)}…${_box.max.z.toFixed(0)}]`,
   )
 
@@ -1078,17 +1180,16 @@ function townRing(
 }
 
 function houseSpots(): PropSpot[] {
-  const south = FOREST_TOWNS.find((t) => t.id === 'south')!
-  const mid = FOREST_TOWNS.find((t) => t.id === 'mid')!
-  const north = FOREST_TOWNS.find((t) => t.id === 'north')!
-  return [
-    ...townRing(south, 6, 36, 13, 0.2),
-    ...townRing(south, 4, 58, 12.5, 0.9),
-    ...townRing(mid, 6, 42, 13.5, 0.4),
-    ...townRing(mid, 4, 68, 13, 1.1),
-    ...townRing(north, 6, 36, 13, 0.15),
-    ...townRing(north, 4, 58, 12.5, 0.85),
-  ]
+  const spots: PropSpot[] = []
+  for (const town of FOREST_TOWNS) {
+    const r = town.radius
+    spots.push(
+      ...townRing(town, 8, r * 0.32, 13.2, 0.18),
+      ...townRing(town, 6, r * 0.52, 12.8, 0.72),
+      ...townRing(town, 5, r * 0.72, 12.4, 1.2),
+    )
+  }
+  return spots
 }
 
 /**
@@ -1212,7 +1313,7 @@ function roadShoulderSpots(
 }
 
 /**
- * Wreck scatter on shoulders + town edges (fancy + destroyed, capped).
+ * Wreck scatter on shoulders + town edges (fancy_cardestroyed only, capped).
  */
 async function placeAbandonedCars(
   root: THREE.Group,
@@ -1223,29 +1324,23 @@ async function placeAbandonedCars(
   group.name = 'FancyWrecks'
   root.add(group)
 
-  type WreckPiece = { piece: ReturnType<typeof prepareRuinPiece>; h: number }
-  const pieces: WreckPiece[] = []
+  let piece: ReturnType<typeof prepareRuinPiece>
   try {
     const fancy = await loadGltfCached(FANCY_CAR_URL)
-    pieces.push({ piece: prepareRuinPiece(fancy.scene), h: 2.5 })
+    piece = prepareRuinPiece(fancy.scene)
   } catch (err) {
     console.warn(`[Steel] Fancy car load failed`, err)
+    return 0
   }
-  try {
-    const wreck = await loadGltfCached(DESTROYED_CAR_URL)
-    pieces.push({ piece: prepareRuinPiece(wreck.scene), h: 2.35 })
-  } catch (err) {
-    console.warn(`[Steel] Destroyed car load failed`, err)
-  }
-  if (pieces.length === 0) return 0
+  const h = 2.5
 
   const spots: PropSpot[] = [
-    { x: 55, z: 35, yaw: -1.2, h: 2.5 },
-    { x: -48, z: 508, yaw: 1.4, h: 2.6 },
-    { x: 38, z: -508, yaw: 0.6, h: 2.4 },
-    { x: -70, z: -40, yaw: 2.1, h: 2.45 },
-    { x: 82, z: 480, yaw: -0.7, h: 2.4 },
-    ...roadShoulderSpots(10, 17, 2.45, 0xc4a5),
+    { x: 55, z: 35, yaw: -1.2, h },
+    { x: 500, z: 480, yaw: 1.4, h },
+    { x: -500, z: -480, yaw: 0.6, h },
+    { x: -70, z: -40, yaw: 2.1, h },
+    { x: 80, z: 70, yaw: -0.7, h },
+    ...roadShoulderSpots(14, 17, h, 0xc4a5),
   ]
 
   let count = 0
@@ -1254,13 +1349,12 @@ async function placeAbandonedCars(
     if (Math.abs(spot.x) > FOREST_OVERWATCH_WIDTH * 0.46) continue
     if (Math.abs(spot.z) > FOREST_OVERWATCH_DEPTH * 0.46) continue
     if (onAsphalt(spot.x, spot.z)) continue
-    const pick = pieces[i % pieces.length]!
-    plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, pick.h)
+    plantRuin(piece, group, colliders, spot.x, spot.z, spot.yaw, h)
     contacts.push({ x: spot.x, z: spot.z, radius: 3.6 })
     count++
   }
 
-  console.info(`[Steel] Fancy wrecks — ${count}/${WRECK_CAP} · ${pieces.length} templates · V4b`)
+  console.info(`[Steel] Fancy wrecks — ${count}/${WRECK_CAP} · fancy_cardestroyed only`)
   return count
 }
 
@@ -1339,7 +1433,7 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
 }
 
 /**
- * Forest Overwatch — rolling grass, 3 flat clearings, modular roads, pines.
+ * Forest Overwatch — rolling floor, 3 flat clearings, modular roads, pines.
  */
 export async function loadForestOverwatch(
   scene: THREE.Scene,
@@ -1367,30 +1461,29 @@ export async function loadForestOverwatch(
     console.warn('[Steel] Forest roads failed to load', err)
   }
 
-  const [treeCount, rockCount, ruinCount, carCount] =
-    await Promise.all([
-      placePineTrees(root, colliders, contacts).catch((err) => {
-        console.warn('[Steel] Forest pine trees failed to load', err)
-        return 0
-      }),
-      placeCliffRocks(root, colliders, contacts).catch((err) => {
-        console.warn('[Steel] Forest cliff rocks failed to load', err)
-        return 0
-      }),
-      placeTownHouses(root, colliders, contacts).catch((err) => {
-        console.warn('[Steel] Town houses failed', err)
-        return 0
-      }),
-      placeAbandonedCars(root, colliders, contacts).catch((err) => {
-        console.warn('[Steel] Fancy wrecks failed', err)
-        return 0
-      }),
-    ])
+  const [treeCount, rockCount, ruinCount, carCount] = await Promise.all([
+    placePineTrees(root, colliders, contacts).catch((err) => {
+      console.warn('[Steel] Forest pine trees failed to load', err)
+      return 0
+    }),
+    placeCliffRocks(root, colliders, contacts).catch((err) => {
+      console.warn('[Steel] Forest cliff rocks failed to load', err)
+      return 0
+    }),
+    placeTownHouses(root, colliders, contacts).catch((err) => {
+      console.warn('[Steel] Town houses failed', err)
+      return 0
+    }),
+    placeAbandonedCars(root, colliders, contacts).catch((err) => {
+      console.warn('[Steel] Fancy wrecks failed', err)
+      return 0
+    }),
+  ])
 
   const blobCount = placeContactBlobs(root, contacts)
 
   console.info(
-    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${carCount} wrecks, ${blobCount} contact blobs, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders · no sandbag pack`,
+    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${carCount} wrecks, ${blobCount} contact blobs, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders · no tuft grass`,
   )
   return {
     root,

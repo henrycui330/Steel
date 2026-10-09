@@ -104,7 +104,7 @@ function tintReplayGhost(root: THREE.Object3D): void {
 function disposeObject3D(root: THREE.Object3D): void {
   root.traverse((obj) => {
     if (!(obj instanceof THREE.Mesh)) return
-    obj.geometry?.dispose()
+    // Geometries stay on the GLB cache — disposing them pinks every copy.
     const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
     for (const m of mats) m?.dispose?.()
   })

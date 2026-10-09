@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { critProbability, type HitResolution, type ShellImpact } from './armor'
 import { integrateShell, type HeightSampler } from './ballistics'
 import { hitsPropCollider, type PropCollider } from './collision'
+import { moduleForArmorPart } from './modules'
 
 /**
  * Look ahead down a shell's trajectory and report the impact if — and only if
@@ -12,6 +13,8 @@ import { hitsPropCollider, type PropCollider } from './collision'
 export type LethalTarget = {
   alive: boolean
   hp: number
+  /** Hull max HP — used for predictable APHE ammo-cook fuse bonus. */
+  maxHp?: number
   containsPoint: (p: THREE.Vector3) => boolean
   previewShellHit: (
     p: THREE.Vector3,
@@ -53,13 +56,11 @@ const _pos = new THREE.Vector3()
 const _vel = new THREE.Vector3()
 
 /**
- * Lethality is resolved through the target's own armour path, and decided on
- * `damage >= hp` — never on `HitResolution.crit`, which is a fresh
- * `Math.random()` roll that won't match the one the real hit makes. The
- * exception is a plate whose crit odds *saturate* under overmatch (the rear
- * plate and the turret ring both exceed 1.0): there, any penetration is
- * certainly fatal, so it is predictable. Genuinely chancy ammo-rack kills are
- * left to happen without a cinematic rather than guessed at.
+ * Lethality is hull HP after the same rules as combat: pen damage only counts
+ * against the hull when the plate maps to hull; APHE also adds `internalBlast`.
+ * Random `crit` is never guessed. Saturated crit plates (odds ≥ 1) add a
+ * predictable ammo-cook fuse bonus (~42% hull), matching combatant — still not
+ * a contact instakill flag.
  */
 export function predictLethalHit(q: LethalShotQuery): LethalShot | null {
   if (q.dt <= 0 || q.targets.length === 0) return null
@@ -93,10 +94,22 @@ export function predictLethalHit(q: LethalShotQuery): LethalShot | null {
       // 'stopped' means the round is spent.
       if (r.kind !== 'penetrated' && r.kind !== 'blast') return null
 
-      const certainCrit =
-        r.kind === 'penetrated' &&
-        critProbability(r.part, r.penetration, r.effectiveArmor) >= 1
-      if (r.damage < target.hp && !certainCrit) return null
+      let hullThreat = 0
+      if (r.kind === 'blast') {
+        hullThreat = r.damage
+      } else {
+        if (moduleForArmorPart(r.part.id) === 'hull') hullThreat += r.damage
+        const fuse = q.stats.internalBlast ?? 0
+        if (fuse > 0) hullThreat += fuse
+        const certainCook =
+          critProbability(r.part, r.penetration, r.effectiveArmor) >= 1
+        if (certainCook) {
+          // Predictable ammo-cook bonus (matches combatant APHE_CRIT_HULL_FRAC).
+          const maxHull = target.maxHp ?? target.hp
+          hullThreat += Math.round(maxHull * 0.42)
+        }
+      }
+      if (hullThreat < target.hp) return null
       return { point: _pos.clone(), time: t }
     }
 

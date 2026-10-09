@@ -9,6 +9,11 @@ export type TrackBand = {
   maps: THREE.Texture[]
   /** World meters represented by one full UV repeat along the tread. */
   metersPerUvRepeat: number
+  /**
+   * Track is a material slot on a fused hull (Panther A).
+   * Do not vertex-bend this mesh — that shears armor + treads as one blob.
+   */
+  hullSlice: boolean
 }
 
 export type CollectTracksOptions = {
@@ -188,10 +193,47 @@ function applyTrackTreadLook(mat: THREE.Material): THREE.Texture[] {
   return []
 }
 
-function cloneScrollTextures(mat: THREE.Material): {
+function wrapMapForScroll(map: THREE.Texture): THREE.Texture {
+  const cloned = map.clone()
+  cloned.wrapS = THREE.RepeatWrapping
+  cloned.wrapT = THREE.RepeatWrapping
+  cloned.needsUpdate = true
+  return cloned
+}
+
+function cloneKeepAlbedo(mat: THREE.Material): {
   mat: THREE.Material
   maps: THREE.Texture[]
 } | null {
+  if (mat instanceof THREE.MeshStandardMaterial) {
+    const cloned = mat.clone()
+    const maps: THREE.Texture[] = []
+    if (cloned.map) {
+      cloned.map = wrapMapForScroll(cloned.map)
+      maps.push(cloned.map)
+    }
+    return maps.length ? { mat: cloned, maps } : null
+  }
+  if (mat instanceof THREE.MeshBasicMaterial) {
+    const cloned = mat.clone()
+    const maps: THREE.Texture[] = []
+    if (cloned.map) {
+      cloned.map = wrapMapForScroll(cloned.map)
+      maps.push(cloned.map)
+    }
+    return maps.length ? { mat: cloned, maps } : null
+  }
+  return null
+}
+
+function cloneScrollTextures(
+  mat: THREE.Material,
+  keepAlbedo: boolean,
+): {
+  mat: THREE.Material
+  maps: THREE.Texture[]
+} | null {
+  if (keepAlbedo) return cloneKeepAlbedo(mat)
   if (mat instanceof THREE.MeshStandardMaterial) {
     const cloned = mat.clone()
     const maps = applyTrackTreadLook(cloned)
@@ -211,6 +253,7 @@ function cloneScrollTextures(mat: THREE.Material): {
 function bindTrackMaterials(
   mesh: THREE.Mesh,
   indices: number[],
+  keepAlbedo: boolean,
 ): { maps: THREE.Texture[]; side: 'left' | 'right' | 'both' } | null {
   const mats = Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material]
   const allMaps: THREE.Texture[] = []
@@ -220,7 +263,7 @@ function bindTrackMaterials(
   for (const i of indices) {
     const src = mats[i]
     if (!src) continue
-    const prepared = cloneScrollTextures(src)
+    const prepared = cloneScrollTextures(src, keepAlbedo)
     if (!prepared) continue
     mats[i] = prepared.mat
     allMaps.push(...prepared.maps)
@@ -277,12 +320,30 @@ export function collectTracks(
     if (seen.has(key)) return
     seen.add(key)
 
+    // Hull-baked treads (Panther A `panther-a-track`, Pz IV, Leo…) live on an
+    // atlas island. UV offset slides them into black packing and looks like
+    // the whole run is tumbling. Leave the factory albedo alone.
+    if (hullSlice) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      const sample = indices === 'all' ? mats[0] : mats[indices[0] ?? 0]
+      bands.push({
+        mesh,
+        side: sideOfTrack(mesh, sample?.name),
+        uv: 'v',
+        maps: [],
+        metersPerUvRepeat: estimateMetersPerUvRepeat(mesh, true),
+        hullSlice: true,
+      })
+      console.info(`[Steel] Tracks: ${label} · hull atlas (no UV scroll)`)
+      return
+    }
+
     let maps: THREE.Texture[]
     let side: 'left' | 'right' | 'both'
     if (indices === 'all') {
       const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
       const idx = mats.map((_, i) => i)
-      const bound = bindTrackMaterials(mesh, idx)
+      const bound = bindTrackMaterials(mesh, idx, hullSlice)
       if (!bound) {
         console.info(`[Steel] Tracks: skip ${label} (no bindable mat)`)
         return
@@ -290,7 +351,7 @@ export function collectTracks(
       maps = bound.maps
       side = bound.side
     } else {
-      const bound = bindTrackMaterials(mesh, indices)
+      const bound = bindTrackMaterials(mesh, indices, hullSlice)
       if (!bound) {
         console.info(`[Steel] Tracks: skip ${label} (no bindable mat)`)
         return
@@ -305,6 +366,7 @@ export function collectTracks(
       uv: pickUvAxis(mesh),
       maps,
       metersPerUvRepeat: estimateMetersPerUvRepeat(mesh, hullSlice),
+      hullSlice,
     })
   }
 
@@ -329,7 +391,7 @@ export function collectTracks(
       (bands
         .map(
           (b) =>
-            `${b.mesh.name}[${b.side}] pitch≈${b.metersPerUvRepeat.toFixed(1)}m`,
+            `${b.mesh.name}[${b.side}] pitch≈${b.metersPerUvRepeat.toFixed(1)}m${b.hullSlice ? ' hull' : ''}`,
         )
         .join(', ') || 'none') +
       (hullInference ? ' · DE hull-inference on' : ''),
@@ -338,21 +400,18 @@ export function collectTracks(
 }
 
 /**
- * Scroll tread UVs from drive speed. Turn adds L/R differential.
+ * Scroll tread UVs from per-track speeds (TR3 dual-track).
  */
 export function updateTracks(
   bands: TrackBand[],
   dt: number,
-  speed: number,
-  turn: number,
+  leftSpeed: number,
+  rightSpeed: number,
 ): void {
   if (bands.length === 0) return
-  const diff = turn * Math.max(1.2, Math.abs(speed) * 0.35 + 1.8)
-  const leftSpeed = speed - diff
-  const rightSpeed = speed + diff
 
   for (const b of bands) {
-    let v = speed
+    let v = (leftSpeed + rightSpeed) * 0.5
     if (b.side === 'left') v = leftSpeed
     else if (b.side === 'right') v = rightSpeed
     // UV scroll rate = track speed / tread pitch (m per UV cycle)

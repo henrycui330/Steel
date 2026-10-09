@@ -352,6 +352,7 @@ export function createFireSystem(
     penetration: number
     penDamage: number
     blastDamage: number
+    internalBlast?: number
   } {
     if (def.id === 'mg') {
       return {
@@ -361,10 +362,16 @@ export function createFireSystem(
       }
     }
     if (def.id === 'aphe') {
+      // Filler HE after pen — not contact splash. Scales with AP damage + a bit of HE.
+      const internalBlast = Math.max(
+        90,
+        Math.round(gun.apheDmg * 0.55 + gun.heBlast * 0.35),
+      )
       return {
         penetration: gun.aphePen,
         penDamage: gun.apheDmg,
         blastDamage: 0,
+        internalBlast,
       }
     }
     return {
@@ -683,6 +690,7 @@ export function createFireSystem(
       basePenetration: eff.penetration,
       baseDamage: eff.penDamage,
       blastDamage: eff.blastDamage,
+      internalBlast: eff.internalBlast,
     }
   }
 
@@ -808,17 +816,51 @@ export function createFireSystem(
         return true
       }
 
-      if (destroyed && !isMg) {
+      // APHE: pen spark → internal fuse boom (wreck delayed in combatant).
+      const isAphe = shell.ammoId === 'aphe'
+      if (isAphe && resolution.kind === 'penetrated') {
+        flashSpark(scene, _sparkPos, 0xffcc66, 1)
+        spawnExplosion({
+          scene,
+          at: _sparkPos,
+          radius: destroyed ? 7.5 : 5,
+          kind: 'he',
+        })
+        if (destroyed) {
+          spawnExplosion({
+            scene,
+            at: _sparkPos,
+            radius: resolution.crit ? 12 : 9,
+            kind: 'kill',
+          })
+          bannerFor(
+            camera,
+            _sparkPos,
+            resolution.crit
+              ? `APHE FUSE · AMMO · ${resolution.part.label}`
+              : `APHE FUSE · ${resolution.part.label}`,
+            resolution.crit ? 'crit' : 'kill',
+          )
+        } else if (tracksDisabled) {
+          bannerFor(camera, _sparkPos, 'TRACKS OUT · 30s', 'pen')
+        } else {
+          const fuse = result.internalDamage ?? 0
+          bannerFor(
+            camera,
+            _sparkPos,
+            fuse > 0
+              ? `PEN −${resolution.damage} · FUSE −${fuse} · ${resolution.part.label}`
+              : `PEN −${resolution.damage} · ${resolution.part.label}`,
+            'pen',
+          )
+        }
+      } else if (destroyed && !isMg) {
         spawnExplosion({
           scene,
           at: _sparkPos,
           radius: resolution.crit ? 14 : 9,
           kind: 'kill',
         })
-      } else {
-        flashSpark(scene, _sparkPos, destroyed ? 0xff4422 : 0xffcc66, isMg ? 0.5 : 1)
-      }
-      if (destroyed) {
         bannerFor(
           camera,
           _sparkPos,
@@ -829,15 +871,20 @@ export function createFireSystem(
               : 'KILL',
           resolution.crit ? 'crit' : 'kill',
         )
-      } else if (tracksDisabled) {
-        bannerFor(camera, _sparkPos, 'TRACKS OUT · 30s', 'pen')
-      } else if (!isMg) {
-        bannerFor(
-          camera,
-          _sparkPos,
-          `PEN −${resolution.damage} · ${resolution.part.label}`,
-          'pen',
-        )
+      } else {
+        flashSpark(scene, _sparkPos, destroyed ? 0xff4422 : 0xffcc66, isMg ? 0.5 : 1)
+        if (destroyed) {
+          bannerFor(camera, _sparkPos, isMg ? 'KILL · MG' : 'KILL', 'kill')
+        } else if (tracksDisabled) {
+          bannerFor(camera, _sparkPos, 'TRACKS OUT · 30s', 'pen')
+        } else if (!isMg) {
+          bannerFor(
+            camera,
+            _sparkPos,
+            `PEN −${resolution.damage} · ${resolution.part.label}`,
+            'pen',
+          )
+        }
       }
       if (!isMg) voiceHooks?.onEnemyHit?.()
       removeAt(shellIndex)
