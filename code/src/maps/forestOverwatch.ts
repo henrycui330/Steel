@@ -4,11 +4,12 @@ import { estimatePropCollider, type PropCollider } from '../collision'
 import { assetUrl } from '../assetUrl'
 import { loadGltfCached, preloadUrls } from '../loadGltf'
 import {
-  createAsphaltTexture,
+  createCropTuft,
+  createDirtPathTexture,
   createGravelShoulderTexture,
   createPineForestFloorMaps,
-  createRoadDashTexture,
   sampleForestGroundTint,
+  type CropKind,
 } from '../textures'
 
 /** 2000 m layout × this = playable size. */
@@ -45,6 +46,61 @@ export const FOREST_TOWNS: readonly ForestTown[] = [
   { id: 'north', name: 'North Ridge', x: 540 * MAP_SCALE, z: 520 * MAP_SCALE, radius: 160 },
 ]
 
+export type ForestCropField = {
+  id: string
+  kind: CropKind
+  x: number
+  z: number
+  /** Ellipse radii (m) — farm plots in rural flanks. */
+  rx: number
+  rz: number
+}
+
+/**
+ * Rural crop pads off the attack road — tall 3D stalks (not floor paint).
+ * Cleared of pines so tanks can drive in and sit in cover.
+ */
+export const FOREST_CROP_FIELDS: readonly ForestCropField[] = [
+  { id: 'barley-se', kind: 'barley', x: 420 * MAP_SCALE, z: -480 * MAP_SCALE, rx: 95, rz: 70 },
+  { id: 'barley-nw', kind: 'barley', x: -520 * MAP_SCALE, z: 380 * MAP_SCALE, rx: 88, rz: 75 },
+  { id: 'barley-sw', kind: 'barley', x: -620 * MAP_SCALE, z: -200 * MAP_SCALE, rx: 78, rz: 62 },
+  { id: 'barley-ne', kind: 'barley', x: 580 * MAP_SCALE, z: 160 * MAP_SCALE, rx: 72, rz: 68 },
+  { id: 'flower-e', kind: 'flower', x: 280 * MAP_SCALE, z: -700 * MAP_SCALE, rx: 85, rz: 70 },
+  { id: 'flower-w', kind: 'flower', x: -240 * MAP_SCALE, z: 720 * MAP_SCALE, rx: 90, rz: 65 },
+  { id: 'flower-se', kind: 'flower', x: 700 * MAP_SCALE, z: -120 * MAP_SCALE, rx: 70, rz: 80 },
+  { id: 'flower-nw', kind: 'flower', x: -700 * MAP_SCALE, z: 80 * MAP_SCALE, rx: 75, rz: 70 },
+]
+
+/**
+ * Open-field scrub meadows — pines cleared, bushes dense for open-camo
+ * (not crop pads; sit in otherwise open rural ground).
+ */
+export const FOREST_OPEN_SCRUB: ReadonlyArray<{
+  id: string
+  x: number
+  z: number
+  rx: number
+  rz: number
+}> = [
+  { id: 'scrub-mid-e', x: 200 * MAP_SCALE, z: -180 * MAP_SCALE, rx: 170, rz: 140 },
+  { id: 'scrub-mid-w', x: -220 * MAP_SCALE, z: 160 * MAP_SCALE, rx: 165, rz: 145 },
+  { id: 'scrub-n', x: 40 * MAP_SCALE, z: 480 * MAP_SCALE, rx: 180, rz: 130 },
+  { id: 'scrub-s', x: -40 * MAP_SCALE, z: -500 * MAP_SCALE, rx: 175, rz: 135 },
+  { id: 'scrub-ne', x: 480 * MAP_SCALE, z: 320 * MAP_SCALE, rx: 150, rz: 120 },
+  { id: 'scrub-sw', x: -460 * MAP_SCALE, z: -340 * MAP_SCALE, rx: 155, rz: 125 },
+  { id: 'scrub-se', x: 560 * MAP_SCALE, z: -280 * MAP_SCALE, rx: 140, rz: 150 },
+  { id: 'scrub-nw', x: -540 * MAP_SCALE, z: 260 * MAP_SCALE, rx: 145, rz: 140 },
+  { id: 'scrub-approach', x: 0, z: 160 * MAP_SCALE, rx: 130, rz: 160 },
+  { id: 'scrub-flank-e', x: 320 * MAP_SCALE, z: 40 * MAP_SCALE, rx: 125, rz: 170 },
+  { id: 'scrub-flank-w', x: -340 * MAP_SCALE, z: -20 * MAP_SCALE, rx: 130, rz: 165 },
+  { id: 'scrub-far-ne', x: 700 * MAP_SCALE, z: 520 * MAP_SCALE, rx: 130, rz: 110 },
+  { id: 'scrub-far-sw', x: -720 * MAP_SCALE, z: -540 * MAP_SCALE, rx: 135, rz: 115 },
+  { id: 'scrub-far-se', x: 680 * MAP_SCALE, z: -620 * MAP_SCALE, rx: 125, rz: 120 },
+  { id: 'scrub-far-nw', x: -660 * MAP_SCALE, z: 600 * MAP_SCALE, rx: 128, rz: 118 },
+  { id: 'scrub-mid-n', x: 180 * MAP_SCALE, z: 280 * MAP_SCALE, rx: 120, rz: 100 },
+  { id: 'scrub-mid-s', x: -160 * MAP_SCALE, z: -300 * MAP_SCALE, rx: 118, rz: 105 },
+]
+
 /** Soft hills placed away from clearings / roads (peak height ≈ h). */
 const FOREST_HILLS: ReadonlyArray<{ x: number; z: number; h: number; r: number }> = [
   { x: 520 * MAP_SCALE, z: -620 * MAP_SCALE, h: 22, r: 140 * MAP_SCALE },
@@ -76,24 +132,21 @@ export type ForestMapLoadResult = {
 }
 
 const PINE_URL = assetUrl('maps/props/pine_tree.glb')
+const BUSH_URL = assetUrl('maps/props/photorealistic_bush.glb?v=2')
 const RUIN_HOUSE_URL = assetUrl('maps/props/ruined_house_low_poly.glb')
-const WORN_SHED_URL = assetUrl('maps/props/worn_shed.glb')
 const FANCY_CAR_URL = assetUrl('maps/props/fancy_cardestroyed.glb')
-const ROCKS_URL = assetUrl('maps/props/stylised_rocks_asset_pack.glb')
 
+/** Forest props for boot/menu preload (no rocks / no shed — dropped for load speed). */
 export const FOREST_PROP_URLS: readonly string[] = [
   PINE_URL,
+  BUSH_URL,
   RUIN_HOUSE_URL,
-  WORN_SHED_URL,
   FANCY_CAR_URL,
-  ROCKS_URL,
 ]
 /** Kept moderate — pines share 1–2 merged meshes via InstancedMesh. */
 const TREE_COUNT = 450
-/** Individual rock instances (clustered into small cliff piles + field scatter). */
-const ROCK_COUNT = 220
-/** How many unique Plain_Rock meshes to keep as instance templates. */
-const ROCK_TEMPLATE_COUNT = 8
+/** Photoreal bush scatter — dense open-camo clumps, shared InstancedMesh draws. */
+const BUSH_COUNT = 2400
 /** Cap mid-distance wrecks (fancy + destroyed). */
 const WRECK_CAP = 24
 const CLEAR_SPAWN_HALF_X = 90 * MAP_SCALE
@@ -174,8 +227,8 @@ const ROAD_CTRL: readonly (readonly RoadPt[])[] = [
 ]
 
 const ROAD_WIDTH = 14
-/** Gravel shoulder wider than asphalt (Vision V5a). */
-const ROAD_SKIRT_WIDTH = ROAD_WIDTH + 10
+/** Dirt shoulder wider than path — soft fade zone into grass. */
+const ROAD_SKIRT_WIDTH = ROAD_WIDTH + 16
 /** Tire track half-spacing from centerline (Vision V5b). */
 const ROAD_RUT_HALF = 1.15
 const ROAD_RUT_WIDTH = 0.55
@@ -269,6 +322,14 @@ function sampleWearMul(x: number, z: number): number {
     if (d < outerT) {
       const u = d <= innerT ? 1 : 1 - (d - innerT) / (outerT - innerT)
       mul *= 1 - 0.16 * Math.max(0, u)
+    }
+  }
+
+  for (const f of FOREST_CROP_FIELDS) {
+    const nx = (x - f.x) / f.rx
+    const nz = (z - f.z) / f.rz
+    if (nx * nx + nz * nz < 1) {
+      mul *= f.kind === 'barley' ? 0.82 : 0.88
     }
   }
 
@@ -407,6 +468,18 @@ function flattenMask(x: number, z: number): number {
     m = Math.min(m, 0.08 + tx * 0.92)
   }
 
+  // Crop fields — mostly flat farm plots (stalks carry the cover, not the dirt).
+  for (const f of FOREST_CROP_FIELDS) {
+    const nx = (x - f.x) / f.rx
+    const nz = (z - f.z) / f.rz
+    const d2 = nx * nx + nz * nz
+    if (d2 <= 1) {
+      const u = Math.sqrt(d2)
+      const flat = u < 0.82 ? 0.12 : 0.12 + ((u - 0.82) / 0.18) * 0.88
+      m = Math.min(m, flat)
+    }
+  }
+
   return Math.max(0, Math.min(1, m))
 }
 
@@ -449,19 +522,50 @@ function inTownClearing(x: number, z: number): boolean {
   return false
 }
 
+/** Inside a rural crop ellipse (slightly padded so tree line sits outside stalks). */
+function inCropField(x: number, z: number, pad = 1.08): boolean {
+  for (const f of FOREST_CROP_FIELDS) {
+    const nx = (x - f.x) / (f.rx * pad)
+    const nz = (z - f.z) / (f.rz * pad)
+    if (nx * nx + nz * nz <= 1) return true
+  }
+  return false
+}
+
+/** Open scrub meadow (pines cleared; bush open-camo lives here). */
+function inOpenScrub(x: number, z: number, pad = 1.05): boolean {
+  for (const s of FOREST_OPEN_SCRUB) {
+    const nx = (x - s.x) / (s.rx * pad)
+    const nz = (z - s.z) / (s.rz * pad)
+    if (nx * nx + nz * nz <= 1) return true
+  }
+  return false
+}
+
 function blockedForTree(x: number, z: number): boolean {
   if (onRoadCorridor(x, z)) return true
   if (inTownClearing(x, z)) return true
+  if (inCropField(x, z)) return true
+  if (inOpenScrub(x, z)) return true
   if (Math.abs(x) < CLEAR_SPAWN_HALF_X && Math.abs(z) > CLEAR_SPAWN_Z * 0.55) return true
   return false
 }
 
-/** Rocks stay off roads / clearings / spawn lanes (same keep-outs as trees). */
-function blockedForRock(x: number, z: number): boolean {
-  return blockedForTree(x, z)
+/** Bushes = open-camo: off roads/crops/town cores/spawn; prefer scrub meadows. */
+function blockedForBush(x: number, z: number): boolean {
+  if (onRoadCorridor(x, z)) return true
+  if (inCropField(x, z)) return true
+  for (const town of FOREST_TOWNS) {
+    if (Math.hypot(x - town.x, z - town.z) < town.radius * 0.45) return true
+  }
+  if (Math.abs(x) < CLEAR_SPAWN_HALF_X * 0.65 && Math.abs(z) > CLEAR_SPAWN_Z * 0.7) {
+    return true
+  }
+  return false
 }
 
-/** Stand Z-up Sketchfab pines on Y and plant base at y=0. Returns unit height. */
+/** Stand Z-up Sketchfab props on Y and plant base at y=0. Returns unit height.
+ *  Only tip when one axis clearly dominates — near-cubic bushes stay Y-up. */
 function uprightAndPlant(root: THREE.Object3D): number {
   root.position.set(0, 0, 0)
   root.rotation.set(0, 0, 0)
@@ -470,9 +574,10 @@ function uprightAndPlant(root: THREE.Object3D): number {
   _box.setFromObject(root)
   _box.getSize(_size)
 
-  if (_size.z >= _size.y && _size.z >= _size.x) {
+  const dom = 1.2
+  if (_size.z >= _size.y * dom && _size.z >= _size.x * dom) {
     root.rotation.x = -Math.PI / 2
-  } else if (_size.x >= _size.y && _size.x >= _size.z) {
+  } else if (_size.x >= _size.y * dom && _size.x >= _size.z * dom) {
     root.rotation.z = Math.PI / 2
   }
   root.updateMatrixWorld(true)
@@ -586,6 +691,7 @@ async function placePineTrees(
       mesh.setMatrixAt(i, _dummy.matrix)
     }
     mesh.instanceMatrix.needsUpdate = true
+    mesh.computeBoundingSphere()
     root.add(mesh)
   }
 
@@ -610,233 +716,126 @@ async function placePineTrees(
   return count
 }
 
-type RockTemplate = {
-  geometry: THREE.BufferGeometry
-  material: THREE.Material
-  unitHeight: number
-}
-
 /**
- * Pull the largest Plain_Rock meshes from the stylised pack, upright them,
- * and bake world-space geometry for InstancedMesh (cliff-scale cover).
+ * Photorealistic bushes scattered map-wide for soft camo cover.
+ * Drive-through (no solid colliders) — contact blobs only for suspension chatter.
  */
-function bakeRockTemplates(src: THREE.Object3D): RockTemplate[] {
-  const candidates: Array<{ mesh: THREE.Mesh; vol: number }> = []
-  src.updateMatrixWorld(true)
-  src.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
-    const name = obj.name || ''
-    if (!/Plain_Rock/i.test(name)) return
-    if (Array.isArray(obj.material)) return
-    obj.geometry.computeBoundingBox()
-    const bb = obj.geometry.boundingBox
-    if (!bb) return
-    const sx = bb.max.x - bb.min.x
-    const sy = bb.max.y - bb.min.y
-    const sz = bb.max.z - bb.min.z
-    candidates.push({ mesh: obj, vol: sx * sy * sz })
-  })
-  candidates.sort((a, b) => b.vol - a.vol)
-
-  const picked = candidates.slice(0, ROCK_TEMPLATE_COUNT)
-  const templates: RockTemplate[] = []
-  for (const { mesh } of picked) {
-    const holder = new THREE.Group()
-    const clone = mesh.clone(false)
-    clone.material = mesh.material
-    // Detach from pack layout offsets — plant from local geometry alone
-    clone.position.set(0, 0, 0)
-    clone.rotation.set(0, 0, 0)
-    clone.scale.set(1, 1, 1)
-    clone.updateMatrix()
-    holder.add(clone)
-
-    // glTF rocks are Y-up; only tip if clearly Z-up (unlike pines, width > height is normal)
-    holder.position.set(0, 0, 0)
-    holder.rotation.set(0, 0, 0)
-    holder.scale.setScalar(1)
-    holder.updateMatrixWorld(true)
-    _box.setFromObject(holder)
-    _box.getSize(_size)
-    if (_size.z > _size.y * 1.4 && _size.z >= _size.x) {
-      holder.rotation.x = -Math.PI / 2
-      holder.updateMatrixWorld(true)
-      _box.setFromObject(holder)
-    }
-    holder.position.y = -_box.min.y
-    holder.updateMatrixWorld(true)
-    _box.setFromObject(holder)
-    const unitHeight = Math.max(_box.max.y - _box.min.y, 0.001)
-
-    const g = clone.geometry.clone()
-    g.applyMatrix4(clone.matrixWorld)
-    g.computeBoundingSphere()
-
-    const srcMat = Array.isArray(clone.material) ? clone.material[0]! : clone.material
-    const mat = srcMat.clone()
-    if ('metalness' in mat && typeof mat.metalness === 'number') mat.metalness = 0
-    if ('roughness' in mat && typeof mat.roughness === 'number') {
-      mat.roughness = Math.max(0.9, mat.roughness)
-    }
-    templates.push({ geometry: g, material: mat, unitHeight })
-  }
-  return templates
-}
-
-/**
- * Scatter small cliff piles from the stylised rock pack (instanced).
- * Prefers hill slopes; keeps roads / clearings / spawn lanes clear.
- */
-async function placeCliffRocks(
+async function placeBushes(
   root: THREE.Group,
-  colliders: PropCollider[],
   contacts: ContactSpot[],
 ): Promise<number> {
-  const gltf = await loadGltfCached(ROCKS_URL)
-  const templates = bakeRockTemplates(gltf.scene)
-  if (templates.length === 0) {
-    console.warn('[Steel] Rock bake produced 0 templates')
+  const gltf = await loadGltfCached(BUSH_URL)
+  const src = gltf.scene.clone(true)
+  const unitHeight = uprightAndPlant(src)
+  const parts = bakePineParts(src)
+
+  if (parts.length === 0) {
+    console.warn('[Steel] Bush bake produced 0 parts')
     return 0
   }
 
-  const rand = mulberry32(0xc11ff70)
+  // Leaf cards: cutout (not soft BLEND) so InstancedMesh stays visible + sorted
+  for (const part of parts) {
+    const m = part.material as THREE.MeshStandardMaterial
+    const name = (m.name || '').toLowerCase()
+    const looksLeaf =
+      /leaf|foliage|twig/i.test(name) || !!m.alphaMap || m.transparent
+    m.side = THREE.DoubleSide
+    if (looksLeaf) {
+      m.transparent = false
+      m.opacity = 1
+      m.alphaTest = 0.2
+      m.depthWrite = true
+      if (m.map) {
+        m.map.colorSpace = THREE.SRGBColorSpace
+        m.map.needsUpdate = true
+      }
+    }
+    if ('metalness' in m) m.metalness = 0
+    if ('roughness' in m) m.roughness = Math.max(0.88, m.roughness ?? 0.9)
+    m.needsUpdate = true
+  }
+
+  const rand = mulberry32(0xb051001)
   const halfX = FOREST_OVERWATCH_WIDTH * 0.46
   const halfZ = FOREST_OVERWATCH_DEPTH * 0.46
+  const placements: Array<{ x: number; z: number; yaw: number; height: number }> =
+    []
 
-  type RockPlace = {
-    x: number
-    z: number
-    yaw: number
-    height: number
-    template: number
-    cliff: boolean
-  }
-  const placements: RockPlace[] = []
-
-  // Seed ~18 cliff cluster centers, then fill with satellite rocks
-  const clusters: Array<{ x: number; z: number }> = []
-  let attempts = 0
-  while (clusters.length < 18 && attempts < 400) {
-    attempts++
-    const x = (rand() - 0.5) * 2 * halfX
-    const z = (rand() - 0.5) * 2 * halfZ
-    if (blockedForRock(x, z)) continue
-    // Prefer higher relief (hill flanks read as cliff bases)
-    if (rawRelief(x, z) < 3.5 && rand() > 0.35) continue
-    let ok = true
-    for (const c of clusters) {
-      if (Math.hypot(x - c.x, z - c.z) < 55) {
-        ok = false
-        break
-      }
-    }
-    if (!ok) continue
-    clusters.push({ x, z })
-  }
-
-  for (const c of clusters) {
-    const pileN = 2 + Math.floor(rand() * 3) // 2–4 rocks per pile
-    for (let i = 0; i < pileN; i++) {
-      const ang = rand() * Math.PI * 2
-      const dist = i === 0 ? rand() * 2.5 : 3 + rand() * 7
-      const x = c.x + Math.cos(ang) * dist
-      const z = c.z + Math.sin(ang) * dist
-      if (blockedForRock(x, z)) continue
-      const cliff = i === 0 || rand() > 0.55
-      placements.push({
-        x,
-        z,
-        yaw: rand() * Math.PI * 2,
-        height: cliff ? 5.5 + rand() * 4.5 : 2.8 + rand() * 2.8,
-        template: Math.floor(rand() * templates.length),
-        cliff,
-      })
-    }
-  }
-
-  // Fill remaining budget with lone mid/small rocks (plains + hills)
-  attempts = 0
-  while (placements.length < ROCK_COUNT && attempts < ROCK_COUNT * 16) {
-    attempts++
-    const x = (rand() - 0.5) * 2 * halfX
-    const z = (rand() - 0.5) * 2 * halfZ
-    if (blockedForRock(x, z)) continue
-    // V4a: allow flatter plains so chase view isn’t empty between roads
-    const relief = rawRelief(x, z)
-    if (relief < 1.0 && rand() > 0.7) continue
-    let ok = true
-    for (const p of placements) {
-      if (Math.hypot(x - p.x, z - p.z) < 11) {
-        ok = false
-        break
-      }
-    }
-    if (!ok) continue
-    const small = relief < 2.5 && rand() > 0.4
+  // Dense fill inside open scrub meadows (open-camo, not crop pads)
+  const scrubTarget = Math.floor(BUSH_COUNT * 0.78)
+  let scrubAttempts = 0
+  const maxScrubAttempts = scrubTarget * 24
+  while (placements.length < scrubTarget && scrubAttempts < maxScrubAttempts) {
+    scrubAttempts++
+    const scrub = FOREST_OPEN_SCRUB[Math.floor(rand() * FOREST_OPEN_SCRUB.length)]!
+    const ang = rand() * Math.PI * 2
+    const r = Math.sqrt(rand()) // denser toward center
+    const x = scrub.x + Math.cos(ang) * r * scrub.rx * 0.98
+    const z = scrub.z + Math.sin(ang) * r * scrub.rz * 0.98
+    if (blockedForBush(x, z)) continue
     placements.push({
       x,
       z,
       yaw: rand() * Math.PI * 2,
-      height: small ? 1.1 + rand() * 1.6 : 2.4 + rand() * 3.2,
-      template: Math.floor(rand() * templates.length),
-      cliff: false,
+      height: 3.2 + rand() * 2.8,
     })
   }
 
-  // One InstancedMesh per template
-  const byTemplate: RockPlace[][] = templates.map(() => [])
-  for (const pl of placements) {
-    byTemplate[pl.template]!.push(pl)
+  // Remainder: scatter in open rural ground (still off crops)
+  let attempts = 0
+  const maxAttempts = BUSH_COUNT * 20
+  while (placements.length < BUSH_COUNT && attempts < maxAttempts) {
+    attempts++
+    const x = (rand() - 0.5) * 2 * halfX
+    const z = (rand() - 0.5) * 2 * halfZ
+    if (blockedForBush(x, z)) continue
+    placements.push({
+      x,
+      z,
+      yaw: rand() * Math.PI * 2,
+      height: 2.8 + rand() * 2.6,
+    })
   }
 
-  for (let t = 0; t < templates.length; t++) {
-    const list = byTemplate[t]!
-    if (list.length === 0) continue
-    const { geometry, material, unitHeight } = templates[t]!
-    const mesh = new THREE.InstancedMesh(geometry, material, list.length)
-    mesh.name = `forestRockInstanced_${t}`
+  const count = placements.length
+  for (let p = 0; p < parts.length; p++) {
+    const { geometry, material } = parts[p]!
+    const mesh = new THREE.InstancedMesh(geometry, material, count)
+    mesh.name = `forestBushInstanced_${p}`
     mesh.castShadow = false
     mesh.receiveShadow = true
     mesh.frustumCulled = true
     mesh.matrixAutoUpdate = false
 
-    for (let i = 0; i < list.length; i++) {
-      const pl = list[i]!
+    for (let i = 0; i < count; i++) {
+      const pl = placements[i]!
       const s = pl.height / unitHeight
+      const fat = 1.35 + (i % 5) * 0.1
       _dummy.position.set(pl.x, forestHeightAt(pl.x, pl.z), pl.z)
       _dummy.rotation.set(0, pl.yaw, 0)
-      // Slight non-uniform scale so piles don't look stamped
-      const sx = s * (0.9 + rand() * 0.25)
-      const sy = s
-      const sz = s * (0.9 + rand() * 0.25)
-      _dummy.scale.set(sx, sy, sz)
+      _dummy.scale.set(s * fat, s, s * fat)
       _dummy.updateMatrix()
       mesh.setMatrixAt(i, _dummy.matrix)
     }
     mesh.instanceMatrix.needsUpdate = true
+    // InstancedMesh defaults to template sphere at origin — culls every bush off-center
+    mesh.computeBoundingSphere()
     root.add(mesh)
   }
 
   for (const pl of placements) {
-    const kind = pl.cliff || pl.height >= 5.5 ? 'cliff' : 'rock'
-    const shape = estimatePropCollider(kind, pl.height)
-    colliders.push({
-      x: pl.x,
-      z: pl.z,
-      radius: shape.radius,
-      maxY: shape.maxY,
-    })
     contacts.push({
       x: pl.x,
       z: pl.z,
-      radius: Math.max(2.0, Math.min(5.5, shape.radius * 1.25)),
+      radius: Math.max(1.2, pl.height * 0.55),
     })
   }
 
   console.info(
-    `[Steel] Forest rocks — ${placements.length} instances, ${templates.length} templates, ${clusters.length} cliff piles`,
+    `[Steel] Forest bushes — ${count} instances · ${parts.length} draws · unitH=${unitHeight.toFixed(2)}m · ${FOREST_OPEN_SCRUB.length} open-scrub meadows · drive-through camo`,
   )
-  return placements.length
+  return count
 }
 
 /** Continuous asphalt ribbon along a densified path (smooth curves, no tile seams). */
@@ -913,16 +912,18 @@ function makeRoadRibbon(
   return mesh
 }
 
-/** Procedural asphalt — modular road GLB atlas was collage/glitch on ribbons. */
-function loadRoadAsphaltMaterial(): THREE.MeshStandardMaterial {
-  const map = createAsphaltTexture(1, 1)
+/** Packed dirt path ribbon (rural forest lanes) — edge alpha fades into grass. */
+function loadRoadDirtMaterial(): THREE.MeshStandardMaterial {
+  const map = createDirtPathTexture(1, 1)
   map.anisotropy = 8
   return new THREE.MeshStandardMaterial({
     map,
-    color: 0xc8c8c8,
-    roughness: 0.94,
-    metalness: 0.04,
+    color: 0xe8d4b0,
+    roughness: 0.97,
+    metalness: 0.02,
     envMapIntensity: 0,
+    transparent: true,
+    depthWrite: true,
     side: THREE.DoubleSide,
   })
 }
@@ -932,10 +933,12 @@ function loadRoadSkirtMaterial(): THREE.MeshStandardMaterial {
   map.anisotropy = 4
   return new THREE.MeshStandardMaterial({
     map,
-    color: 0xb8a890,
-    roughness: 0.97,
+    color: 0xc4b090,
+    roughness: 0.98,
     metalness: 0.02,
     envMapIntensity: 0,
+    transparent: true,
+    depthWrite: false,
     side: THREE.DoubleSide,
     polygonOffset: true,
     polygonOffsetFactor: 1,
@@ -943,12 +946,16 @@ function loadRoadSkirtMaterial(): THREE.MeshStandardMaterial {
   })
 }
 
+/** Soft mud tire tracks on top of the dirt bed. */
 function loadRoadRutMaterial(): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
-    color: 0x2a241c,
-    roughness: 0.98,
+    color: 0x4a3828,
+    roughness: 0.99,
     metalness: 0.02,
     envMapIntensity: 0,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
     side: THREE.DoubleSide,
     polygonOffset: true,
     polygonOffsetFactor: -1,
@@ -956,55 +963,17 @@ function loadRoadRutMaterial(): THREE.MeshStandardMaterial {
   })
 }
 
-/** Dashed centerline paint (alphaTest — no soft blend z-fight). */
-function loadRoadDashMaterial(): THREE.MeshStandardMaterial {
-  const map = createRoadDashTexture(1)
-  return new THREE.MeshStandardMaterial({
-    map,
-    color: 0xffffff,
-    roughness: 0.88,
-    metalness: 0.02,
-    envMapIntensity: 0,
-    transparent: true,
-    alphaTest: 0.35,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-  })
-}
-
-/** Solid worn edge line. */
-function loadRoadEdgeLineMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({
-    color: 0xc8b878,
-    roughness: 0.9,
-    metalness: 0.02,
-    envMapIntensity: 0,
-    side: THREE.DoubleSide,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
-  })
-}
-
 /**
  * Smooth curved road ribbons (Catmull-Rom densified). Climbable — no colliders.
- * V5: gravel skirts + dual tire ruts. V6: worn asphalt + dashed center + edge lines.
+ * V7: packed dirt path + gravel skirt + soft tire ruts (no painted markings).
  */
 async function placeRoads(root: THREE.Group): Promise<{
   tileCount: number
   paths: Array<{ points: Array<{ x: number; z: number }> }>
 }> {
-  const mat = loadRoadAsphaltMaterial()
+  const mat = loadRoadDirtMaterial()
   const skirtMat = loadRoadSkirtMaterial()
   const rutMat = loadRoadRutMaterial()
-  const dashMat = loadRoadDashMaterial()
-  const edgeLineMat = loadRoadEdgeLineMaterial()
-  const ROAD_EDGE_HALF = ROAD_WIDTH * 0.5 - 0.45
-  const ROAD_EDGE_W = 0.28
-  const ROAD_DASH_W = 0.22
 
   const roads = new THREE.Group()
   roads.name = 'ForestRoads'
@@ -1013,11 +982,10 @@ async function placeRoads(root: THREE.Group): Promise<{
   let ribbonCount = 0
   let skirtCount = 0
   let rutCount = 0
-  let markCount = 0
   for (let i = 0; i < ROAD_POLYLINES.length; i++) {
     const line = ROAD_POLYLINES[i]!
 
-    // V5a — gravel/dirt skirt under asphalt (wider, slightly lower)
+    // Gravel/dirt shoulder under the packed path (wider, slightly lower)
     const skirt = makeRoadRibbon(line, ROAD_SKIRT_WIDTH, skirtMat, `roadSkirt_${i}`, {
       y: ROAD_Y - 0.025,
     })
@@ -1032,34 +1000,7 @@ async function placeRoads(root: THREE.Group): Promise<{
       ribbonCount++
     }
 
-    // V6 — dashed centerline (cream paint, ~7 m on / ~9 m off via UV V)
-    const dash = makeRoadRibbon(line, ROAD_DASH_W, dashMat, `roadDash_${i}`, {
-      y: ROAD_Y + 0.018,
-    })
-    if (dash) {
-      roads.add(dash)
-      markCount++
-    }
-
-    // V6 — solid edge lines inset from asphalt lip
-    const edgeL = makeRoadRibbon(line, ROAD_EDGE_W, edgeLineMat, `roadEdgeL_${i}`, {
-      y: ROAD_Y + 0.016,
-      lateral: -ROAD_EDGE_HALF,
-    })
-    const edgeR = makeRoadRibbon(line, ROAD_EDGE_W, edgeLineMat, `roadEdgeR_${i}`, {
-      y: ROAD_Y + 0.016,
-      lateral: ROAD_EDGE_HALF,
-    })
-    if (edgeL) {
-      roads.add(edgeL)
-      markCount++
-    }
-    if (edgeR) {
-      roads.add(edgeR)
-      markCount++
-    }
-
-    // V5b — soft dual tire ruts (no z-fight vs asphalt via slight lift + polygonOffset)
+    // Soft dual tire ruts (lift + polygonOffset vs dirt bed)
     const rutL = makeRoadRibbon(line, ROAD_RUT_WIDTH, rutMat, `roadRutL_${i}`, {
       y: ROAD_Y + 0.014,
       lateral: -ROAD_RUT_HALF,
@@ -1081,7 +1022,7 @@ async function placeRoads(root: THREE.Group): Promise<{
   roads.updateMatrixWorld(true)
   _box.setFromObject(roads)
   console.info(
-    `[Steel] Forest roads — ${ribbonCount} asphalt · ${skirtCount} skirts · ${rutCount} ruts · ${markCount} markings · width ${ROAD_WIDTH}m · V6 · bbox ` +
+    `[Steel] Forest roads — ${ribbonCount} dirt paths · ${skirtCount} skirts · ${rutCount} ruts · width ${ROAD_WIDTH}m · V7 dirt · bbox ` +
       `x[${_box.min.x.toFixed(0)}…${_box.max.x.toFixed(0)}] z[${_box.min.z.toFixed(0)}…${_box.max.z.toFixed(0)}]`,
   )
 
@@ -1212,7 +1153,6 @@ async function placeTownHouses(
   const templates: HouseTpl[] = []
   const loads: Array<{ url: string; label: string; h: number }> = [
     { url: RUIN_HOUSE_URL, label: 'ruin', h: 13 },
-    { url: WORN_SHED_URL, label: 'shed', h: 4.6 },
   ]
   for (const L of loads) {
     try {
@@ -1237,17 +1177,13 @@ async function placeTownHouses(
     const spot = spots[i]!
     if (onAsphalt(spot.x, spot.z)) continue
     const pick = templates[i % templates.length]!
-    // Sheds stay short; houses use ring height scaled to template.
-    const targetH =
-      pick.label === 'shed'
-        ? pick.h + (i % 3) * 0.2
-        : spot.h * (pick.h / 13)
+    const targetH = spot.h * (pick.h / 13)
     plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, targetH)
     contacts.push({
       x: spot.x,
       z: spot.z,
       radius: Math.max(
-        pick.label === 'shed' ? 3.2 : 4.5,
+        4.5,
         pick.piece.hx * (targetH / pick.piece.height) * 1.05 + 1.0,
       ),
     })
@@ -1381,6 +1317,139 @@ function applyForestFloorMaterial(mat: THREE.MeshStandardMaterial): void {
   mat.needsUpdate = true
 }
 
+/**
+ * Rural barley / flower fields — dense tall crossed-card stalks.
+ * No solid colliders: tanks drive through and can sit fully in cover (~2–2.6 m).
+ */
+function placeRuralCropFields(root: THREE.Group): { stalks: number; fields: number } {
+  const barley = createCropTuft('barley')
+  const flowerA = createCropTuft('flower', 0)
+  const flowerB = createCropTuft('flower', 1)
+  const flowerC = createCropTuft('flower', 2)
+
+  type Spot = { x: number; z: number; yaw: number; h: number; variant: number }
+  const barleySpots: Spot[] = []
+  const flowerSpots: Spot[] = []
+  const rand = mulberry32(0xc20f1e1d)
+
+  /**
+   * ~1.85 m grid + fat clumps ≈ continuous cover without 10k+ alpha cards.
+   * Height 2m+ so a hull sits behind the stalks, not on painted dirt.
+   */
+  const STEP = 1.85
+
+  for (const field of FOREST_CROP_FIELDS) {
+    const x0 = field.x - field.rx
+    const z0 = field.z - field.rz
+    for (let x = x0; x <= field.x + field.rx; x += STEP) {
+      for (let z = z0; z <= field.z + field.rz; z += STEP) {
+        const nx = (x - field.x) / field.rx
+        const nz = (z - field.z) / field.rz
+        if (nx * nx + nz * nz > 0.96) continue
+        if (onRoadCorridor(x, z)) continue
+        // Soft edge — thin out near rim
+        const edge = Math.sqrt(nx * nx + nz * nz)
+        if (edge > 0.78 && rand() < (edge - 0.78) / 0.22) continue
+        // Occasional gaps so it reads as planted rows
+        if (rand() < 0.06) continue
+
+        const jx = x + (rand() - 0.5) * STEP * 0.5
+        const jz = z + (rand() - 0.5) * STEP * 0.5
+        const spot: Spot = {
+          x: jx,
+          z: jz,
+          yaw: rand() * Math.PI * 2,
+          h:
+            field.kind === 'barley'
+              ? 2.15 + rand() * 0.5
+              : 1.95 + rand() * 0.45,
+          variant: Math.floor(rand() * 3),
+        }
+        if (field.kind === 'barley') barleySpots.push(spot)
+        else flowerSpots.push(spot)
+      }
+    }
+  }
+
+  const plant = (
+    spots: Spot[],
+    tufts: ReturnType<typeof createCropTuft>[],
+    name: string,
+  ): number => {
+    if (spots.length === 0) return 0
+    // One InstancedMesh per tuft variant (flowers); barley uses a single tuft.
+    for (let v = 0; v < tufts.length; v++) {
+      const subset = tufts.length === 1 ? spots : spots.filter((s) => s.variant === v)
+      if (subset.length === 0) continue
+      const { geometry, material, unitHeight } = tufts[v]!
+      const mesh = new THREE.InstancedMesh(geometry, material, subset.length)
+      mesh.name = `${name}_${v}`
+      mesh.castShadow = false
+      mesh.receiveShadow = true
+      mesh.frustumCulled = true
+      mesh.matrixAutoUpdate = false
+      for (let i = 0; i < subset.length; i++) {
+        const s = subset[i]!
+        const sc = s.h / unitHeight
+        // Fat XZ so neighbouring clumps mesh into a hideable wall
+        const fat = 1.35 + (s.variant % 3) * 0.12
+        _dummy.position.set(s.x, forestHeightAt(s.x, s.z), s.z)
+        _dummy.rotation.set(0, s.yaw, 0)
+        _dummy.scale.set(fat, sc, fat)
+        _dummy.updateMatrix()
+        mesh.setMatrixAt(i, _dummy.matrix)
+      }
+      mesh.instanceMatrix.needsUpdate = true
+      // Alpha cards need a generous sphere so frustum cull doesn't pop cover
+      mesh.geometry.computeBoundingSphere()
+      if (mesh.geometry.boundingSphere) {
+        mesh.geometry.boundingSphere.radius = Math.max(
+          mesh.geometry.boundingSphere.radius,
+          2.8,
+        )
+      }
+      root.add(mesh)
+    }
+    return spots.length
+  }
+
+  const nBarley = plant(barleySpots, [barley], 'forestBarley')
+  const nFlower = plant(flowerSpots, [flowerA, flowerB, flowerC], 'forestFlower')
+
+  // Soft dirt pads under crops (readable farm plot — secondary to stalks)
+  const dirtGeo = new THREE.CircleGeometry(1, 24)
+  dirtGeo.rotateX(-Math.PI / 2)
+  const dirtMat = new THREE.MeshStandardMaterial({
+    color: 0x6a5a3a,
+    roughness: 1,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+  })
+  const dirt = new THREE.InstancedMesh(dirtGeo, dirtMat, FOREST_CROP_FIELDS.length)
+  dirt.name = 'forestCropDirt'
+  dirt.receiveShadow = true
+  dirt.castShadow = false
+  dirt.matrixAutoUpdate = false
+  for (let i = 0; i < FOREST_CROP_FIELDS.length; i++) {
+    const f = FOREST_CROP_FIELDS[i]!
+    const y = forestHeightAt(f.x, f.z) + 0.04
+    _dummy.position.set(f.x, y, f.z)
+    _dummy.rotation.set(0, f.kind === 'barley' ? 0.15 : -0.2, 0)
+    _dummy.scale.set(f.rx * 1.02, 1, f.rz * 1.02)
+    _dummy.updateMatrix()
+    dirt.setMatrixAt(i, _dummy.matrix)
+  }
+  dirt.instanceMatrix.needsUpdate = true
+  root.add(dirt)
+
+  console.info(
+    `[Steel] Rural fields — ${FOREST_CROP_FIELDS.length} plots · ${nBarley} barley stalks · ${nFlower} flower stalks (drive-through cover ~2m+)`,
+  )
+  return { stalks: nBarley + nFlower, fields: FOREST_CROP_FIELDS.length }
+}
+
 /** Displaced grass mesh + height sampler (clearings stay flat). */
 function buildForestTerrain(root: THREE.Group): THREE.Mesh {
   const geo = new THREE.PlaneGeometry(
@@ -1404,6 +1473,21 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
     if (y > maxY) maxY = y
     sampleForestGroundTint(x, z, tint)
     const wear = sampleWearMul(x, z)
+    // Soft dirt bleed under path shoulders so ribbon alpha fade meets brown, not a hard green cut
+    const dRoad = distToRoads(x, z)
+    const blendInner = ROAD_WIDTH * 0.28
+    const blendOuter = ROAD_SKIRT_WIDTH * 0.5 + 10
+    if (dRoad < blendOuter) {
+      const u = THREE.MathUtils.clamp(
+        (dRoad - blendInner) / Math.max(0.001, blendOuter - blendInner),
+        0,
+        1,
+      )
+      const dirtAmt = 1 - u * u * (3 - 2 * u)
+      tint.r = THREE.MathUtils.lerp(tint.r, 0.62, dirtAmt * 0.82)
+      tint.g = THREE.MathUtils.lerp(tint.g, 0.48, dirtAmt * 0.78)
+      tint.b = THREE.MathUtils.lerp(tint.b, 0.3, dirtAmt * 0.8)
+    }
     colors[i * 3] = tint.r * wear
     colors[i * 3 + 1] = tint.g * wear
     colors[i * 3 + 2] = tint.b * wear
@@ -1427,7 +1511,7 @@ function buildForestTerrain(root: THREE.Group): THREE.Mesh {
   root.add(mesh)
 
   console.info(
-    `[Steel] Forest terrain — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH} · ${TERRAIN_SEG_X}×${TERRAIN_SEG_Z} · y[${minY.toFixed(2)}…${maxY.toFixed(2)}] · V1 floor+vertexTint · V3b road/town wear · clearings ${FOREST_TOWNS.map((t) => t.name).join(', ')}`,
+    `[Steel] Forest terrain — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH} · ${TERRAIN_SEG_X}×${TERRAIN_SEG_Z} · y[${minY.toFixed(2)}…${maxY.toFixed(2)}] · V1 floor+vertexTint · V7 road dirt bleed · clearings ${FOREST_TOWNS.map((t) => t.name).join(', ')}`,
   )
   return mesh
 }
@@ -1461,13 +1545,13 @@ export async function loadForestOverwatch(
     console.warn('[Steel] Forest roads failed to load', err)
   }
 
-  const [treeCount, rockCount, ruinCount, carCount] = await Promise.all([
+  const [treeCount, bushCount, ruinCount, carCount] = await Promise.all([
     placePineTrees(root, colliders, contacts).catch((err) => {
       console.warn('[Steel] Forest pine trees failed to load', err)
       return 0
     }),
-    placeCliffRocks(root, colliders, contacts).catch((err) => {
-      console.warn('[Steel] Forest cliff rocks failed to load', err)
+    placeBushes(root, contacts).catch((err) => {
+      console.warn('[Steel] Forest bushes failed to load', err)
       return 0
     }),
     placeTownHouses(root, colliders, contacts).catch((err) => {
@@ -1481,9 +1565,10 @@ export async function loadForestOverwatch(
   ])
 
   const blobCount = placeContactBlobs(root, contacts)
+  const crops = placeRuralCropFields(root)
 
   console.info(
-    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${rockCount} rocks, ${ruinCount} houses, ${carCount} wrecks, ${blobCount} contact blobs, ${FOREST_TOWNS.length} clearings, ${colliders.length} colliders · no tuft grass`,
+    `[Steel] Forest Overwatch — ${FOREST_OVERWATCH_WIDTH}×${FOREST_OVERWATCH_DEPTH}m, ${roadTiles} road tiles, ${treeCount} pines, ${bushCount} bushes, ${ruinCount} houses, ${carCount} wrecks, ${blobCount} contact blobs, ${FOREST_TOWNS.length} clearings, ${crops.fields} crop fields (${crops.stalks} stalks), ${colliders.length} colliders`,
   )
   return {
     root,

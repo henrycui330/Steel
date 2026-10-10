@@ -67,7 +67,7 @@ import { createEjectCinematic } from './ejectCinematic'
 import { createEjectAlert } from './ejectAlert'
 import { FOREST_TOWNS, FOREST_PROP_URLS } from './maps/forestOverwatch'
 import { loadMap, mapOptionById } from './maps/mapCatalog'
-import { onGltfProgress, preloadUrls } from './loadGltf'
+import { onGltfProgress, preloadUrls, warmLoaders } from './loadGltf'
 import { showMainMenu, showRespawnHangar, pickLoadingTip, gameModeLabel, type MenuSelection, type TeamId } from './menu'
 import { createLandTutorial, type LandTutorialHandle } from './tutorialLand'
 import { createAirTutorial, type AirTutorialHandle } from './tutorialAir'
@@ -3147,6 +3147,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  // Start Forest prop downloads before auth / home / match-opening UI.
+  warmLoaders()
+  console.info(
+    `[Steel] Boot preload Forest props — ${FOREST_PROP_URLS.length} urls (no rocks/shed)`,
+  )
+  void preloadUrls(FOREST_PROP_URLS)
+
   function idle(): void {
     renderer.render(scene, camera)
   }

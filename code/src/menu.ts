@@ -137,6 +137,7 @@ function spawnModeOverlay(
 }
 
 function warmupMatchAssets(tankIds: readonly TankId[] = []): void {
+  // Forest props already kick off in main() boot; keep warming tanks here.
   warmLoaders()
   const tankUrls = [...new Set([DEFAULT_AI_TANK, ...tankIds])]
     .map((id) => tankOptionById(id).url)

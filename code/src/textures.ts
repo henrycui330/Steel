@@ -141,6 +141,88 @@ export function createGrassTexture(repeat = 48): THREE.CanvasTexture {
   }, repeat)
 }
 
+/**
+ * Packed rural dirt path — warm earth, dual tire beds, pebbles, grass flecks.
+ * Meant for forest lanes (not highway asphalt).
+ */
+export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTexture {
+  const tex = canvasTexture(256, (ctx, size) => {
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    const mid = (size - 1) * 0.5
+    // Tire beds as fraction of width (U across road)
+    const rutA = size * 0.32
+    const rutB = size * 0.68
+    const rutW = size * 0.07
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const n = fbm(x * 0.1, y * 0.1, 4)
+        const grit = hash2(x * 2.2, y * 1.6)
+        const patch = fbm(x * 0.035 + 4, y * 0.032 - 2, 3)
+        const t = n * 0.5 + grit * 0.3 + patch * 0.2
+
+        // Base — dry packed clay / dirt
+        let r = 98 + t * 52 + grit * 14
+        let g = 72 + t * 38 + patch * 10
+        let b = 42 + t * 22
+
+        // Dual tire compressions (darker, cooler mud)
+        const dRut = Math.min(Math.abs(x - rutA), Math.abs(x - rutB))
+        if (dRut < rutW) {
+          const k = 1 - dRut / rutW
+          const mud = k * k * (0.55 + fbm(x * 0.2, y * 0.15, 2) * 0.35)
+          r = r * (1 - 0.42 * mud) + 48 * mud
+          g = g * (1 - 0.4 * mud) + 38 * mud
+          b = b * (1 - 0.35 * mud) + 28 * mud
+        }
+
+        // Pebbles / aggregate
+        if (hash2(x * 3.3, y * 2.9) > 0.93) {
+          r += 35
+          g += 28
+          b += 18
+        }
+
+        // Sparse grass flecks near edges (path shoulder bleed)
+        const edge = Math.abs(x - mid) / mid
+        if (edge > 0.55 && hash2(x * 0.8, y * 1.4) > 0.72) {
+          const gk = (edge - 0.55) / 0.45
+          r = r * (1 - 0.45 * gk) + 58 * gk
+          g = g * (1 - 0.15 * gk) + 102 * gk
+          b = b * (1 - 0.5 * gk) + 36 * gk
+        }
+
+        // Soft longitudinal scrape / washboard
+        const wash = Math.abs(fbm(x * 0.04, y * 0.35, 2) - 0.5)
+        if (wash < 0.04) {
+          const k = 1 - wash / 0.04
+          r *= 1 - 0.12 * k
+          g *= 1 - 0.1 * k
+          b *= 1 - 0.08 * k
+        }
+
+        // Soft left/right fade so the ribbon dissolves into grass (U = across road)
+        let a = 255
+        const fade = 0.2 // outer 20% of width each side
+        if (edge > 1 - fade) {
+          const t = (edge - (1 - fade)) / fade
+          const s = t * t * (3 - 2 * t)
+          a = Math.floor(255 * (1 - s))
+        }
+
+        const i = (y * size + x) * 4
+        d[i] = Math.floor(Math.min(255, Math.max(0, r)))
+        d[i + 1] = Math.floor(Math.min(255, Math.max(0, g)))
+        d[i + 2] = Math.floor(Math.min(255, Math.max(0, b)))
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.repeat.set(repeatU, repeatV)
+  return tex
+}
+
 /** Dark asphalt grit — cracks, tar patches, oil stains, aggregate (not a GLB atlas). */
 export function createAsphaltTexture(repeatU = 1, repeatV = 1): THREE.CanvasTexture {
   const tex = canvasTexture(256, (ctx, size) => {
@@ -242,7 +324,7 @@ export function createRoadDashTexture(repeatV = 1): THREE.CanvasTexture {
   return tex
 }
 
-/** Dirt/gravel shoulder for road skirts (Vision V5). */
+/** Dirt/gravel shoulder for road skirts — wide soft fade into grass. */
 export function createGravelShoulderTexture(
   repeatU = 1,
   repeatV = 1,
@@ -250,20 +332,44 @@ export function createGravelShoulderTexture(
   const tex = canvasTexture(256, (ctx, size) => {
     const img = ctx.createImageData(size, size)
     const d = img.data
+    const mid = (size - 1) * 0.5
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const n = fbm(x * 0.09, y * 0.09, 4)
         const grit = hash2(x * 2.1, y * 1.7)
         const pebble = hash2(x * 0.4 + 3, y * 0.55)
         const t = n * 0.5 + grit * 0.35 + pebble * 0.15
-        const r = Math.floor(72 + t * 48 + grit * 12)
-        const g = Math.floor(62 + t * 36 + pebble * 8)
-        const b = Math.floor(42 + t * 28)
+        let r = Math.floor(78 + t * 48 + grit * 12)
+        let g = Math.floor(68 + t * 40 + pebble * 10)
+        let b = Math.floor(44 + t * 28)
+
+        // Pull toward grass green as we approach the lip
+        const edge = Math.abs(x - mid) / mid
+        if (edge > 0.35) {
+          const gk = (edge - 0.35) / 0.65
+          r = Math.floor(r * (1 - 0.55 * gk) + 52 * gk)
+          g = Math.floor(g * (1 - 0.25 * gk) + 110 * gk)
+          b = Math.floor(b * (1 - 0.55 * gk) + 40 * gk)
+        }
+
+        // Outer ~35% fades to transparent so no hard skirt line
+        let a = 255
+        const fade = 0.38
+        if (edge > 1 - fade) {
+          const ft = (edge - (1 - fade)) / fade
+          const s = ft * ft * (3 - 2 * ft)
+          a = Math.floor(220 * (1 - s))
+        } else if (edge > 0.5) {
+          a = Math.floor(220 - (edge - 0.5) * 40)
+        } else {
+          a = 200
+        }
+
         const i = (y * size + x) * 4
         d[i] = r
         d[i + 1] = g
         d[i + 2] = b
-        d[i + 3] = 255
+        d[i + 3] = Math.max(0, Math.min(255, a))
       }
     }
     ctx.putImageData(img, 0, 0)
@@ -466,6 +572,164 @@ export function createPineForestFloorMaps(
 }
 
 /**
+ * Continuous meadow grass floor (albedo + normal + roughness) — reads as a
+ * grass carpet, not discrete tufts. Soft blade streaks + patch colour.
+ */
+export function createMeadowGrassFloorMaps(
+  repeatU = 72,
+  repeatV: number = repeatU,
+): ForestFloorMaps {
+  const size = 256
+  const heights = new Float32Array(size * size)
+  const rough = new Float32Array(size * size)
+
+  const albedoCanvas = document.createElement('canvas')
+  albedoCanvas.width = size
+  albedoCanvas.height = size
+  const aCtx = albedoCanvas.getContext('2d')
+  if (!aCtx) throw new Error('[Steel] 2D canvas unavailable for grass floor')
+  const aImg = aCtx.createImageData(size, size)
+  const a = aImg.data
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const macro = fbm(x * 0.035, y * 0.033, 4)
+      const patch = fbm(x * 0.08 + 5, y * 0.075 - 2, 3)
+      const fine = fbm(x * 0.28 + 11, y * 0.24, 2)
+      // Vertical-ish blade streaks (carpet grain)
+      const blade =
+        hash2(x * 2.4, Math.floor(y * 0.55) * 1.7) * 0.55 +
+        hash2(x * 0.9 + y * 0.15, y * 3.1) * 0.45
+      const dry = fbm(x * 0.02 + 3, y * 0.018 - 1, 3)
+      const grit = hash2(x * 1.1, y * 0.95)
+
+      let h =
+        macro * 0.35 + patch * 0.25 + fine * 0.2 + blade * 0.18 + grit * 0.05
+      // Lush spring greens
+      let r = 48 + macro * 28 + patch * 18 + blade * 12
+      let g = 108 + macro * 55 + patch * 35 + fine * 22 + blade * 18
+      let b = 36 + macro * 18 + patch * 12
+
+      // Cooler/darker wet-looking dips
+      if (patch > 0.62) {
+        const m = (patch - 0.62) / 0.38
+        r = r * (1 - m * 0.25) + 32 * m
+        g = g * (1 - m * 0.1) + 92 * m
+        b = b * (1 - m * 0.2) + 40 * m
+        h -= m * 0.12
+      }
+      // Warmer dry / sun-scorch patches
+      if (dry > 0.64) {
+        const d = (dry - 0.64) / 0.36
+        r = r * (1 - d * 0.15) + (95 + blade * 20) * d
+        g = g * (1 - d * 0.2) + (118 + fine * 15) * d
+        b = b * (1 - d * 0.35) + 42 * d
+      }
+      // Tiny soil flecks
+      if (grit > 0.94) {
+        r += 18
+        g += 8
+        b += 4
+        h += 0.08
+      }
+
+      const idx = y * size + x
+      heights[idx] = h
+      rough[idx] = THREE.MathUtils.clamp(
+        0.78 + blade * 0.12 + fine * 0.08 - patch * 0.1,
+        0.55,
+        0.98,
+      )
+
+      const i = idx * 4
+      a[i] = Math.min(255, Math.floor(r))
+      a[i + 1] = Math.min(255, Math.floor(g))
+      a[i + 2] = Math.min(255, Math.floor(b))
+      a[i + 3] = 255
+    }
+  }
+  aCtx.putImageData(aImg, 0, 0)
+
+  const map = new THREE.CanvasTexture(albedoCanvas)
+  map.wrapS = THREE.RepeatWrapping
+  map.wrapT = THREE.RepeatWrapping
+  map.repeat.set(repeatU, repeatV * 1.05)
+  map.anisotropy = 8
+  map.colorSpace = THREE.SRGBColorSpace
+  map.needsUpdate = true
+
+  const nCanvas = document.createElement('canvas')
+  nCanvas.width = size
+  nCanvas.height = size
+  const nCtx = nCanvas.getContext('2d')
+  if (!nCtx) throw new Error('[Steel] 2D canvas unavailable for grass normals')
+  const nImg = nCtx.createImageData(size, size)
+  const nd = nImg.data
+  const strength = 2.2
+  const sampleH = (sx: number, sy: number): number => {
+    const xx = ((sx % size) + size) % size
+    const yy = ((sy % size) + size) % size
+    return heights[yy * size + xx]!
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (sampleH(x - 1, y) - sampleH(x + 1, y)) * strength
+      const dy = (sampleH(x, y + 1) - sampleH(x, y - 1)) * strength
+      let nx = dx
+      let ny = dy
+      let nz = 1
+      const len = Math.hypot(nx, ny, nz) || 1
+      nx /= len
+      ny /= len
+      nz /= len
+      const i = (y * size + x) * 4
+      nd[i] = Math.floor((nx * 0.5 + 0.5) * 255)
+      nd[i + 1] = Math.floor((ny * 0.5 + 0.5) * 255)
+      nd[i + 2] = Math.floor((nz * 0.5 + 0.5) * 255)
+      nd[i + 3] = 255
+    }
+  }
+  nCtx.putImageData(nImg, 0, 0)
+  const normalMap = new THREE.CanvasTexture(nCanvas)
+  normalMap.wrapS = THREE.RepeatWrapping
+  normalMap.wrapT = THREE.RepeatWrapping
+  normalMap.repeat.set(repeatU * 1.11, repeatV * 0.96)
+  normalMap.offset.set(0.21, 0.37)
+  normalMap.anisotropy = 8
+  normalMap.colorSpace = THREE.NoColorSpace
+  normalMap.needsUpdate = true
+
+  const rCanvas = document.createElement('canvas')
+  rCanvas.width = size
+  rCanvas.height = size
+  const rCtx = rCanvas.getContext('2d')
+  if (!rCtx) throw new Error('[Steel] 2D canvas unavailable for grass roughness')
+  const rImg = rCtx.createImageData(size, size)
+  const rd = rImg.data
+  for (let i = 0; i < size * size; i++) {
+    const v = Math.floor(rough[i]! * 255)
+    const o = i * 4
+    rd[o] = v
+    rd[o + 1] = v
+    rd[o + 2] = v
+    rd[o + 3] = 255
+  }
+  rCtx.putImageData(rImg, 0, 0)
+  const roughnessMap = new THREE.CanvasTexture(rCanvas)
+  roughnessMap.wrapS = THREE.RepeatWrapping
+  roughnessMap.wrapT = THREE.RepeatWrapping
+  roughnessMap.repeat.set(repeatU, repeatV * 1.05)
+  roughnessMap.anisotropy = 4
+  roughnessMap.colorSpace = THREE.NoColorSpace
+  roughnessMap.needsUpdate = true
+
+  console.info(
+    `[Steel] Meadow grass floor — albedo+normal+roughness · carpet · ${size}² · repeat ${repeatU.toFixed(0)}×${repeatV.toFixed(0)}`,
+  )
+  return { map, normalMap, roughnessMap }
+}
+
+/**
  * World-space tint (not UV) — multiplies the floor albedo so tiling doesn't
  * march across the map as an obvious stamp. Call per terrain vertex.
  */
@@ -475,29 +739,27 @@ export function sampleForestGroundTint(
   out: THREE.Color,
 ): THREE.Color {
   const macro = fbm(x * 0.0038 + 1.2, z * 0.0035 - 0.7, 4)
-  const mossBand = fbm(x * 0.006 + 4, z * 0.0055, 3)
-  const wet = fbm(x * 0.0075 - 2, z * 0.007 + 5, 3)
-  // Warm duff base
-  let r = 0.92 + macro * 0.12
-  let g = 0.88 + macro * 0.1
+  const lush = fbm(x * 0.006 + 4, z * 0.0055, 3)
+  const dry = fbm(x * 0.0075 - 2, z * 0.007 + 5, 3)
+  // Green meadow multiply (keeps grass floor reading as grass)
+  let r = 0.88 + macro * 0.1
+  let g = 0.96 + macro * 0.08
   let b = 0.78 + macro * 0.08
-  // Cooler moss flats
-  if (mossBand > 0.55) {
-    const m = (mossBand - 0.55) / 0.45
-    r *= 1 - m * 0.12
-    g *= 1 + m * 0.08
-    b *= 1 - m * 0.05
+  if (lush > 0.55) {
+    const m = (lush - 0.55) / 0.45
+    r *= 1 - m * 0.08
+    g *= 1 + m * 0.06
+    b *= 1 - m * 0.04
   }
-  // Large wet basins (align-ish with texture puddles, but world-locked)
-  if (wet > 0.62) {
-    const w = (wet - 0.62) / 0.38
-    r *= 1 - w * 0.22
-    g *= 1 - w * 0.12
-    b *= 1 - w * 0.08
+  if (dry > 0.62) {
+    const w = (dry - 0.62) / 0.38
+    r *= 1 + w * 0.08
+    g *= 1 - w * 0.06
+    b *= 1 - w * 0.1
   }
   return out.setRGB(
     THREE.MathUtils.clamp(r, 0.55, 1.15),
-    THREE.MathUtils.clamp(g, 0.55, 1.15),
+    THREE.MathUtils.clamp(g, 0.55, 1.2),
     THREE.MathUtils.clamp(b, 0.5, 1.1),
   )
 }
@@ -574,19 +836,20 @@ function createGrassBladeMap(): THREE.CanvasTexture {
     const mid = (size - 1) * 0.5
     for (let y = 0; y < size; y++) {
       const t = y / (size - 1)
-      const half = (0.42 - t * 0.38) * size
+      // Wide opaque blade so alphaTest doesn't erase the tuft
+      const half = (0.48 - t * 0.22) * size
       for (let x = 0; x < size; x++) {
         const i = (y * size + x) * 4
         const dx = Math.abs(x - mid)
         let a = 0
         if (dx < half) {
           const edge = 1 - dx / Math.max(half, 1)
-          a = Math.floor(255 * Math.min(1, edge * 1.35) * (0.35 + t * 0.65))
+          a = Math.floor(255 * Math.min(1, 0.55 + edge * 0.45) * (0.75 + t * 0.25))
         }
         const n = hash2(x * 0.8, y * 1.1)
-        d[i] = Math.floor(48 + t * 70 + n * 18)
-        d[i + 1] = Math.floor(92 + t * 90 + n * 20)
-        d[i + 2] = Math.floor(28 + t * 32)
+        d[i] = Math.floor(42 + t * 55 + n * 16)
+        d[i + 1] = Math.floor(110 + t * 70 + n * 18)
+        d[i + 2] = Math.floor(32 + t * 28)
         d[i + 3] = a
       }
     }
@@ -602,24 +865,44 @@ function createGrassBladeMap(): THREE.CanvasTexture {
  * Crossed-card tuft (no GLB). Unit height 1m — instance scale is world metres.
  */
 export function createGrassTuft(): GrassTuft {
+  return buildCropTuft({
+    cards: 5,
+    width: 0.55,
+    tipNarrow: 0.28,
+    map: createGrassBladeMap(),
+    color: 0xc8e878,
+    alphaTest: 0.15,
+  })
+}
+
+export type CropKind = 'barley' | 'flower'
+
+type CropTuftOpts = {
+  cards: number
+  width: number
+  tipNarrow: number
+  map: THREE.CanvasTexture
+  color: number
+  alphaTest: number
+}
+
+function buildCropTuft(opts: CropTuftOpts): GrassTuft {
   const positions: number[] = []
   const uvs: number[] = []
   const indices: number[] = []
-  const cards = 4
-  for (let i = 0; i < cards; i++) {
-    const yaw = (i / cards) * Math.PI
+  const h = 1
+  for (let i = 0; i < opts.cards; i++) {
+    const yaw = (i / opts.cards) * Math.PI
     const c = Math.cos(yaw)
     const s = Math.sin(yaw)
-    const w = 0.32
-    const h = 1
-    const ox = Math.cos(yaw * 2.1) * 0.06
-    const oz = Math.sin(yaw * 2.1) * 0.06
+    const w = opts.width
+    const ox = Math.cos(yaw * 2.1) * 0.05
+    const oz = Math.sin(yaw * 2.1) * 0.05
     const b = positions.length / 3
-    // base-L, base-R, tip-R, tip-L
     positions.push(ox - c * w, 0, oz - s * w)
     positions.push(ox + c * w, 0, oz + s * w)
-    positions.push(ox + c * w * 0.22, h, oz + s * w * 0.22)
-    positions.push(ox - c * w * 0.22, h, oz - s * w * 0.22)
+    positions.push(ox + c * w * opts.tipNarrow, h, oz + s * w * opts.tipNarrow)
+    positions.push(ox - c * w * opts.tipNarrow, h, oz - s * w * opts.tipNarrow)
     uvs.push(0, 0, 1, 0, 1, 1, 0, 1)
     indices.push(b, b + 1, b + 2, b, b + 2, b + 3)
   }
@@ -631,14 +914,124 @@ export function createGrassTuft(): GrassTuft {
   geometry.computeBoundingSphere()
 
   const material = new THREE.MeshStandardMaterial({
-    map: createGrassBladeMap(),
-    color: 0xd8f0b0,
+    map: opts.map,
+    color: opts.color,
     roughness: 1,
     metalness: 0,
     side: THREE.DoubleSide,
-    alphaTest: 0.38,
+    alphaTest: opts.alphaTest,
     depthWrite: true,
-    envMapIntensity: 0.15,
+    envMapIntensity: 0.2,
   })
   return { geometry, material, unitHeight: 1 }
+}
+
+/** Tall golden barley stalks — dense enough to break a tank silhouette. */
+function createBarleyBladeMap(): THREE.CanvasTexture {
+  const tex = canvasTexture(64, (ctx, size) => {
+    ctx.clearRect(0, 0, size, size)
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    const mid = (size - 1) * 0.5
+    for (let y = 0; y < size; y++) {
+      const t = y / (size - 1)
+      // Thin stalk, slight head bulge near tip
+      const head = t > 0.72 ? 1 + (t - 0.72) * 2.4 : 1
+      const half = (0.28 - t * 0.18) * size * head
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4
+        const dx = Math.abs(x - mid)
+        let a = 0
+        if (dx < half) {
+          const edge = 1 - dx / Math.max(half, 1)
+          a = Math.floor(255 * Math.min(1, edge * 1.45) * (0.4 + t * 0.6))
+        }
+        const n = hash2(x * 0.9, y * 1.3)
+        // Straw / ripe barley
+        d[i] = Math.floor(150 + t * 55 + n * 22)
+        d[i + 1] = Math.floor(125 + t * 40 + n * 18)
+        d[i + 2] = Math.floor(48 + t * 20 + n * 10)
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  return tex
+}
+
+/** Tall wildflower stems with a coloured bloom band at the tip. */
+function createFlowerBladeMap(seed = 0): THREE.CanvasTexture {
+  const blooms: Array<[number, number, number]> = [
+    [210, 70, 90],
+    [230, 180, 50],
+    [90, 110, 200],
+    [230, 120, 40],
+    [180, 80, 180],
+    [250, 250, 245],
+  ]
+  const bloom = blooms[Math.floor(hash2(3.1 + seed, 7.7) * blooms.length) % blooms.length]!
+  const tex = canvasTexture(64, (ctx, size) => {
+    ctx.clearRect(0, 0, size, size)
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    const mid = (size - 1) * 0.5
+    for (let y = 0; y < size; y++) {
+      const t = y / (size - 1)
+      const isBloom = t > 0.78
+      const half = isBloom
+        ? (0.36 - (t - 0.78) * 0.5) * size
+        : (0.22 - t * 0.12) * size
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4
+        const dx = Math.abs(x - mid)
+        let a = 0
+        if (dx < half) {
+          const edge = 1 - dx / Math.max(half, 1)
+          a = Math.floor(255 * Math.min(1, edge * 1.4) * (isBloom ? 0.95 : 0.45 + t * 0.5))
+        }
+        const n = hash2(x * 1.1, y * 0.9)
+        if (isBloom) {
+          d[i] = Math.floor(bloom[0] * (0.85 + n * 0.2))
+          d[i + 1] = Math.floor(bloom[1] * (0.85 + n * 0.2))
+          d[i + 2] = Math.floor(bloom[2] * (0.85 + n * 0.2))
+        } else {
+          d[i] = Math.floor(40 + t * 30 + n * 12)
+          d[i + 1] = Math.floor(95 + t * 50 + n * 16)
+          d[i + 2] = Math.floor(35 + t * 20)
+        }
+        d[i + 3] = a
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.wrapS = THREE.ClampToEdgeWrapping
+  tex.wrapT = THREE.ClampToEdgeWrapping
+  return tex
+}
+
+/**
+ * Hideable crop clump (barley ≈ straw; flower ≈ meadow).
+ * Unit height 1m — scale instances to ~2m+ so tanks can sit in cover.
+ */
+export function createCropTuft(kind: CropKind, flowerSeed = 0): GrassTuft {
+  if (kind === 'barley') {
+    return buildCropTuft({
+      cards: 5,
+      width: 0.38,
+      tipNarrow: 0.18,
+      map: createBarleyBladeMap(),
+      color: 0xf0e0a8,
+      alphaTest: 0.34,
+    })
+  }
+  return buildCropTuft({
+    cards: 5,
+    width: 0.42,
+    tipNarrow: 0.35,
+    map: createFlowerBladeMap(flowerSeed),
+    color: 0xffffff,
+    alphaTest: 0.32,
+  })
 }
