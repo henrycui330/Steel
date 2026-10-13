@@ -32,6 +32,7 @@ Britain:
  Spitfire Mk.IIa
  F-35B Lightning II
  Tornado GR4
+ AH Mk.1 Apache
 Soviet:
  T-34-76
  T-34-85

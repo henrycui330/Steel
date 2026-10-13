@@ -135,15 +135,38 @@ export type FlightOptions = {
   ceiling?: number
   /** Su-27: allow Pugachev's Cobra on input.cobra (T). */
   canCobra?: boolean
+  /**
+   * Helicopter — same stick/bank-turn arcade loop as fixed-wing, but lower
+   * speeds, weak stall, and throttle as collective (hover around ~0.45).
+   */
+  helicopter?: boolean
   /** Fired once, when the aircraft touches terrain. */
   onCrash?: (info: { speed: number; agl: number }) => void
 }
 
 export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
   const { root, heightAt, bounds, ceiling, onCrash, canCobra } = opts
+  const heli = !!opts.helicopter
 
-  let throttle = THREE.MathUtils.clamp(opts.throttle ?? 0.55, 0, 1)
-  let speed = THREE.MathUtils.lerp(IDLE_SPEED, MAX_SPEED, throttle)
+  const idleSpeed = heli ? 8 : IDLE_SPEED
+  const maxSpeed = heli ? 72 : MAX_SPEED
+  const stallSpeed = heli ? 12 : STALL_SPEED
+  const diveGain = heli ? 12 : DIVE_SPEED_GAIN
+  const gravity = heli ? 18 : GRAVITY
+  const pitchRate = heli ? 1.25 : PITCH_RATE
+  const rollRate = heli ? 1.7 : ROLL_RATE
+  const rudderRate = heli ? 0.85 : RUDDER_RATE
+  const turnK = heli ? 0.72 : TURN_K
+  /** Collective: throttle above hover climbs, below sinks (m/s² scale). */
+  const collectiveK = heli ? 38 : 0
+  const hoverThrottle = 0.45
+
+  let throttle = THREE.MathUtils.clamp(
+    opts.throttle ?? (heli ? hoverThrottle : 0.55),
+    0,
+    1,
+  )
+  let speed = THREE.MathUtils.lerp(idleSpeed, maxSpeed, throttle)
   /** Vertical rate owned by the flight model (negative = sinking). */
   let sinkRate = 0
   let stalled = false
@@ -448,29 +471,31 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
 
     // ——— Airspeed: throttle target, then gravity along the nose ———
     const target =
-      THREE.MathUtils.lerp(IDLE_SPEED, MAX_SPEED, throttle) *
+      THREE.MathUtils.lerp(idleSpeed, maxSpeed, throttle) *
       (1 - EDGE_SPEED_BLEED * edge)
     speed = THREE.MathUtils.lerp(speed, target, 1 - Math.exp(-(SPEED_ACCEL / 40) * dt))
-    speed -= nose.y * DIVE_SPEED_GAIN * dt
-    speed = THREE.MathUtils.clamp(speed, 0, MAX_SPEED * 1.35)
+    speed -= nose.y * diveGain * dt
+    speed = THREE.MathUtils.clamp(speed, 0, maxSpeed * 1.35)
 
-    // Control authority fades with airspeed — a stalled wing barely answers.
-    const authority = THREE.MathUtils.clamp(speed / STALL_SPEED, 0.15, 1)
-    stalled = speed < STALL_SPEED
+    // Control authority fades with airspeed — helis keep more authority at hover.
+    const authority = heli
+      ? THREE.MathUtils.clamp(0.55 + (speed / Math.max(stallSpeed, 1)) * 0.45, 0.55, 1)
+      : THREE.MathUtils.clamp(speed / stallSpeed, 0.15, 1)
+    stalled = !heli && speed < stallSpeed
 
     // ——— Stick ———
     // Nose up is a NEGATIVE rotation about body X. Roll right is a POSITIVE
     // rotation about Z: it drops the −X wing, which is the right one.
-    rotateBody(AXIS_X, -input.pitch * PITCH_RATE * authority * dt)
-    rotateBody(AXIS_Z, input.roll * ROLL_RATE * authority * dt)
-    rotateBody(AXIS_Y, -input.rudder * RUDDER_RATE * authority * dt)
+    rotateBody(AXIS_X, -input.pitch * pitchRate * authority * dt)
+    rotateBody(AXIS_Z, input.roll * rollRate * authority * dt)
+    rotateBody(AXIS_Y, -input.rudder * rudderRate * authority * dt)
 
     // ——— Bank-to-turn ———
     readAxes()
     const bank = bankAngle()
     // Right wing down (positive bank) must turn right, which is a negative
     // rotation about world up.
-    const turn = -TURN_K * Math.sin(bank) * authority
+    const turn = -turnK * Math.sin(bank) * authority
     if (turn) {
       worldSpin.setFromAxisAngle(WORLD_UP, turn * dt)
       root.quaternion.premultiply(worldSpin)
@@ -494,12 +519,17 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       sinkRate *= Math.pow(0.02, dt)
     }
 
-    // ——— Lift vs gravity (soft stall) ———
+    // ——— Lift vs gravity (soft stall) + heli collective ———
     readAxes()
-    const lift = THREE.MathUtils.clamp(speed / STALL_SPEED, 0, 1)
-    sinkRate -= GRAVITY * (1 - lift) * dt
+    const lift = heli
+      ? THREE.MathUtils.clamp(0.35 + throttle * 0.75, 0, 1.15)
+      : THREE.MathUtils.clamp(speed / stallSpeed, 0, 1)
+    sinkRate -= gravity * (1 - Math.min(1, lift)) * dt
+    if (heli && collectiveK > 0) {
+      sinkRate += (throttle - hoverThrottle) * collectiveK * dt
+    }
     // Flying wing washes the sink out; also keeps recovery from feeling sticky.
-    sinkRate *= Math.pow(lift > 0.999 ? 0.05 : 0.6, dt)
+    sinkRate *= Math.pow(lift > 0.999 ? 0.05 : heli ? 0.45 : 0.6, dt)
 
     // ——— Integrate ———
     velocity.copy(nose).multiplyScalar(speed)
@@ -553,7 +583,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       readAxes()
       return nose.clone()
     },
-    reset(pos, yaw, throttle01 = 0.55) {
+    reset(pos, yaw, throttle01 = heli ? hoverThrottle : 0.55) {
       crashed = false
       flameout = false
       flameoutHard = false
@@ -564,7 +594,7 @@ export function createAircraftFlight(opts: FlightOptions): AircraftFlight {
       nearEdge = false
       sinkRate = 0
       throttle = THREE.MathUtils.clamp(throttle01, 0, 1)
-      speed = THREE.MathUtils.lerp(IDLE_SPEED, MAX_SPEED, throttle)
+      speed = THREE.MathUtils.lerp(idleSpeed, maxSpeed, throttle)
       root.position.copy(pos)
       root.quaternion.setFromAxisAngle(WORLD_UP, yaw)
       root.updateMatrixWorld(true)

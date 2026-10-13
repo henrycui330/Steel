@@ -145,6 +145,23 @@ export function createGrassTexture(repeat = 48): THREE.CanvasTexture {
  * Packed rural dirt path — warm earth, dual tire beds, pebbles, grass flecks.
  * Meant for forest lanes (not highway asphalt).
  */
+/**
+ * Periodic noise along V so RepeatWrapping doesn't cut a hard stripe every tile.
+ * Maps y∈[0,period) onto a circle in the noise domain.
+ */
+function fbmTileY(x: number, y: number, period: number, octaves: number): number {
+  const ang = (y / period) * Math.PI * 2
+  const r = period * 0.18
+  const a = fbm(x, Math.cos(ang) * r, octaves)
+  const b = fbm(x + 19.7, Math.sin(ang) * r, octaves)
+  return a * 0.55 + b * 0.45
+}
+
+function hash2TileY(x: number, y: number, period: number): number {
+  const ang = (y / period) * Math.PI * 2
+  return hash2(x, Math.cos(ang) * 47.3 + Math.sin(ang) * 31.1)
+}
+
 export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTexture {
   const tex = canvasTexture(256, (ctx, size) => {
     const img = ctx.createImageData(size, size)
@@ -156,9 +173,10 @@ export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTex
     const rutW = size * 0.07
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        const n = fbm(x * 0.1, y * 0.1, 4)
-        const grit = hash2(x * 2.2, y * 1.6)
-        const patch = fbm(x * 0.035 + 4, y * 0.032 - 2, 3)
+        // Toroidal along V (path length) — kills the 16 m seam stripes
+        const n = fbmTileY(x * 0.1, y, size, 4)
+        const grit = hash2TileY(x * 2.2, y * 1.6, size)
+        const patch = fbmTileY(x * 0.035 + 4, y + size * 0.3, size, 3)
         const t = n * 0.5 + grit * 0.3 + patch * 0.2
 
         // Base — dry packed clay / dirt
@@ -170,14 +188,14 @@ export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTex
         const dRut = Math.min(Math.abs(x - rutA), Math.abs(x - rutB))
         if (dRut < rutW) {
           const k = 1 - dRut / rutW
-          const mud = k * k * (0.55 + fbm(x * 0.2, y * 0.15, 2) * 0.35)
+          const mud = k * k * (0.55 + fbmTileY(x * 0.2, y * 0.15, size, 2) * 0.35)
           r = r * (1 - 0.42 * mud) + 48 * mud
           g = g * (1 - 0.4 * mud) + 38 * mud
           b = b * (1 - 0.35 * mud) + 28 * mud
         }
 
         // Pebbles / aggregate
-        if (hash2(x * 3.3, y * 2.9) > 0.93) {
+        if (hash2TileY(x * 3.3, y * 2.9, size) > 0.93) {
           r += 35
           g += 28
           b += 18
@@ -185,15 +203,15 @@ export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTex
 
         // Sparse grass flecks near edges (path shoulder bleed)
         const edge = Math.abs(x - mid) / mid
-        if (edge > 0.55 && hash2(x * 0.8, y * 1.4) > 0.72) {
+        if (edge > 0.55 && hash2TileY(x * 0.8, y * 1.4, size) > 0.72) {
           const gk = (edge - 0.55) / 0.45
           r = r * (1 - 0.45 * gk) + 58 * gk
           g = g * (1 - 0.15 * gk) + 102 * gk
           b = b * (1 - 0.5 * gk) + 36 * gk
         }
 
-        // Soft longitudinal scrape / washboard
-        const wash = Math.abs(fbm(x * 0.04, y * 0.35, 2) - 0.5)
+        // Soft longitudinal scrape / washboard (periodic in V)
+        const wash = Math.abs(fbmTileY(x * 0.04, y * 0.35, size, 2) - 0.5)
         if (wash < 0.04) {
           const k = 1 - wash / 0.04
           r *= 1 - 0.12 * k
@@ -205,8 +223,8 @@ export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTex
         let a = 255
         const fade = 0.2 // outer 20% of width each side
         if (edge > 1 - fade) {
-          const t = (edge - (1 - fade)) / fade
-          const s = t * t * (3 - 2 * t)
+          const ft = (edge - (1 - fade)) / fade
+          const s = ft * ft * (3 - 2 * ft)
           a = Math.floor(255 * (1 - s))
         }
 
@@ -220,6 +238,7 @@ export function createDirtPathTexture(repeatU = 1, repeatV = 1): THREE.CanvasTex
     ctx.putImageData(img, 0, 0)
   }, 1)
   tex.repeat.set(repeatU, repeatV)
+  tex.anisotropy = 2
   return tex
 }
 
@@ -287,6 +306,134 @@ export function createAsphaltTexture(repeatU = 1, repeatV = 1): THREE.CanvasText
 }
 
 /**
+ * Weathered bridge concrete — aggregate, formwork seams, stains, hairline cracks.
+ */
+export function createBridgeConcreteTexture(
+  repeatU = 1,
+  repeatV = 1,
+): THREE.CanvasTexture {
+  const tex = canvasTexture(256, (ctx, size) => {
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const n = fbm(x * 0.09, y * 0.09, 4)
+        const grit = hash2(x * 2.1, y * 1.7)
+        const patch = fbm(x * 0.028 + 3, y * 0.031 - 1, 3)
+        const t = n * 0.5 + grit * 0.28 + patch * 0.22
+
+        // Cool grey concrete
+        let r = 118 + t * 38 + grit * 10
+        let g = 116 + t * 34
+        let b = 108 + t * 28 + (1 - grit) * 6
+
+        // Aggregate pebbles
+        if (hash2(x * 3.4, y * 2.8) > 0.91) {
+          r += 22
+          g += 18
+          b += 12
+        } else if (hash2(x * 4.1, y * 3.6) > 0.94) {
+          r *= 0.78
+          g *= 0.76
+          b *= 0.74
+        }
+
+        // Formwork / expansion joints (grid)
+        const seamU = Math.abs(((x / size) * 4) % 1 - 0.5)
+        const seamV = Math.abs(((y / size) * 3) % 1 - 0.5)
+        if (seamU < 0.018 || seamV < 0.016) {
+          const k = seamU < seamV ? 1 - seamU / 0.018 : 1 - seamV / 0.016
+          r *= 1 - 0.28 * k
+          g *= 1 - 0.26 * k
+          b *= 1 - 0.22 * k
+        }
+
+        // Water / rust stains
+        const stain = fbm(x * 0.06 - 2, y * 0.11 + 4, 3)
+        if (stain > 0.68) {
+          const k = (stain - 0.68) / 0.32
+          r = r * (1 - 0.25 * k) + 92 * k
+          g = g * (1 - 0.35 * k) + 78 * k
+          b = b * (1 - 0.4 * k) + 58 * k
+        }
+
+        // Hairline cracks
+        const crack = Math.abs(fbm(x * 0.2, y * 0.2, 2) - 0.5)
+        if (crack < 0.024) {
+          const k = 1 - crack / 0.024
+          r *= 1 - 0.4 * k
+          g *= 1 - 0.4 * k
+          b *= 1 - 0.35 * k
+        }
+
+        const i = (y * size + x) * 4
+        d[i] = Math.floor(Math.min(255, Math.max(0, r)))
+        d[i + 1] = Math.floor(Math.min(255, Math.max(0, g)))
+        d[i + 2] = Math.floor(Math.min(255, Math.max(0, b)))
+        d[i + 3] = 255
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.repeat.set(repeatU, repeatV)
+  return tex
+}
+
+/**
+ * Painted / rusted bridge steel for rails — rivet flecks + streaking.
+ */
+export function createBridgeSteelTexture(
+  repeatU = 1,
+  repeatV = 1,
+): THREE.CanvasTexture {
+  const tex = canvasTexture(256, (ctx, size) => {
+    const img = ctx.createImageData(size, size)
+    const d = img.data
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const n = fbm(x * 0.12, y * 0.1, 3)
+        const grit = hash2(x * 1.8, y * 2.2)
+        let r = 62 + n * 28 + grit * 12
+        let g = 66 + n * 24
+        let b = 58 + n * 18
+
+        // Vertical rust streaks
+        const streak = fbm(x * 0.35, y * 0.04 + 2, 2)
+        if (streak > 0.58) {
+          const k = (streak - 0.58) / 0.42
+          r = r * (1 - 0.2 * k) + 118 * k
+          g = g * (1 - 0.45 * k) + 62 * k
+          b = b * (1 - 0.55 * k) + 32 * k
+        }
+
+        // Rivet / bolt heads
+        if (hash2(x * 0.55, y * 0.55) > 0.97) {
+          r += 40
+          g += 36
+          b += 28
+        }
+
+        // Dark paint chips
+        if (hash2(x * 2.7, y * 3.1) > 0.93) {
+          r *= 0.55
+          g *= 0.55
+          b *= 0.52
+        }
+
+        const i = (y * size + x) * 4
+        d[i] = Math.floor(Math.min(255, Math.max(0, r)))
+        d[i + 1] = Math.floor(Math.min(255, Math.max(0, g)))
+        d[i + 2] = Math.floor(Math.min(255, Math.max(0, b)))
+        d[i + 3] = 255
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }, 1)
+  tex.repeat.set(repeatU, repeatV)
+  return tex
+}
+
+/**
  * Dashed paint for road centerline. UV: U across stripe, V along path (dist/16).
  * One texture cycle ≈ 16 m → ~7 m dash / ~9 m gap.
  */
@@ -335,9 +482,9 @@ export function createGravelShoulderTexture(
     const mid = (size - 1) * 0.5
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        const n = fbm(x * 0.09, y * 0.09, 4)
-        const grit = hash2(x * 2.1, y * 1.7)
-        const pebble = hash2(x * 0.4 + 3, y * 0.55)
+        const n = fbmTileY(x * 0.09, y, size, 4)
+        const grit = hash2TileY(x * 2.1, y * 1.7, size)
+        const pebble = hash2TileY(x * 0.4 + 3, y * 0.55, size)
         const t = n * 0.5 + grit * 0.35 + pebble * 0.15
         let r = Math.floor(78 + t * 48 + grit * 12)
         let g = Math.floor(68 + t * 40 + pebble * 10)
@@ -375,6 +522,7 @@ export function createGravelShoulderTexture(
     ctx.putImageData(img, 0, 0)
   }, 1)
   tex.repeat.set(repeatU, repeatV)
+  tex.anisotropy = 2
   return tex
 }
 
@@ -730,38 +878,227 @@ export function createMeadowGrassFloorMaps(
 }
 
 /**
- * World-space tint (not UV) — multiplies the floor albedo so tiling doesn't
- * march across the map as an obvious stamp. Call per terrain vertex.
+ * World-space biome tint — grass / packed dirt / rock patches.
+ * Optional `relief` (m) pushes hilltops toward rock. Paths are separate meshes;
+ * callers still apply road dirt bleed under shoulders.
  */
 export function sampleForestGroundTint(
   x: number,
   z: number,
   out: THREE.Color,
+  relief = 0,
 ): THREE.Color {
-  const macro = fbm(x * 0.0038 + 1.2, z * 0.0035 - 0.7, 4)
-  const lush = fbm(x * 0.006 + 4, z * 0.0055, 3)
-  const dry = fbm(x * 0.0075 - 2, z * 0.007 + 5, 3)
-  // Green meadow multiply (keeps grass floor reading as grass)
-  let r = 0.88 + macro * 0.1
-  let g = 0.96 + macro * 0.08
-  let b = 0.78 + macro * 0.08
-  if (lush > 0.55) {
-    const m = (lush - 0.55) / 0.45
-    r *= 1 - m * 0.08
-    g *= 1 + m * 0.06
-    b *= 1 - m * 0.04
-  }
-  if (dry > 0.62) {
-    const w = (dry - 0.62) / 0.38
-    r *= 1 + w * 0.08
-    g *= 1 - w * 0.06
-    b *= 1 - w * 0.1
-  }
+  const macro = fbm(x * 0.0028 + 1.2, z * 0.0026 - 0.7, 4)
+  const grassN = fbm(x * 0.0045 + 4, z * 0.0042, 4)
+  const dirtN = fbm(x * 0.0055 - 2.4, z * 0.0051 + 3.1, 4)
+  const rockN = fbm(x * 0.0068 + 8.2, z * 0.0062 - 5.5, 3)
+  const speck = fbm(x * 0.018, z * 0.017, 2)
+
+  // Soft weights (not hard cuts) so patches blend at edges
+  let wGrass = 0.35 + grassN * 0.55
+  let wDirt = 0.15 + dirtN * 0.5
+  let wRock = 0.05 + rockN * 0.35
+  // Hills / cliffs → rock scree
+  if (relief > 4) wRock += THREE.MathUtils.clamp((relief - 4) / 14, 0, 1) * 0.85
+  if (relief > 10) wDirt *= 0.55
+  // Flats favor grass; dry noise favors dirt
+  if (macro < 0.42) wGrass += 0.25
+  if (dirtN > 0.58 && rockN < 0.55) wDirt += 0.35
+  if (speck > 0.72 && relief > 2) wRock += 0.2
+
+  const sum = wGrass + wDirt + wRock || 1
+  wGrass /= sum
+  wDirt /= sum
+  wRock /= sum
+
+  // Darker temperate grass multiply; dirt/rock stay nearer stock brightness
+  const gR = 0.42 + grassN * 0.05
+  const gG = 0.62 + grassN * 0.08
+  const gB = 0.36 + grassN * 0.04
+
+  const dR = 1.05 + dirtN * 0.1
+  const dG = 0.78 + dirtN * 0.06
+  const dB = 0.48 + dirtN * 0.05
+
+  const rR = 0.78 + rockN * 0.12
+  const rG = 0.76 + rockN * 0.1
+  const rB = 0.74 + rockN * 0.1
+
+  const r = gR * wGrass + dR * wDirt + rR * wRock
+  const g = gG * wGrass + dG * wDirt + rG * wRock
+  const b = gB * wGrass + dB * wDirt + rB * wRock
+
   return out.setRGB(
-    THREE.MathUtils.clamp(r, 0.55, 1.15),
-    THREE.MathUtils.clamp(g, 0.55, 1.2),
-    THREE.MathUtils.clamp(b, 0.5, 1.1),
+    THREE.MathUtils.clamp(r, 0.32, 1.2),
+    THREE.MathUtils.clamp(g, 0.35, 1.2),
+    THREE.MathUtils.clamp(b, 0.28, 1.15),
   )
+}
+
+/**
+ * Rural mixed ground — grass carpet + packed dirt patches + rock scree
+ * in one tiling pack (albedo / normal / roughness). Pair with
+ * `sampleForestGroundTint` for world-scale biome blobs.
+ */
+export function createRuralMixedFloorMaps(
+  repeatU = 64,
+  repeatV: number = repeatU,
+): ForestFloorMaps {
+  const size = 256
+  const heights = new Float32Array(size * size)
+  const rough = new Float32Array(size * size)
+
+  const albedoCanvas = document.createElement('canvas')
+  albedoCanvas.width = size
+  albedoCanvas.height = size
+  const aCtx = albedoCanvas.getContext('2d')
+  if (!aCtx) throw new Error('[Steel] 2D canvas unavailable for mixed floor')
+  const aImg = aCtx.createImageData(size, size)
+  const a = aImg.data
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const macro = fbm(x * 0.03, y * 0.028, 4)
+      const grassMask = fbm(x * 0.055 + 2, y * 0.05 - 1, 3)
+      const dirtMask = fbm(x * 0.06 - 4, y * 0.058 + 3, 3)
+      const rockMask = fbm(x * 0.07 + 9, y * 0.065 - 6, 3)
+      const blade =
+        hash2(x * 2.2, Math.floor(y * 0.5) * 1.6) * 0.55 +
+        hash2(x * 0.85 + y * 0.12, y * 2.8) * 0.45
+      const grit = hash2(x * 1.4, y * 1.1)
+      const pebble = hash2(x * 3.1, y * 2.7)
+
+      let wG = 0.4 + grassMask * 0.5
+      let wD = 0.2 + dirtMask * 0.45
+      let wR = 0.08 + rockMask * 0.4
+      if (macro > 0.6) wR += 0.25
+      if (macro < 0.35) wG += 0.2
+      const s = wG + wD + wR || 1
+      wG /= s
+      wD /= s
+      wR /= s
+
+      // Grass — darker temperate floor
+      let gR = 28 + macro * 18 + blade * 10 + grit * 5
+      let gG = 58 + macro * 30 + blade * 16 + grassMask * 12
+      let gB = 24 + macro * 10 + blade * 5
+      // Dirt
+      let dR = 118 + grit * 28 + dirtMask * 22
+      let dG = 82 + grit * 18 + dirtMask * 12
+      let dB = 48 + grit * 10
+      // Rock
+      let rR = 98 + pebble * 40 + rockMask * 25 + grit * 12
+      let rG = 96 + pebble * 36 + rockMask * 22
+      let rB = 92 + pebble * 32 + rockMask * 18
+      if (pebble > 0.9) {
+        rR += 28
+        rG += 26
+        rB += 24
+      }
+
+      let r = gR * wG + dR * wD + rR * wR
+      let g = gG * wG + dG * wD + rG * wR
+      let b = gB * wG + dB * wD + rB * wR
+
+      let h =
+        wG * (0.35 + blade * 0.25 + grassMask * 0.15) +
+        wD * (0.28 + grit * 0.2) +
+        wR * (0.45 + pebble * 0.35 + rockMask * 0.2)
+
+      const idx = y * size + x
+      heights[idx] = h
+      rough[idx] = THREE.MathUtils.clamp(
+        wG * 0.82 + wD * 0.88 + wR * 0.72 + grit * 0.08,
+        0.45,
+        0.98,
+      )
+
+      const i = idx * 4
+      a[i] = Math.min(255, Math.floor(r))
+      a[i + 1] = Math.min(255, Math.floor(g))
+      a[i + 2] = Math.min(255, Math.floor(b))
+      a[i + 3] = 255
+    }
+  }
+  aCtx.putImageData(aImg, 0, 0)
+
+  const map = new THREE.CanvasTexture(albedoCanvas)
+  map.wrapS = THREE.RepeatWrapping
+  map.wrapT = THREE.RepeatWrapping
+  map.repeat.set(repeatU, repeatV * 1.06)
+  map.anisotropy = 8
+  map.colorSpace = THREE.SRGBColorSpace
+  map.needsUpdate = true
+
+  const nCanvas = document.createElement('canvas')
+  nCanvas.width = size
+  nCanvas.height = size
+  const nCtx = nCanvas.getContext('2d')
+  if (!nCtx) throw new Error('[Steel] 2D canvas unavailable for mixed normals')
+  const nImg = nCtx.createImageData(size, size)
+  const nd = nImg.data
+  const strength = 2.6
+  const sampleH = (sx: number, sy: number): number => {
+    const xx = ((sx % size) + size) % size
+    const yy = ((sy % size) + size) % size
+    return heights[yy * size + xx]!
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (sampleH(x - 1, y) - sampleH(x + 1, y)) * strength
+      const dy = (sampleH(x, y + 1) - sampleH(x, y - 1)) * strength
+      let nx = dx
+      let ny = dy
+      let nz = 1
+      const len = Math.hypot(nx, ny, nz) || 1
+      nx /= len
+      ny /= len
+      nz /= len
+      const i = (y * size + x) * 4
+      nd[i] = Math.floor((nx * 0.5 + 0.5) * 255)
+      nd[i + 1] = Math.floor((ny * 0.5 + 0.5) * 255)
+      nd[i + 2] = Math.floor((nz * 0.5 + 0.5) * 255)
+      nd[i + 3] = 255
+    }
+  }
+  nCtx.putImageData(nImg, 0, 0)
+  const normalMap = new THREE.CanvasTexture(nCanvas)
+  normalMap.wrapS = THREE.RepeatWrapping
+  normalMap.wrapT = THREE.RepeatWrapping
+  normalMap.repeat.set(repeatU * 1.12, repeatV * 0.95)
+  normalMap.offset.set(0.19, 0.33)
+  normalMap.anisotropy = 8
+  normalMap.colorSpace = THREE.NoColorSpace
+  normalMap.needsUpdate = true
+
+  const rCanvas = document.createElement('canvas')
+  rCanvas.width = size
+  rCanvas.height = size
+  const rCtx = rCanvas.getContext('2d')
+  if (!rCtx) throw new Error('[Steel] 2D canvas unavailable for mixed roughness')
+  const rImg = rCtx.createImageData(size, size)
+  const rd = rImg.data
+  for (let i = 0; i < size * size; i++) {
+    const v = Math.floor(rough[i]! * 255)
+    const o = i * 4
+    rd[o] = v
+    rd[o + 1] = v
+    rd[o + 2] = v
+    rd[o + 3] = 255
+  }
+  rCtx.putImageData(rImg, 0, 0)
+  const roughnessMap = new THREE.CanvasTexture(rCanvas)
+  roughnessMap.wrapS = THREE.RepeatWrapping
+  roughnessMap.wrapT = THREE.RepeatWrapping
+  roughnessMap.repeat.set(repeatU, repeatV * 1.06)
+  roughnessMap.anisotropy = 4
+  roughnessMap.colorSpace = THREE.NoColorSpace
+  roughnessMap.needsUpdate = true
+
+  console.info(
+    `[Steel] Rural mixed floor — grass+dirt+rock · ${size}² · repeat ${repeatU.toFixed(0)}×${repeatV.toFixed(0)}`,
+  )
+  return { map, normalMap, roughnessMap }
 }
 
 /**

@@ -23,6 +23,7 @@ import { spawnStaticPz3Dummy } from './dummy'
 import { createDriveController, SPEED_FEEL } from './drive'
 import { createGermanCrewVoice } from './germanCrew'
 import { createSovietCrewVoice } from './sovietCrew'
+import { createFriendlyMarkers } from './friendlyMarkers'
 import { createFireSystem } from './fire'
 import { defaultAmmoRacks } from './ammo'
 import { createHud } from './hud'
@@ -148,12 +149,16 @@ const camera = new THREE.PerspectiveCamera(
 )
 camera.position.set(0, 3, 0)
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  logarithmicDepthBuffer: true,
+  powerPreference: 'high-performance',
+})
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.setClearColor(PALETTE.sky, 1)
 renderer.shadowMap.enabled = true
-renderer.shadowMap.type = THREE.PCFShadowMap
+renderer.shadowMap.type = THREE.BasicShadowMap
 document.body.appendChild(renderer.domElement)
 
 // Official Three.js DevTools observe hook (MCP bridge)
@@ -200,31 +205,55 @@ sun.shadow.camera.top = 100
 sun.shadow.camera.bottom = -100
 scene.add(sun)
 
-/** Widen sun shadow frustum for large maps. */
+/** Local shadow volume that follows the player (map-wide frustum was a FPS killer). */
+const SHADOW_FOLLOW_EXTENT = 110
+const _sunDir = new THREE.Vector3(0.55, 0.85, 0.35).normalize()
+let shadowFollowPlayer = false
+
+/** Tight sun shadow frustum for large maps — updated each frame around the focus. */
 function configureShadowsForMap(sizeX: number, sizeZ: number): void {
   const arenaSize = Math.max(sizeX, sizeZ)
-  camera.far = Math.max(4000, arenaSize * 2.2, AIR_CEILING + arenaSize * 0.6)
+  camera.far = Math.max(2800, arenaSize * 1.35, AIR_CEILING + 400)
   renderer.shadowMap.enabled = true
-  sun.shadow.mapSize.set(2048, 2048)
-  const halfX = Math.max(120, sizeX * 0.55)
-  const halfZ = Math.max(120, sizeZ * 0.55)
-  const half = Math.max(halfX, halfZ)
-  sun.position.set(halfX * 0.55, half * 0.75, halfZ * 0.35)
-  sun.shadow.camera.far = half * 2.4
-  sun.shadow.camera.left = -halfX
-  sun.shadow.camera.right = halfX
-  sun.shadow.camera.top = halfZ
-  sun.shadow.camera.bottom = -halfZ
+  renderer.shadowMap.type = THREE.BasicShadowMap
+  sun.shadow.mapSize.set(512, 512)
+  sun.castShadow = true
+  shadowFollowPlayer = arenaSize >= 1200
+  const e = SHADOW_FOLLOW_EXTENT
+  sun.shadow.camera.near = 1
+  sun.shadow.camera.far = 300
+  sun.shadow.camera.left = -e
+  sun.shadow.camera.right = e
+  sun.shadow.camera.top = e
+  sun.shadow.camera.bottom = -e
   sun.shadow.camera.updateProjectionMatrix()
+  if (!sun.target.parent) scene.add(sun.target)
   if (scene.fog instanceof THREE.Fog) {
     scene.fog.near = Math.min(80, arenaSize * 0.03)
     scene.fog.far = Math.max(900, arenaSize * 0.55)
   } else if (scene.fog instanceof THREE.FogExp2 && scene.fog.density <= 0.0035) {
-    const vis = Math.max(1400, arenaSize * 0.42)
-    scene.fog.density = Math.min(scene.fog.density, 1.15 / vis)
+    const vis = Math.max(1000, arenaSize * 0.36)
+    scene.fog.density = Math.min(scene.fog.density, 1.2 / vis)
     console.info(`[Steel] Forest haze dens=${scene.fog.density.toFixed(5)} vis~${vis.toFixed(0)}m`)
   }
+  // Slightly tighter far plane — fog already hides the rim
+  camera.far = Math.min(camera.far, Math.max(2200, arenaSize * 1.05, AIR_CEILING + 350))
   camera.updateProjectionMatrix()
+  console.info(
+    `[Steel] Shadows — local ${e}m follow · map ${sun.shadow.mapSize.x} · BasicShadowMap · dpr≤1.25`,
+  )
+}
+
+function updateSunShadowFocus(cx: number, cy: number, cz: number): void {
+  if (!shadowFollowPlayer) return
+  sun.target.position.set(cx, cy, cz)
+  sun.target.updateMatrixWorld()
+  const dist = 160
+  sun.position.set(
+    cx + _sunDir.x * dist,
+    cy + _sunDir.y * dist,
+    cz + _sunDir.z * dist,
+  )
 }
 
 bindDriveInput()
@@ -281,7 +310,19 @@ async function startVictoryStage(
 window.addEventListener('resize', onResize)
 
 async function startMission(sel: MenuSelection): Promise<void> {
-  const { mapId, tankId, team, spawnIndex, redAi, blueAi, timeOfDay, season, weather, gameMode, mp } =
+  const {
+    mapId,
+    tankId,
+    team,
+    spawnIndex: rawSpawnIndex,
+    redAi,
+    blueAi,
+    timeOfDay,
+    season,
+    weather,
+    gameMode,
+    mp,
+  } =
     sel
   const isKoth = gameMode === 'koth'
   const isFrontline = gameMode === 'frontline'
@@ -392,7 +433,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
   let mapGroundY = 0
   let heightAt: ((x: number, z: number) => number) | undefined
   let mapPaths: Array<{ points: Array<{ x: number; z: number }> }> | undefined
+  let mapRivers: Array<{ points: Array<{ x: number; z: number }> }> | undefined
+  let mapUpdateLod: ((x: number, z: number, rangeMul?: number) => void) | undefined
   let mapSpawns = mapOpt.spawns
+  const spawnIndex = Math.max(
+    0,
+    Math.min(rawSpawnIndex, mapSpawns[team].length - 1),
+  )
   let playerHandleEarly: Awaited<ReturnType<typeof loadPlayerTank>> | null = null
   let remoteHandlesEarly: Awaited<ReturnType<typeof loadTankChassis>>[] = []
   let airHandleEarly: AircraftHandle | null = null
@@ -418,6 +465,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
       mapGroundY = v.groundY
       heightAt = v.heightAt
       mapPaths = v.paths
+      mapRivers = v.rivers
+      mapUpdateLod = v.updateLod
       if (v.spawns) mapSpawns = v.spawns
     } else {
       console.warn('[Steel] Map load failed', mapRes.reason)
@@ -520,17 +569,22 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: air.root,
       heightAt: sampleY,
       // Tutorial starts slow/low so throttle + climb steps aren't already done.
-      throttle: isAirTutorial ? 0.28 : 0.55,
+      // Apache hover trim sits near 0.45 collective.
+      throttle: isAirTutorial ? 0.28 : option.helicopter ? 0.45 : 0.55,
       // Share the tanks' playable box so air and ground agree on the arena,
       // pulled in a little so the aircraft turns before clipping a wall.
       bounds: { x: playable.x - AIR_WALL_INSET, z: playable.z - AIR_WALL_INSET },
       ceiling: mapGroundY + AIR_CEILING,
       canCobra: tankId === 'su27',
+      helicopter: !!option.helicopter,
       onCrash: ({ speed }) => {
         bailOut('crash', speed)
       },
     })
     if (tankId === 'su27') console.info('[Steel] Su-27 armed — press T for Cobra')
+    if (option.helicopter) {
+      console.info('[Steel] Apache — plane-like flight · throttle = collective (hover ~45%)')
+    }
 
     function bailOut(reason: 'crash' | 'eject', speed: number): void {
       if (airCrashed || airEnded) return
@@ -678,19 +732,23 @@ async function startMission(sel: MenuSelection): Promise<void> {
             }))
           : undefined,
       paths: mapPaths,
+      rivers: mapRivers,
       spawns: [
         ...mapOpt.spawns.red.map((p) => ({ x: p.x, z: p.z, team: 'red' as const })),
         ...mapOpt.spawns.blue.map((p) => ({ x: p.x, z: p.z, team: 'blue' as const })),
       ],
       hill: isKoth ? { x: KOTH_CENTER.x, z: KOTH_CENTER.z, radius: KOTH_RADIUS } : undefined,
     })
-    // L1/L3 lock-on: F-16 radar + real AAMs.
-    const airLock = option.jet ? createLockOn() : null
-    const airLockHud = option.jet ? createLockOnHud() : null
+    // Lock-on + seekers: jets (AAM) and airframes with samMissiles (e.g. Apache AGM).
+    const airHasSeekers = !!option.jet || !!option.samMissiles
+    const airLock = airHasSeekers ? createLockOn() : null
+    const airLockHud = airHasSeekers ? createLockOnHud() : null
     airLockHud?.setVisible(false)
     let airMissilePhase: LockPhase = 'idle'
     const _lockOrigin = new THREE.Vector3()
     const _lockLook = new THREE.Vector3()
+    const airMslLabel = option.samLabel ?? (option.jet ? 'AAM' : 'MSL')
+    let airMslRail = 0
 
     const countermeasures = createCountermeasures({
       scene,
@@ -707,9 +765,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
         ? createSamMissiles({
             scene,
             getLaunchOrigin: (out) => {
-              // Rail off the wing root — slightly below so it clears the belly.
+              // Alternate stub/wing rails — heli inboard, jet further out.
               air.root.getWorldPosition(out)
-              _lockLook.set(-1.8, -0.35, 0.8).applyQuaternion(air.root.quaternion)
+              const side = airMslRail % 2 === 0 ? -1 : 1
+              airMslRail++
+              const lat = option.helicopter ? 2.05 : 1.8
+              const y = option.helicopter ? -0.55 : -0.35
+              const z = option.helicopter ? 0.35 : 0.8
+              _lockLook.set(side * lat, y, z).applyQuaternion(air.root.quaternion)
               out.add(_lockLook)
             },
             getLaunchDir: (out) => {
@@ -723,20 +786,28 @@ async function startMission(sel: MenuSelection): Promise<void> {
             propColliders: mapColliders,
             onKill: (victim) => {
               airBoard.noteKill(air.root)
-              console.info(`[Steel] F-16 AAM destroyed ${victim.name || 'target'}`)
+              console.info(
+                `[Steel] ${airMslLabel} destroyed ${victim.name || 'target'}`,
+              )
             },
-            maxAmmo: 6,
-            reloadSec: 1.4,
-            speed: 175,
-            damage: 520,
-            color: 0xffe8a0,
-            logTag: 'AAM',
+            maxAmmo: option.samAmmo ?? 6,
+            reloadSec: option.samReloadSec ?? 1.4,
+            speed: option.samSpeed ?? 175,
+            damage: option.samDamage ?? 520,
+            pen: option.samPen,
+            color: option.helicopter ? 0xc8d4a8 : 0xffe8a0,
+            logTag: airMslLabel,
             airLaunch: true,
-            meshScale: 1.35,
+            meshScale: option.helicopter ? 1.15 : 1.35,
           })
         : null
     // Keep stub API for lock-phase logging only.
     const airMissile = airLock ? createMissileLockStub(airLock) : null
+    if (airAam) {
+      console.info(
+        `[Steel] ${option.name} armed — ${airMslLabel} ×${option.samAmmo ?? 6} · hold P lock · M fire`,
+      )
+    }
 
     let airKoth = createKothState()
     const airHillRing = isKoth ? createHillRing(scene) : null
@@ -793,6 +864,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: air.root,
     })
     killInd = createKillIndicator()
+    const airAllyMarks = createFriendlyMarkers(scene)
     const unsubAirKill = airBoard.onPlayerKill((n) => {
       killInd!.noteKill(n)
       airTape.mark('kill')
@@ -857,10 +929,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       for (let i = 0; i < list.length && i < 3; i++) {
         const chassisId = list[i]!
         const chassis = tankOptionById(chassisId)
-        const pos = spawnAt(teamSide, i)
+        const slot = i % mapSpawns[teamSide].length
+        const pos = spawnAt(teamSide, slot)
         const id = `ai-${++airSeq}`
         const display = `${nationByTeam(teamSide).short} ${chassis.name}`
-        const slot = i
         const yaw = Math.atan2(-pos.x, -pos.z)
         const common = {
           team: side,
@@ -994,6 +1066,20 @@ async function startMission(sel: MenuSelection): Promise<void> {
           bounds: playable,
           velocity: flight.velocity,
           propColliders: mapColliders,
+          // Apache stub wings — tighter than Corsair HVAR stations.
+          ...(option.helicopter
+            ? {
+                count: 14,
+                stations: [
+                  [-2.15, -0.5, 0.25],
+                  [2.15, -0.5, 0.25],
+                  [-2.65, -0.55, 0.05],
+                  [2.65, -0.55, 0.05],
+                  [-3.05, -0.6, -0.1],
+                  [3.05, -0.6, -0.1],
+                ] as const,
+              }
+            : {}),
         })
       : null
     rockets?.setOnKill((victim) => {
@@ -1096,6 +1182,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       unsubAirKill()
       killInd?.dispose()
       killInd = null
+      airAllyMarks.dispose()
       airLock?.reset()
       airMissile?.reset()
       airAam?.dispose()
@@ -1514,9 +1601,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
             holdLock: isLockHold(),
           })
           airLockHud.apply(lockFrame)
-          // MSL plate only when this airframe actually carries AAMs.
+          // Seeker plate only when this airframe carries AAMs / AGMs.
           mslHud = airAam
-            ? { phase: lockFrame.phase, ammo: airAam.ammo() }
+            ? {
+                phase: lockFrame.phase,
+                ammo: airAam.ammo(),
+                label: airMslLabel,
+              }
             : null
           if (airMissile) {
             airMissilePhase = noteMissileLockChange(airMissile, airMissilePhase)
@@ -1524,7 +1615,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
         } else {
           airLock.reset()
           airLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
-          mslHud = airAam ? { phase: 'idle', ammo: airAam.ammo() } : null
+          mslHud = airAam
+            ? { phase: 'idle', ammo: airAam.ammo(), label: airMslLabel }
+            : null
         }
       }
 
@@ -1564,6 +1657,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
         { releasing: countermeasures.bannerActive() },
         rockets ? { remaining: rockets.remaining() } : null,
       )
+
+      airAllyMarks.update(camera, airFriendlies)
+      mapUpdateLod?.(air.root.position.x, air.root.position.z, 1.55)
+      updateSunShadowFocus(air.root.position.x, air.root.position.y, air.root.position.z)
 
       renderer.render(scene, camera)
 
@@ -1633,7 +1730,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
   const foeAiTanks = team === 'red' ? blueAi : redAi
 
   function freeSpawnIndices(teamSide: TeamId, playerTook: number | null): number[] {
-    const idxs = [0, 1, 2]
+    const n = mapSpawns[teamSide].length
+    const idxs = Array.from({ length: n }, (_, i) => i)
     if (playerTook === null) return idxs
     if (teamSide !== team) return idxs
     return idxs.filter((i) => i !== playerTook)
@@ -1665,8 +1763,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
         const jobs: Array<
           Promise<{ unit: AiEnemy; teamSide: TeamId; slot: number; side: 'friendly' | 'enemy' }>
         > = []
-        for (let i = 0; i < allyAiTanks.length && i < allySlots.length; i++) {
-          const slot = allySlots[i]!
+        for (let i = 0; i < allyAiTanks.length; i++) {
+          if (allySlots.length === 0) break
+          const slot = allySlots[i % allySlots.length]!
           const pos = spawnAt(team, slot)
           const yaw = Math.atan2(-pos.x, -pos.z)
           const tankForAi = allyAiTanks[i]!
@@ -1707,8 +1806,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
             }),
           )
         }
-        for (let i = 0; i < foeAiTanks.length && i < foeSlots.length; i++) {
-          const slot = foeSlots[i]!
+        for (let i = 0; i < foeAiTanks.length; i++) {
+          if (foeSlots.length === 0) break
+          const slot = foeSlots[i % foeSlots.length]!
           const pos = spawnAt(opposite, slot)
           const yaw = Math.atan2(-pos.x, -pos.z)
           const tankForAi = foeAiTanks[i]!
@@ -1944,8 +2044,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     crew?.start()
     if (crew) {
       console.info(
-        `[Steel] Crew voice — ${option.id} · nation=${option.nation ?? '—'} · ${
-          option.antiAir ? 'SPAAG (HIT only)' : 'full load/fire callouts'
+        `[Steel] Crew voice — ${option.id} · fire/load muted · hit VO ${
+          germanCrew ? 'on' : 'off'
         }`,
       )
     } else if (option.noCrewVoice) {
@@ -1986,21 +2086,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     fire.setOnKill(() => board.noteKill(tank))
     const hitAnalyzer = createHitAnalyzer()
     fire.setOnHitAnalyze((report) => hitAnalyzer.show(report))
-    // SPAAG: skip Load/Loaded spam + fire-gate delay (0.2s reload); keep HIT THEM.
-    const sovietRapid = !!option.antiAir
-    fire.setVoiceHooks(
-      crew
-        ? {
-            onBeginLoad: (id) => {
-              if (!sovietRapid) crew.announceLoad(id)
-            },
-            onChambered: () => {
-              if (!sovietRapid) crew.announceLoaded()
-            },
-            onEnemyHit: () => sovietCrew?.announceHitThem(),
-          }
-        : null,
-    )
+    // Load / fire / HIT THEM callouts muted (telegraph). German "we've been hit" stays.
+    fire.setVoiceHooks(null)
     const killInd = createKillIndicator()
     const unsubKill = board.onPlayerKill((n) => {
       killInd.noteKill(n)
@@ -2008,6 +2095,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
     killInd.setKills(0)
     killInd.setVisible(false)
+    const allyMarks = createFriendlyMarkers(scene)
     const playerHostile = playerAsHostile(playerCombat)
 
     const drive = createDriveController(option.drive)
@@ -2035,6 +2123,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             }))
           : undefined,
       paths: mapPaths,
+      rivers: mapRivers,
       spawns: [
         ...mapOpt.spawns.red.map((p) => ({
           x: p.x,
@@ -2497,6 +2586,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       killInd.setVisible(false)
       unsubKill()
       killInd.dispose()
+      allyMarks.dispose()
       groundLock?.reset()
       groundLockHud?.setVisible(false)
       groundLockHud?.dispose()
@@ -2847,6 +2937,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
         dummies,
         camera,
         mapColliders,
+        turret,
       )
       if (sam) {
         const ammoBefore = sam.ammo()
@@ -3124,6 +3215,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
           .map((a) => ({ x: a.root.position.x, z: a.root.position.z })),
       })
 
+      allyMarks.update(camera, friendlies)
+
+      mapUpdateLod?.(tank.position.x, tank.position.z, 1)
+      updateSunShadowFocus(tank.position.x, tank.position.y, tank.position.z)
       renderer.render(scene, camera)
     }
 

@@ -9,9 +9,10 @@ import type { PropCollider } from '../collision'
 
 export type MapId = 'forest'
 
+/** Sketch layout: 2 flank pads per team (no center spawn). */
 export type TeamSpawns = {
-  red: [THREE.Vector3, THREE.Vector3, THREE.Vector3]
-  blue: [THREE.Vector3, THREE.Vector3, THREE.Vector3]
+  red: [THREE.Vector3, THREE.Vector3]
+  blue: [THREE.Vector3, THREE.Vector3]
 }
 
 export type MapOption = {
@@ -33,41 +34,31 @@ export type MapOption = {
   useArenaWalls: boolean
 }
 
-function triple(
+function pair(
   a: [number, number],
   b: [number, number],
-  c: [number, number],
-): [THREE.Vector3, THREE.Vector3, THREE.Vector3] {
-  return [
-    new THREE.Vector3(a[0], 0, a[1]),
-    new THREE.Vector3(b[0], 0, b[1]),
-    new THREE.Vector3(c[0], 0, c[1]),
-  ]
+): [THREE.Vector3, THREE.Vector3] {
+  return [new THREE.Vector3(a[0], 0, a[1]), new THREE.Vector3(b[0], 0, b[1])]
 }
 
+const L = FOREST_OVERWATCH_WIDTH / 2000
+
 const FOREST_SPAWNS: TeamSpawns = {
-  red: triple(
-    [-90 * (FOREST_OVERWATCH_WIDTH / 2000), -880 * (FOREST_OVERWATCH_DEPTH / 2000)],
-    [0, -920 * (FOREST_OVERWATCH_DEPTH / 2000)],
-    [90 * (FOREST_OVERWATCH_WIDTH / 2000), -880 * (FOREST_OVERWATCH_DEPTH / 2000)],
-  ),
-  blue: triple(
-    [-90 * (FOREST_OVERWATCH_WIDTH / 2000), 880 * (FOREST_OVERWATCH_DEPTH / 2000)],
-    [0, 920 * (FOREST_OVERWATCH_DEPTH / 2000)],
-    [90 * (FOREST_OVERWATCH_WIDTH / 2000), 880 * (FOREST_OVERWATCH_DEPTH / 2000)],
-  ),
+  // Sketch: 2 south (red) · 2 north (blue)
+  red: pair([-520 * L, -900 * L], [520 * L, -900 * L]),
+  blue: pair([-520 * L, 900 * L], [520 * L, 900 * L]),
 }
 
 export const MAP_OPTIONS: MapOption[] = [
   {
     id: 'forest',
     name: 'Forest Overwatch',
-    blurb: '5000×5000 pine hills · five towns on the diagonal · flank roads',
+    blurb: '3500×3500 · giant river · 2 spawns/side · points C / Midwood / A',
     sizeX: FOREST_OVERWATCH_WIDTH,
     sizeZ: FOREST_OVERWATCH_DEPTH,
     size: FOREST_OVERWATCH_SIZE,
-    playerSpawn: FOREST_SPAWNS.red[1].clone(),
-    enemySpawn: FOREST_SPAWNS.blue[1].clone(),
+    playerSpawn: FOREST_SPAWNS.red[0].clone(),
+    enemySpawn: FOREST_SPAWNS.blue[0].clone(),
     spawns: FOREST_SPAWNS,
     useArenaWalls: true,
   },
@@ -87,8 +78,12 @@ export type MapLoadResult = {
   heightAt?: (x: number, z: number) => number
   /** Optional road polylines for combat minimap. */
   paths?: Array<{ points: Array<{ x: number; z: number }> }>
+  /** Optional river polylines for combat minimap. */
+  rivers?: Array<{ points: Array<{ x: number; z: number }> }>
   /** Optional runtime spawns. */
   spawns?: TeamSpawns
+  /** Distance-cull foliage around player (x,z world; optional rangeMul for air). */
+  updateLod?: (x: number, z: number, rangeMul?: number) => void
 }
 
 export async function loadMap(

@@ -172,9 +172,10 @@ export async function spawnAiCorsair(
   flight = createAircraftFlight({
     root,
     heightAt: sampleGround,
-    throttle: 0.55,
+    throttle: chassis.helicopter ? 0.45 : 0.55,
     bounds,
     ceiling,
+    helicopter: !!chassis.helicopter,
     onCrash: () => {
       flaming = false
       if (persistMesh) {

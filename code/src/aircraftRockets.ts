@@ -66,11 +66,17 @@ export type RocketOptions = {
   bounds: { x: number; z: number }
   velocity: THREE.Vector3
   propColliders?: readonly PropCollider[]
+  /** Override wing/stub stations (local XYZ). */
+  stations?: ReadonlyArray<readonly [number, number, number]>
+  /** Magazine size (default 8). */
+  count?: number
 }
 
 export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   const { scene, root, heightAt, bounds, velocity } = opts
   const walls = opts.propColliders ?? []
+  const stations = opts.stations ?? STATIONS
+  const magazine = Math.max(1, opts.count ?? ROCKET_COUNT)
 
   const bodyGeo = new THREE.CylinderGeometry(0.07, 0.09, 1.15, 6)
   bodyGeo.rotateX(Math.PI / 2)
@@ -105,7 +111,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
 
   const live: Rocket[] = []
   const trail: TrailPuff[] = []
-  let remaining = ROCKET_COUNT
+  let remaining = magazine
   let gap = 0
   let station = 0
   let onKill: ((victim: THREE.Object3D) => void) | null = null
@@ -234,7 +240,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     root.getWorldQuaternion(_q)
     _nose.set(0, 0, 1).applyQuaternion(_q)
 
-    const st = STATIONS[station % STATIONS.length]!
+    const st = stations[station % stations.length]!
     station++
     _local.set(st[0], st[1], st[2])
     _pos.copy(_local).applyQuaternion(_q).add(root.position)
@@ -345,7 +351,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
 
     remaining: () => remaining,
     refill() {
-      remaining = ROCKET_COUNT
+      remaining = magazine
       gap = 0
       console.info('[Steel] HVAR rearmed ×8')
     },

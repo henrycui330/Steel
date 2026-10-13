@@ -24,7 +24,7 @@ export type DriveController = {
   getThrottle: () => number
   /** Vertical ride velocity (m/s) — bumps / landings. */
   getRideVel: () => number
-  /** True while crest-flying / hang above terrain. */
+  /** Always false — crest hop removed; soft hang stays “grounded”. */
   isAirborne: () => boolean
   /** Instant zero speed (prop / wall hard-stop). */
   killSpeed: () => void
@@ -58,8 +58,8 @@ const TRACK_HALF_L = 1.55
  */
 const SPRING = 28
 const DAMP = 22
-/** Grounded hang above support filter (m). */
-const MAX_HANG = 0.42
+/** Grounded hang above support filter (m) — room for unsupported 45% to float. */
+const MAX_HANG = 0.95
 /** Peak micro-relief amplitude (m) — subtle undulation only. */
 const RELIEF_AMP = 0.045
 /** Contact samples use quieter relief so crests don’t chatter. */
@@ -74,6 +74,11 @@ const CONTACT_EPS = 0.03
 /** How much support-plane pitch/roll reaches the hull (0–1). */
 const TERRAIN_TILT_BLEND = 0.88
 /**
+ * Fraction of track samples that must define the support plane.
+ * Remaining (1 − this) may hang in the air over dips / crest edges.
+ */
+const SUPPORT_FRAC = 0.55
+/**
  * TR2 — support filter: max rise rate (m/s) when ground comes up under the
  * tracks (reads as suspension compress). Drop uses SUSP_EXTEND.
  */
@@ -83,11 +88,11 @@ const MAX_COMPRESS_LAG = 0.22
 /** How fast filtered support falls when terrain drops (1/s). */
 const SUSP_EXTEND = 5.5
 /** Extra pitch when only nose or only tail is on dirt (rad). */
-const WEDGE_PITCH = (3.2 * Math.PI) / 180
+const WEDGE_PITCH = (5.5 * Math.PI) / 180
 /** How fast wedge eases in/out. */
 const WEDGE_SMOOTH = 6.5
 /** Sample counts as “on dirt” if within this of the clearance constraint (m). */
-const SUPPORT_EPS = 0.06
+const SUPPORT_EPS = 0.1
 /** Track gauge (m) — yaw = (vR − vL) / TRACK_GAUGE. */
 export const TRACK_GAUGE = TRACK_HALF_W * 2
 /** TP1b — max bank into a turn (rad), scaled by speed. */
@@ -100,7 +105,7 @@ const ACCEL_PITCH_HEADROOM = 1.35
 /** How fast turn-lean eases in/out (slightly snappier than terrain). */
 const LEAN_SMOOTH = 8
 /** TP1c — throttle catches power (1/s exp rate). */
-const THROTTLE_ENGAGE = 5.2
+const THROTTLE_ENGAGE = 3.2
 /** TP1c — throttle falls off slower → coast inertia. */
 const THROTTLE_RELEASE = 2.15
 /** TP1c — brake snuffs throttle fast (still responsive). */
@@ -113,6 +118,8 @@ const THROTTLE_EPS = 0.03
  * Global arcade pace — soft enough for massClass to read, not a crawl.
  */
 export const SPEED_FEEL = 1.32
+/** Scales accel / reverse only (top speed stays SPEED_FEEL). Lower = heavier get-up. */
+const ACCEL_FEEL = 0.62
 /**
  * At full speed, turn authority falls toward this fraction of catalog turnRate
  * (WT: heavy chassis won't pivot at pace).
@@ -128,22 +135,6 @@ const GRADE_PUSH_START = -0.2
 const GRADE_FORCE = 11
 /** Cap downhill speed bonus vs catalog top (fraction). */
 const GRADE_DOWN_CAP = 1.12
-/** Airborne gravity (m/s²) while crest-flying. */
-const AIR_GRAVITY = 26
-/** Max meters above terrain while airborne. */
-const MAX_AIR = 3.4
-/** Need this fraction of top speed before a crest can launch you. */
-const CREST_SPEED_FRAC = 0.4
-/** Uphill grade (rise/run) that arms a crest launch. */
-const CREST_ARM_GRADE = 0.11
-/** Downhill grade that triggers launch once armed. */
-const CREST_FIRE_GRADE = -0.04
-/** Upward launch scale: rideVel += |speed| * armedGrade * this. */
-const CREST_LAUNCH = 1.85
-/** Extra launch from how hard the slope pitches over. */
-const CREST_SNAP = 0.55
-/** Airborne only if hull clears support by this much (m). */
-const AIR_SEPARATION = 0.12
 
 /** TR4 — per-class inertia / grade / suspension multipliers. */
 type MassFeel = {
@@ -230,8 +221,8 @@ type TrackSample = {
  * Arcade tank drive tuned per chassis profile.
  * `tank.rotation.order` becomes YXZ (yaw then pitch).
  *
- * TR1 — multi-point track contact: hull clears the worst dig-in under L/R
- * tread runs so crests wedge mid-track and free ends hang (no phase-through).
+ * TR1 — soft majority support (55% of track samples); other 45% may hang in air.
+ * No crest-hop launch — stays planted with wedge pitch on single-end plant.
  * TR2 — suspension filter (compress / extend) + wedge pitch on single-end plant.
  * TR3 — dual-track: vL/vR → hull speed + yaw (pivot crawl, wide radius at pace).
  * TR4 — massClass inertia + grade force (heavies late / struggle uphill).
@@ -259,10 +250,8 @@ export function createDriveController(profile: DriveProfile): DriveController {
   let heightAt: ((x: number, z: number) => number) | null = null
   let mobilityMul = 1
   let slip = 0
+  /** Kept for API — crest hop removed; stays grounded with soft hang. */
   let airborne = false
-  let prevGrade = 0
-  /** Peak uphill grade while armed — spent on crest launch. */
-  let armedGrade = 0
   let leftTrackOut = false
   let rightTrackOut = false
   let lastTrackOutLog = 'ok'
@@ -284,8 +273,8 @@ export function createDriveController(profile: DriveProfile): DriveController {
   const mass = MASS_FEEL[massClass]
   const maxSpeed = catalogMaxSpeed * SPEED_FEEL
   const maxReverse = catalogMaxReverse * SPEED_FEEL
-  const accel = catalogAccel * SPEED_FEEL * mass.accelMul
-  const reverseAccel = catalogReverseAccel * SPEED_FEEL * mass.accelMul
+  const accel = catalogAccel * SPEED_FEEL * ACCEL_FEEL * mass.accelMul
+  const reverseAccel = catalogReverseAccel * SPEED_FEEL * ACCEL_FEEL * mass.accelMul
   const brakeDecel = catalogBrakeDecel * mass.brakeMul
   const springK = SPRING * mass.springMul
   const dampK = DAMP * mass.dampMul
@@ -320,8 +309,9 @@ export function createDriveController(profile: DriveProfile): DriveController {
   }
 
   /**
-   * Rigid clearance: every track sample must sit on/above ground after pitch/roll.
-   * relativeY ≈ −f·sin(pitch) + r·sin(roll) (YXZ small-angle; matches existing tilt sign).
+   * Soft majority clearance — highest SUPPORT_FRAC of track samples define the
+   * ride plane (avg); the rest may hang in the air over dips / crest edges.
+   * relativeY ≈ −f·sin(pitch) + r·sin(roll) (YXZ small-angle).
    */
   function clearanceFromSamples(
     samples: readonly TrackSample[],
@@ -371,28 +361,39 @@ export function createDriveController(profile: DriveProfile): DriveController {
     const sinP = Math.sin(pitch)
     const sinR = Math.sin(roll)
 
-    let clearanceY = -Infinity
+    const needYs: number[] = []
     for (const s of samples) {
       const relY = -s.f * sinP + s.r * sinR
-      clearanceY = Math.max(clearanceY, s.gy - relY + CONTACT_EPS)
+      needYs.push(s.gy - relY + CONTACT_EPS)
     }
+    needYs.sort((a, b) => b - a) // highest ground under tracks first
+    const keep = Math.max(1, Math.ceil(needYs.length * SUPPORT_FRAC))
+    let sum = 0
+    for (let i = 0; i < keep; i++) sum += needYs[i]!
+    let clearanceY = sum / keep
     if (!Number.isFinite(clearanceY)) {
       clearanceY = samples.reduce((a, s) => a + s.gy, 0) / Math.max(1, samples.length)
     }
 
-    // TR2 wedge — which stations are actually carrying the hull?
-    let foreSupport = false
-    let aftSupport = false
+    // Wedge — which end is actually carrying (≥ half of supporting majority)?
+    let foreSupport = 0
+    let aftSupport = 0
+    let supportN = 0
     for (const s of samples) {
       const relY = -s.f * sinP + s.r * sinR
       const needY = s.gy - relY + CONTACT_EPS
-      if (needY < clearanceY - SUPPORT_EPS) continue
-      if (s.f > 0.2) foreSupport = true
-      if (s.f < -0.2) aftSupport = true
+      if (needY < clearanceY - SUPPORT_EPS) continue // hanging / air
+      supportN++
+      if (s.f > 0.15) foreSupport++
+      if (s.f < -0.15) aftSupport++
     }
     let wedgePitch = 0
-    if (foreSupport && !aftSupport) wedgePitch = WEDGE_PITCH
-    else if (aftSupport && !foreSupport) wedgePitch = -WEDGE_PITCH
+    const majority = Math.max(1, supportN) * SUPPORT_FRAC
+    if (foreSupport >= majority && aftSupport < majority * 0.5) {
+      wedgePitch = WEDGE_PITCH
+    } else if (aftSupport >= majority && foreSupport < majority * 0.5) {
+      wedgePitch = -WEDGE_PITCH
+    }
 
     return {
       clearanceY,
@@ -403,7 +404,7 @@ export function createDriveController(profile: DriveProfile): DriveController {
   }
 
   console.info(
-    `[Steel] Drive TR5 · mass ${massClass} · feel ${SPEED_FEEL} · gauge ${TRACK_GAUGE.toFixed(2)}m · track-out · ${sampleCount} samples`,
+    `[Steel] Drive · mass ${massClass} · soft support ${(SUPPORT_FRAC * 100).toFixed(0)}% · no crest hop · gauge ${TRACK_GAUGE.toFixed(2)}m · ${sampleCount} samples`,
   )
 
   return {
@@ -421,8 +422,6 @@ export function createDriveController(profile: DriveProfile): DriveController {
       throttle = 0
       slipLat = 0
       airborne = false
-      armedGrade = 0
-      prevGrade = 0
       rideVel = 0
       clearanceFilt = null
       wedgeTilt = 0
@@ -437,8 +436,6 @@ export function createDriveController(profile: DriveProfile): DriveController {
       rideVel = 0
       wedgeTilt = 0
       airborne = false
-      armedGrade = 0
-      prevGrade = 0
     },
     setMobilityMul(mul) {
       mobilityMul = THREE.MathUtils.clamp(mul, 0.2, 1.2)
@@ -647,66 +644,21 @@ export function createDriveController(profile: DriveProfile): DriveController {
         airborne = false
       }
 
-      // Arm crest: climbing at pace stores peak uphill grade
-      if (
-        !airborne &&
-        Math.abs(speed) >= capFwd * CREST_SPEED_FRAC &&
-        grade > CREST_ARM_GRADE
-      ) {
-        armedGrade = Math.max(armedGrade, grade)
-      } else if (!airborne && grade < CREST_ARM_GRADE * 0.5) {
-        // Fade arm if you slow / level out without pitching over
-        armedGrade *= Math.exp(-2.5 * dt)
-        if (armedGrade < 0.04) armedGrade = 0
-      }
-
-      // Fire: slope pitches from climb → drop while still fast
-      if (
-        !airborne &&
-        armedGrade >= CREST_ARM_GRADE &&
-        Math.abs(speed) >= capFwd * CREST_SPEED_FRAC &&
-        grade <= CREST_FIRE_GRADE &&
-        prevGrade > CREST_FIRE_GRADE
-      ) {
-        const snap = Math.max(0, armedGrade - grade)
-        const launch =
-          Math.abs(speed) * armedGrade * CREST_LAUNCH +
-          Math.abs(speed) * snap * CREST_SNAP
-        rideVel = Math.max(rideVel, launch)
-        airborne = true
-        armedGrade = 0
-      }
-      prevGrade = grade
-
-      if (airborne) {
-        rideVel -= AIR_GRAVITY * dt
-        rideY += rideVel * dt
-        if (rideY <= clearanceY) {
-          rideY = clearanceY
-          clearanceFilt = clearanceY
-          if (rideVel < -3.5) rideVel *= -0.14
-          else rideVel = 0
-          airborne = false
-        } else if (rideY > clearanceY + MAX_AIR) {
-          rideY = clearanceY + MAX_AIR
-          if (rideVel > 0) rideVel = 0
-        }
-      } else {
-        // Spring toward filtered support (compress/extend feel); TR4 mass scales.
+      // Always grounded — crest hop / ballistic air removed. Soft SUPPORT_FRAC
+      // hang lets unsupported track ends float without launching the hull.
+      airborne = false
+      {
         const accelY = -springK * (rideY - supportY) - dampK * rideVel
         rideVel += accelY * dt
         rideY += rideVel * dt
 
-        // Hard floor — never phase through raw clearance.
+        // Soft floor — stay on majority support plane (not every rock spike).
         if (rideY < clearanceY) {
           rideY = clearanceY
           if (rideVel < 0) rideVel *= -0.12
         } else if (rideY > supportY + MAX_HANG) {
           rideY = supportY + MAX_HANG
           if (rideVel > 0) rideVel = 0
-        }
-        if (rideY > clearanceY + AIR_SEPARATION && rideVel > 1.2) {
-          airborne = true
         }
       }
 
@@ -716,17 +668,11 @@ export function createDriveController(profile: DriveProfile): DriveController {
       const accelNow = dt > 1e-6 ? (hullSpeed - prevSpeed) / dt : 0
       prevSpeed = hullSpeed
 
-      // TR2 wedge pitch toward the planted end.
+      // Wedge pitch toward the planted end (unsupported end hangs in air).
       const wedgeK = 1 - Math.exp(-WEDGE_SMOOTH * dt)
-      const wedgeTarget = airborne ? 0 : contact.wedgePitch
+      const wedgeTarget = contact.wedgePitch
       wedgeTilt += (wedgeTarget - wedgeTilt) * wedgeK
       if (Math.abs(wedgeTilt) < 1e-4 && Math.abs(wedgeTarget) < 1e-4) wedgeTilt = 0
-
-      // While airborne, keep a bit of nose-up from the launch then ease to flat fall
-      if (airborne) {
-        terrainPitch *= 0.35
-        terrainRoll *= 0.35
-      }
 
       // TP1b — accel: nose up (squat); brake: nose down (dive). Sign was inverted before.
       const accelGain =

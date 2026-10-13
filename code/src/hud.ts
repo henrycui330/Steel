@@ -74,6 +74,10 @@ export type HudMinimapConfig = {
   theme?: 'forest' | 'desert' | 'city' | 'default'
   towns?: readonly HudTownMark[]
   paths?: readonly HudPathMark[]
+  /** Water bands drawn under roads. */
+  rivers?: readonly HudPathMark[]
+  /** World half-width of river stroke (m); defaults ~48. */
+  riverHalfW?: number
   spawns?: readonly HudSpawnMark[]
   hill?: { x: number; z: number; radius: number }
 }
@@ -209,6 +213,11 @@ export function createMinimapWidget(minimap?: HudMinimapConfig): MinimapWidget {
   const toCx = (x: number) => ((x + halfX) / mapSizeX) * svgW
   const toCy = (z: number) => ((halfZ - z) / mapSizeZ) * svgH
   const pathStroke = Math.max(1.6, (10 / Math.max(mapSizeX, mapSizeZ)) * svgH)
+  const riverHalf = minimap?.riverHalfW ?? 48
+  const riverStroke = Math.max(
+    3.5,
+    ((riverHalf * 2) / Math.max(mapSizeX, mapSizeZ)) * svgH,
+  )
 
   const el = document.createElement('div')
   el.className = `hud-minimap is-${theme}`
@@ -232,6 +241,7 @@ export function createMinimapWidget(minimap?: HudMinimapConfig): MinimapWidget {
           </linearGradient>
         </defs>
         <rect class="minimap-arena minimap-arena-${theme}" x="0" y="0" width="${svgW}" height="${svgH}" />
+        <g class="minimap-rivers"></g>
         <g class="minimap-paths"></g>
         <g class="minimap-towns"></g>
         <g class="minimap-hill"></g>
@@ -242,11 +252,13 @@ export function createMinimapWidget(minimap?: HudMinimapConfig): MinimapWidget {
       </svg>
       <div class="minimap-legend">
         <span class="mm-key mm-road"></span>ROAD
+        <span class="mm-key mm-river"></span>RIVER
         <span class="mm-key mm-town"></span>TOWN
         <span class="mm-key mm-you"></span>YOU
       </div>
     </div>
   `
+  const riversG = el.querySelector('.minimap-rivers') as SVGGElement
   const pathsG = el.querySelector('.minimap-paths') as SVGGElement
   const townsG = el.querySelector('.minimap-towns') as SVGGElement
   const spawnsG = el.querySelector('.minimap-spawns') as SVGGElement
@@ -254,6 +266,20 @@ export function createMinimapWidget(minimap?: HudMinimapConfig): MinimapWidget {
   const alliesG = el.querySelector('.minimap-allies') as SVGGElement
   const playerMark = el.querySelector('.minimap-player') as SVGPolygonElement
 
+  if (minimap?.rivers) {
+    for (const river of minimap.rivers) {
+      if (river.points.length < 2) continue
+      const d = river.points
+        .map((p, i) => `${i === 0 ? 'M' : 'L'}${toCx(p.x).toFixed(1)} ${toCy(p.z).toFixed(1)}`)
+        .join(' ')
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      line.setAttribute('class', 'minimap-river')
+      line.setAttribute('d', d)
+      line.setAttribute('fill', 'none')
+      line.setAttribute('stroke-width', String(riverStroke))
+      riversG.appendChild(line)
+    }
+  }
   if (minimap?.paths) {
     for (const path of minimap.paths) {
       if (path.points.length < 2) continue
@@ -350,7 +376,17 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
 
   const mouse = document.createElement('div')
   mouse.className = 'xhair xhair-mouse'
-  mouse.innerHTML = '<span class="xhair-dot"></span>'
+  // Free-look reticle: - =[o]= -
+  mouse.innerHTML = `
+    <i class="xh-dash xh-out-l"></i>
+    <i class="xh-eq xh-eq-l"></i>
+    <i class="xh-brace xh-brace-l"></i>
+    <span class="xh-pip"></span>
+    <i class="xh-brace xh-brace-r"></i>
+    <i class="xh-eq xh-eq-r"></i>
+    <i class="xh-dash xh-out-r"></i>
+    <i class="xh-vpost"></i>
+  `
 
   const barrel = document.createElement('div')
   barrel.className = 'xhair xhair-barrel'
@@ -396,6 +432,11 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const toCx = (x: number) => ((x + halfX) / mapSizeX) * svgW
   const toCy = (z: number) => ((halfZ - z) / mapSizeZ) * svgH
   const pathStroke = Math.max(1.6, (10 / Math.max(mapSizeX, mapSizeZ)) * svgH)
+  const riverHalf = minimap?.riverHalfW ?? 48
+  const riverStroke = Math.max(
+    3.5,
+    ((riverHalf * 2) / Math.max(mapSizeX, mapSizeZ)) * svgH,
+  )
 
   const minimapEl = document.createElement('div')
   minimapEl.className = `hud-minimap is-${theme}`
@@ -419,6 +460,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
           </linearGradient>
         </defs>
         <rect class="minimap-arena minimap-arena-${theme}" x="0" y="0" width="${svgW}" height="${svgH}" />
+        <g class="minimap-rivers"></g>
         <g class="minimap-paths"></g>
         <g class="minimap-towns"></g>
         <g class="minimap-hill"></g>
@@ -429,11 +471,13 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       </svg>
       <div class="minimap-legend">
         <span class="mm-key mm-road"></span>ROAD
+        <span class="mm-key mm-river"></span>RIVER
         <span class="mm-key mm-town"></span>TOWN
         <span class="mm-key mm-you"></span>YOU
       </div>
     </div>
   `
+  const riversG = minimapEl.querySelector('.minimap-rivers') as SVGGElement
   const pathsG = minimapEl.querySelector('.minimap-paths') as SVGGElement
   const townsG = minimapEl.querySelector('.minimap-towns') as SVGGElement
   const spawnsG = minimapEl.querySelector('.minimap-spawns') as SVGGElement
@@ -441,6 +485,20 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const alliesG = minimapEl.querySelector('.minimap-allies') as SVGGElement
   const playerMark = minimapEl.querySelector('.minimap-player') as SVGPolygonElement
 
+  if (minimap?.rivers) {
+    for (const river of minimap.rivers) {
+      if (river.points.length < 2) continue
+      const d = river.points
+        .map((p, i) => `${i === 0 ? 'M' : 'L'}${toCx(p.x).toFixed(1)} ${toCy(p.z).toFixed(1)}`)
+        .join(' ')
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      line.setAttribute('class', 'minimap-river')
+      line.setAttribute('d', d)
+      line.setAttribute('fill', 'none')
+      line.setAttribute('stroke-width', String(riverStroke))
+      riversG.appendChild(line)
+    }
+  }
   if (minimap?.paths) {
     for (const path of minimap.paths) {
       if (path.points.length < 2) continue

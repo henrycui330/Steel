@@ -49,6 +49,7 @@ export type TankId =
   | 'spitfire'
   | 'f35b'
   | 'tornado'
+  | 'apache'
   | 'f16'
   | 'mig15'
   | 'mig21'
@@ -144,6 +145,10 @@ export type TankOption = {
    * Jet — no prop SFX, no spinning parts, no gear animation.
    */
   jet?: boolean
+  /**
+   * Helicopter — plane-like arcade flight with collective hover (throttle).
+   */
+  helicopter?: boolean
   /**
    * Bomb-bay size override (default 2 for fighters). Bombers want more.
    */
@@ -1981,6 +1986,43 @@ export const TANK_OPTIONS: TankOption[] = [
       elevateRadPerSec: 2.2,
       apLabel: 'AP 27mm',
       heLabel: 'HE 27mm',
+    },
+  },
+  {
+    id: 'apache',
+    name: 'AH Mk.1 Apache',
+    role: 'Attack helicopter · air',
+    blurb: 'Army Air Corps · 30mm · CRV7 rockets · Hellfire AGM',
+    url: assetUrl('models/apache.glb?v=1'),
+    reloadSec: 0.09,
+    maxHp: 640,
+    // Rotor diameter ~14.6 m — used as span scale target.
+    targetWidth: 14.6,
+    vintageCrew: false,
+    nation: 'britain',
+    aircraft: true,
+    helicopter: true,
+    aircraftBombCount: 0,
+    // Seekers (Hellfire-style) — same lock + M fire path as jet AAMs.
+    samMissiles: true,
+    samAmmo: 8,
+    samReloadSec: 1.7,
+    samSpeed: 105,
+    samDamage: 580,
+    samPen: 220,
+    samLabel: 'AGM',
+    drive: CORSAIR_DRIVE,
+    armor: armorKit({ front: 22, side: 18, rear: 14, turret: 16 }),
+    gun: {
+      aphePen: 48,
+      apheDmg: 72,
+      hePen: 16,
+      heDmg: 55,
+      heBlast: 70,
+      traverseRadPerSec: 2.4,
+      elevateRadPerSec: 2.0,
+      apLabel: 'AP 30mm',
+      heLabel: 'HE 30mm',
     },
   },
   {

@@ -66,7 +66,7 @@ export type MenuSelection = {
   mapId: MapId
   tankId: TankId
   team: TeamId
-  /** Index 0–2 on the chosen team’s spawn list. */
+  /** Index on the chosen team’s spawn list (0–1 for Forest sketch pads). */
   spawnIndex: number
   /** AI tank ids for red team slots (length = count, max 3). */
   redAi: TankId[]

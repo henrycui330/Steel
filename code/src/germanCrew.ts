@@ -24,76 +24,22 @@ export type GermanCrewVoice = {
   announceLoaded: () => void
   /** Damaging hit on the player tank. */
   announceHit: () => void
-  /**
-   * Gate main-gun fire input.
-   * Plays UNDERSTOOD → READY, then pulses true for one frame so the gun fires.
-   */
+  /** Fire gate — passes through instantly (callouts muted). */
   gateFire: (wantsFire: boolean, canFireNow: boolean) => boolean
 }
 
 /**
- * German tank crew callouts.
- * Sequence: Load AP/HE → Loaded! → (fire press) Understood, fire! → Ready! → bang.
+ * German tank crew — "we've been hit" only.
+ * Load / fire telegraphs muted (unfair).
  */
 export function createGermanCrewVoice(): GermanCrewVoice {
   let armed = false
-  /** Shared channel for load / fire callouts (one at a time). */
-  let line: HTMLAudioElement | null = null
-  let lineGen = 0
-  /** Fire-arming FSM. */
-  type Phase = 'idle' | 'understood' | 'ready'
-  let phase: Phase = 'idle'
-  /** Fire system should receive wantsFire this frame. */
-  let firePulse = false
-  /** True while Load / Loaded callout is playing — don't cut into fire arm. */
-  let loadBusy = false
   const hitBase = new Audio(LINES.hit())
   hitBase.preload = 'auto'
-
-  function stopLine(): void {
-    lineGen++
-    if (line) {
-      line.onended = null
-      line.pause()
-      line.currentTime = 0
-      line = null
-    }
-  }
-
-  function playLine(src: string, onEnded?: () => void): void {
-    if (!armed) {
-      onEnded?.()
-      return
-    }
-    stopLine()
-    const gen = lineGen
-    const el = new Audio(src)
-    el.preload = 'auto'
-    el.volume = 0.85
-    line = el
-    el.onended = () => {
-      if (gen !== lineGen) return
-      line = null
-      onEnded?.()
-    }
-    void el.play().catch((err) => {
-      console.warn('[Steel] German crew line blocked/failed', err)
-      if (gen !== lineGen) return
-      line = null
-      onEnded?.()
-    })
-  }
-
-  function cancelFireArm(): void {
-    if (phase === 'idle' && !firePulse) return
-    phase = 'idle'
-    firePulse = false
-  }
 
   return {
     start() {
       armed = true
-      // Warm the hit clip under the same gesture.
       hitBase.volume = 0
       void hitBase
         .play()
@@ -105,29 +51,16 @@ export function createGermanCrewVoice(): GermanCrewVoice {
         .catch(() => {
           hitBase.volume = 0.88
         })
-      console.info('[Steel] German crew voice armed')
+      console.info('[Steel] German crew voice armed (hit only)')
     },
     stop() {
       armed = false
-      cancelFireArm()
-      loadBusy = false
-      stopLine()
     },
-    announceLoad(id) {
-      if (id !== 'aphe' && id !== 'he') return
-      // Don't talk over the fire callout chain.
-      if (phase !== 'idle') return
-      loadBusy = true
-      playLine(id === 'aphe' ? LINES.loadAp() : LINES.loadHe(), () => {
-        loadBusy = false
-      })
+    announceLoad(_id) {
+      /* muted */
     },
     announceLoaded() {
-      if (phase !== 'idle') return
-      loadBusy = true
-      playLine(LINES.loaded(), () => {
-        loadBusy = false
-      })
+      /* muted */
     },
     announceHit() {
       if (!armed) return
@@ -138,24 +71,7 @@ export function createGermanCrewVoice(): GermanCrewVoice {
       })
     },
     gateFire(wantsFire, canFireNow) {
-      if (firePulse) {
-        firePulse = false
-        return true
-      }
-      if (phase !== 'idle' || loadBusy) return false
-      if (!wantsFire || !canFireNow || !armed) return false
-
-      phase = 'understood'
-      playLine(LINES.understood(), () => {
-        if (phase !== 'understood') return
-        phase = 'ready'
-        playLine(LINES.ready(), () => {
-          if (phase !== 'ready') return
-          phase = 'idle'
-          firePulse = true
-        })
-      })
-      return false
+      return !!(wantsFire && canFireNow)
     },
   }
 }

@@ -26,6 +26,8 @@ const MG_LIFETIME = 1.6
 /** Short delay so muzzle flash can play — direction is locked at trigger. */
 const SHELL_RELEASE_DELAY = 0.08
 const MG_RELEASE_DELAY = 0.02
+/** Hold breech reload (timer + crew VO) until casing clears the turret. */
+const RELOAD_START_DELAY = 0.5
 /** Coax MG cyclic rate (~650 rpm → ~0.09s). */
 const MG_COOLDOWN = 0.09
 /** Katyusha / rack rockets — 2 rounds per second. */
@@ -35,6 +37,10 @@ const MG_SPEED = SHELL_SPEED * 1.05
 /** Visible shell length in meters (model is huge Sketchfab units). */
 const SHELL_MODEL_LENGTH = 0.55
 const SHELL_MODEL_URL = assetUrl('models/88mm_shell.glb')
+/** Spent brass — turret-local spawn (right / up / aft of breech). */
+const CASING_LOCAL = new THREE.Vector3(0.55, 0.28, -0.22)
+const CASING_LIFE = 2.8
+const CASING_GRAVITY = 14
 
 export type FireHudState = {
   weapon: WeaponId
@@ -92,6 +98,14 @@ type PendingShot = {
   dir: THREE.Vector3
 }
 
+type SpentCasing = {
+  mesh: THREE.Object3D
+  velocity: THREE.Vector3
+  spin: THREE.Vector3
+  age: number
+  life: number
+}
+
 export type FireSystem = {
   update: (
     dt: number,
@@ -100,6 +114,8 @@ export type FireSystem = {
     dummies?: readonly DummyTarget[],
     camera?: THREE.Camera,
     propColliders?: readonly PropCollider[],
+    /** Main-gun spent casing ejects from this (turret), not the muzzle. */
+    turret?: THREE.Object3D | null,
   ) => boolean
   setReloadSec: (sec: number) => void
   /**
@@ -169,18 +185,23 @@ const _origin = new THREE.Vector3()
 const _dir = new THREE.Vector3()
 const _look = new THREE.Vector3()
 const _shellPrev = new THREE.Vector3()
-  const _sparkPos = new THREE.Vector3()
-  const _localHit = new THREE.Vector3()
-  const _localDir = new THREE.Vector3()
-  const _invTarget = new THREE.Matrix4()
+const _sparkPos = new THREE.Vector3()
+const _localHit = new THREE.Vector3()
+const _localDir = new THREE.Vector3()
+const _invTarget = new THREE.Matrix4()
+const _casingQuat = new THREE.Quaternion()
+const _casingRight = new THREE.Vector3()
+const _casingUp = new THREE.Vector3()
+const _casingAft = new THREE.Vector3()
+const _casingAxis = new THREE.Vector3(0, 1, 0)
 
 /** Align long axis to −Z (Three.js lookAt forward) and scale to game size. */
 function prepareShellModel(scene: THREE.Object3D): THREE.Group {
   const wrap = new THREE.Group()
   wrap.name = 'shell88Template'
   const model = scene.clone(true)
-  // Authored long on +X → map to −Z for lookAt.
-  model.rotation.y = Math.PI / 2
+  // Authored long on +X → map to −Z for lookAt (nose forward; was π/2 → tip back).
+  model.rotation.y = -Math.PI / 2
   wrap.add(model)
   wrap.updateMatrixWorld(true)
 
@@ -248,7 +269,17 @@ export function createFireSystem(
 ): FireSystem {
   const shells: Shell[] = []
   const rocketTrails: RocketTrailPuff[] = []
+  const casings: SpentCasing[] = []
   const mgGeometry = new THREE.SphereGeometry(MG_RADIUS, 6, 6)
+  // Brass casing: long axis = local Y (cylinder default).
+  const casingGeo = new THREE.CylinderGeometry(0.032, 0.038, 0.26, 8)
+  const casingMat = new THREE.MeshStandardMaterial({
+    color: 0xc4a35a,
+    metalness: 0.88,
+    roughness: 0.32,
+    emissive: 0x2a1c08,
+    emissiveIntensity: 0.12,
+  })
   // Same silhouette / materials as aircraftRockets (Corsair HVAR).
   const rocketBodyGeo = new THREE.CylinderGeometry(0.07, 0.09, 1.15, 6)
   rocketBodyGeo.rotateX(Math.PI / 2)
@@ -314,6 +345,9 @@ export function createFireSystem(
   let cooldown = 0
   let cooldownMax = reloadSec
   let pending: PendingShot | null = null
+  /** After a main-gun shot, wait before beginLoad (casing eject beat). */
+  let reloadGate = 0
+  let reloadGateAmmo: AmmoId | null = null
   let loading: AmmoId = 'aphe'
   let chambered: AmmoId | null = 'aphe'
   let weapon: WeaponId = 'main'
@@ -626,6 +660,87 @@ export function createFireSystem(
       // Boom1 — one muzzle puff so the shell path reads immediately.
       emitShellTrail(shell, shell.ammoId === 'he')
     }
+  }
+
+  /** Brass leaves the turret breech side — not the muzzle tip. */
+  function spawnSpentCasing(turret: THREE.Object3D): void {
+    const mesh = new THREE.Mesh(casingGeo, casingMat)
+    mesh.name = 'spentCasing'
+    mesh.castShadow = true
+    turret.updateMatrixWorld(true)
+    _origin.copy(CASING_LOCAL)
+    turret.localToWorld(_origin)
+    mesh.position.copy(_origin)
+
+    turret.getWorldQuaternion(_casingQuat)
+    _casingRight.set(1, 0, 0).applyQuaternion(_casingQuat).normalize()
+    _casingUp.set(0, 1, 0)
+    _casingAft.set(0, 0, -1).applyQuaternion(_casingQuat).normalize()
+
+    const velocity = new THREE.Vector3()
+      .addScaledVector(_casingRight, 3.4 + Math.random() * 1.4)
+      .addScaledVector(_casingUp, 2.5 + Math.random() * 1.1)
+      .addScaledVector(_casingAft, 0.9 + Math.random() * 0.7)
+
+    const spin = new THREE.Vector3(
+      (Math.random() - 0.5) * 22,
+      (Math.random() - 0.5) * 14,
+      (Math.random() - 0.5) * 22,
+    )
+
+    const speed = velocity.length()
+    if (speed > 1e-4) {
+      mesh.quaternion.setFromUnitVectors(_casingAxis, _dir.copy(velocity).multiplyScalar(1 / speed))
+    }
+
+    scene.add(mesh)
+    casings.push({ mesh, velocity, spin, age: 0, life: CASING_LIFE })
+  }
+
+  function removeCasingAt(index: number): void {
+    const c = casings[index]
+    scene.remove(c.mesh)
+    casings.splice(index, 1)
+  }
+
+  function updateSpentCasings(dt: number): void {
+    for (let i = casings.length - 1; i >= 0; i--) {
+      const c = casings[i]!
+      c.age += dt
+      if (c.age >= c.life) {
+        removeCasingAt(i)
+        continue
+      }
+      c.velocity.y -= CASING_GRAVITY * dt
+      c.mesh.position.addScaledVector(c.velocity, dt)
+      c.mesh.rotation.x += c.spin.x * dt
+      c.mesh.rotation.y += c.spin.y * dt
+      c.mesh.rotation.z += c.spin.z * dt
+
+      const gy = heightAt
+        ? heightAt(c.mesh.position.x, c.mesh.position.z)
+        : 0
+      const floor = gy + 0.04
+      if (c.mesh.position.y < floor) {
+        c.mesh.position.y = floor
+        if (c.velocity.y < 0) c.velocity.y *= -0.28
+        c.velocity.x *= 0.72
+        c.velocity.z *= 0.72
+        c.spin.multiplyScalar(0.82)
+        if (Math.abs(c.velocity.y) < 0.35 && c.velocity.length() < 0.9) {
+          c.velocity.set(0, 0, 0)
+          c.spin.set(0, 0, 0)
+        }
+      }
+    }
+  }
+
+  /** Schedule breech reload after casing eject delay (main gun only). */
+  function scheduleReload(id: AmmoId): void {
+    if (id === 'mg' || magazineSize > 0) return
+    reloadGate = RELOAD_START_DELAY
+    reloadGateAmmo = id
+    chambered = null
   }
 
   function removeAt(index: number): void {
@@ -1052,10 +1167,12 @@ export function createFireSystem(
         loading = id
         return
       }
-      if (chambered === id && cooldown <= 0) {
+      if (chambered === id && cooldown <= 0 && reloadGate <= 0) {
         loading = id
         return
       }
+      reloadGate = 0
+      reloadGateAmmo = null
       beginLoad(id)
     },
     getHudState() {
@@ -1101,18 +1218,34 @@ export function createFireSystem(
           stock: cloneAmmoStock(stock),
         }
       }
+      // Gate + breech timer read as one continuous reload bar.
+      const gateLeft = Math.max(0, reloadGate)
+      const reloadLeft = gateLeft > 0 ? gateLeft + cooldownMax : Math.max(0, cooldown)
+      const reloadTotal = gateLeft > 0 ? RELOAD_START_DELAY + cooldownMax : cooldownMax
       return {
         weapon,
         chambered,
         loading,
-        reloadLeft: Math.max(0, cooldown),
-        reloadTotal: cooldownMax,
-        ready: chambered !== null && cooldown <= 0 && pending === null,
+        reloadLeft,
+        reloadTotal,
+        ready:
+          chambered !== null &&
+          cooldown <= 0 &&
+          reloadGate <= 0 &&
+          pending === null,
         stock: cloneAmmoStock(stock),
         noMainGun,
       }
     },
-    update(dt, wantsFire, muzzle, dummies, camera, propColliders) {
+    update(dt, wantsFire, muzzle, dummies, camera, propColliders, turret) {
+      if (reloadGate > 0) {
+        reloadGate = Math.max(0, reloadGate - dt)
+        if (reloadGate <= 0 && reloadGateAmmo) {
+          const id = reloadGateAmmo
+          reloadGateAmmo = null
+          beginLoad(id)
+        }
+      }
       if (cooldown > 0) {
         cooldown = Math.max(0, cooldown - dt)
         if (cooldown <= 0 && chambered === null) {
@@ -1179,11 +1312,14 @@ export function createFireSystem(
         wantsFire &&
         chambered !== null &&
         cooldown <= 0 &&
+        reloadGate <= 0 &&
         pending === null
       ) {
         const fired = chambered
         if (stock[fired] <= 0) {
           chambered = null
+          reloadGate = 0
+          reloadGateAmmo = null
           beginLoad(loading)
         } else {
           playFireSound()
@@ -1194,7 +1330,7 @@ export function createFireSystem(
           }
           stock[fired]--
           chambered = null
-          beginLoad(loading)
+          scheduleReload(loading)
           triggered = true
         }
       }
@@ -1202,8 +1338,17 @@ export function createFireSystem(
       if (pending) {
         pending.remaining -= dt
         if (pending.remaining <= 0) {
-          spawnShell(muzzle, pending.ammoId, pending.dir)
+          const shotAmmo = pending.ammoId
+          spawnShell(muzzle, shotAmmo, pending.dir)
           pending = null
+          // Spent casing from turret breech (main AP/HE only).
+          if (
+            shotAmmo !== 'mg' &&
+            magazineSize <= 0 &&
+            turret
+          ) {
+            spawnSpentCasing(turret)
+          }
         }
       }
 
@@ -1307,18 +1452,24 @@ export function createFireSystem(
       }
 
       updateRocketTrails(dt)
+      updateSpentCasings(dt)
 
       return triggered
     },
     dispose() {
       pending = null
+      reloadGate = 0
+      reloadGateAmmo = null
       stopReloadSound()
       for (let i = shells.length - 1; i >= 0; i--) removeAt(i)
+      for (let i = casings.length - 1; i >= 0; i--) removeCasingAt(i)
       for (let i = rocketTrails.length - 1; i >= 0; i--) {
         killRocketTrail(rocketTrails[i]!)
       }
       rocketTrails.length = 0
       mgGeometry.dispose()
+      casingGeo.dispose()
+      casingMat.dispose()
       rocketBodyGeo.dispose()
       rocketTipGeo.dispose()
       rocketBodyMat.dispose()

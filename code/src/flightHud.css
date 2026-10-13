@@ -336,7 +336,8 @@
   min-width: 12px;
 }
 
-/* ——— Jet AAM lock (F-16 / MiG only) ——— */
+/* ——— Jet AAM / Apache AGM lock ——— */
+/* Same column as rockets; shift up when both are armed (Apache). */
 .fh-msl {
   position: absolute;
   bottom: calc(var(--fh-br-bottom) + 88px);
@@ -348,6 +349,10 @@
   border-radius: 6px;
   background: rgba(6, 14, 12, 0.42);
   z-index: 4;
+}
+
+.fhud.has-rockets .fh-msl {
+  bottom: calc(var(--fh-br-bottom) + 132px);
 }
 
 .fh-msl:not([hidden]) {

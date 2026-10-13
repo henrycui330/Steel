@@ -18,6 +18,7 @@ const MIG15_URL = assetUrl('models/mig15.glb?v=2')
 const MIG21_URL = assetUrl('models/mig21.glb?v=3')
 const SU25_URL = assetUrl('models/su25.glb?v=3')
 const SU27_URL = assetUrl('models/su27.glb?v=3')
+const APACHE_URL = assetUrl('models/apache.glb?v=1')
 
 /**
  * Prop revolutions per second. Deliberately *not* realistic (a real Corsair
@@ -61,6 +62,8 @@ type AircraftRigOpts = {
   noProp?: boolean
   /** Skip landing-gear carve / animation. */
   noGear?: boolean
+  /** Attack helo — find main rotor disc (horizontal), not a nose prop. */
+  helicopter?: boolean
 }
 
 /**
@@ -123,6 +126,40 @@ function findPropellers(model: THREE.Object3D, names: string[]): THREE.Object3D[
     if (thin / longest > 0.32) return
     if (mid / longest < 0.55) return
     const score = c.z * 2 - longest
+    if (score > bestScore) {
+      bestScore = score
+      best = obj
+    }
+  })
+  return best ? [best] : []
+}
+
+/**
+ * Main rotor — large horizontal disc (thin in Y, wide XZ). Nose-prop heuristic
+ * rejects these (span ≈ full airframe), so helis need their own picker.
+ */
+function findMainRotors(model: THREE.Object3D): THREE.Object3D[] {
+  model.updateMatrixWorld(true)
+  const air = new THREE.Box3().setFromObject(model)
+  const airSize = air.getSize(new THREE.Vector3())
+  const deckArea = Math.max(airSize.x * airSize.z, 0.001)
+  let best: THREE.Mesh | null = null
+  let bestScore = -Infinity
+  const c = new THREE.Vector3()
+  const s = new THREE.Vector3()
+  const b = new THREE.Box3()
+  model.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
+    b.setFromObject(obj)
+    b.getSize(s)
+    b.getCenter(c)
+    // Prefer flat in world Y (main rotor plane).
+    const thinY = s.y <= s.x && s.y <= s.z
+    if (!thinY) return
+    if (s.y / Math.max(s.x, s.z, 0.001) > 0.28) return
+    const area = s.x * s.z
+    if (area < deckArea * 0.12) return
+    const score = area + c.y * 40
     if (score > bestScore) {
       bestScore = score
       best = obj
@@ -231,9 +268,15 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     'Propellor',
     'Yak-9_Propellor',
   ]
-  const propNodes = opts.noProp ? [] : findPropellers(model, propNames)
+  const propNodes = opts.noProp
+    ? []
+    : opts.helicopter
+      ? findMainRotors(model)
+      : findPropellers(model, propNames)
   if (propNodes.length === 0 && !opts.noProp) {
-    console.warn(`[Steel] ${opts.name} propeller node not found — prop will not spin`)
+    console.warn(
+      `[Steel] ${opts.name} ${opts.helicopter ? 'main rotor' : 'propeller'} not found — will not spin`,
+    )
   }
 
   const propSpinners = propNodes.map((obj) => {
@@ -456,6 +499,21 @@ export async function loadSu27(): Promise<AircraftHandle> {
   })
 }
 
+/**
+ * AH Mk.1 Apache — British attack helo; main rotor spins; plane-like flight
+ * with collective hover. Rotor diameter ~14.6 m.
+ */
+export async function loadApache(): Promise<AircraftHandle> {
+  return loadAircraftRig({
+    url: APACHE_URL,
+    name: 'apache',
+    targetWingspan: 14.6,
+    helicopter: true,
+    noGear: true,
+    propNames: ['rotor', 'Rotor', 'MainRotor', 'main_rotor'],
+  })
+}
+
 /** Load the aircraft chosen on the menu / AI slot. */
 export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   const opt = tankOptionById(id)
@@ -468,6 +526,7 @@ export async function loadPlayerAircraft(id: TankId): Promise<AircraftHandle> {
   if (id === 'spitfire') return loadSpitfire()
   if (id === 'f35b') return loadF35B()
   if (id === 'tornado') return loadTornado()
+  if (id === 'apache') return loadApache()
   if (id === 'f16') return loadF16()
   if (id === 'mig15') return loadMig15()
   if (id === 'mig21') return loadMig21()

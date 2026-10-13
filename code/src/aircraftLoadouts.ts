@@ -40,9 +40,12 @@ function catalogBombCount(id: TankId): number {
   return tankOptionById(id).aircraftBombCount ?? 2
 }
 
-/** Stock loadout matches current spawn (Corsair strike, others bombs). */
+/** Stock loadout matches current spawn (Corsair strike, Apache rockets, others bombs). */
 export function defaultLoadoutId(id: TankId): LoadoutId {
-  return id === 'corsair' ? 'strike' : 'bombs'
+  if (id === 'corsair') return 'strike'
+  // Apache: unguided CRV7s via hangar; Hellfires are always on (samMissiles).
+  if (id === 'apache') return 'rockets'
+  return 'bombs'
 }
 
 export function loadoutOptionById(id: LoadoutId): LoadoutOption {
@@ -118,6 +121,7 @@ export function loadoutSelfTest(): boolean {
   const corsairStrike = resolveStores('corsair', 'strike')
   const p51Guns = resolveStores('p51', 'guns')
   const f35Bombs = resolveStores('f35b', 'bombs')
+  const apacheRockets = resolveStores('apache', 'rockets')
   const ok =
     corsairStrike.rockets === true &&
     corsairStrike.bombCount === 2 &&
@@ -125,12 +129,16 @@ export function loadoutSelfTest(): boolean {
     p51Guns.rockets === false &&
     f35Bombs.bombCount === 4 &&
     f35Bombs.rockets === false &&
+    apacheRockets.rockets === true &&
+    apacheRockets.bombCount === 0 &&
     defaultLoadoutId('corsair') === 'strike' &&
+    defaultLoadoutId('apache') === 'rockets' &&
     defaultLoadoutId('p51') === 'bombs'
   console.info(`[Steel] loadoutSelfTest ${ok ? 'PASS' : 'FAIL'}`, {
     corsairStrike,
     p51Guns,
     f35Bombs,
+    apacheRockets,
   })
   return ok
 }

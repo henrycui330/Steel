@@ -1010,7 +1010,6 @@ canvas {
   top: 50%;
   height: 1px;
   transform: translateY(-50%);
-  /* gap at center so the pip reads */
   background: linear-gradient(
     90deg,
     currentColor 0%,
@@ -1089,7 +1088,6 @@ canvas {
   width: 14px;
 }
 
-/* ~mil spacing as % of optic diameter */
 .mil-tick.mil-h.mil-n1 { left: calc(50% - 7%); }
 .mil-tick.mil-h.mil-n2 { left: calc(50% - 14%); }
 .mil-tick.mil-h.mil-n3 { left: calc(50% - 21%); }
@@ -1104,7 +1102,6 @@ canvas {
 .mil-tick.mil-v.mil-p2 { top: calc(50% + 14%); }
 .mil-tick.mil-v.mil-p3 { top: calc(50% + 21%); }
 
-/* Stadia chevron under center — quick ranging cue */
 .mil-stadia {
   position: absolute;
   left: 50%;
@@ -1159,17 +1156,59 @@ canvas {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
 }
 
+/* Free-look bracket shrinks when RMB optic is up */
 #hud.is-aiming .xhair-mouse {
-  width: 14px;
-  height: 14px;
-  opacity: 0.55;
+  width: 52px;
+  height: 28px;
+  opacity: 0.35;
 }
 
-#hud.is-aiming .xhair-mouse .xhair-dot {
-  width: 8px;
-  height: 8px;
-  margin: 3px;
+#hud.is-aiming .xhair-mouse .xh-pip {
+  width: 5px;
+  height: 5px;
   border-width: 1px;
+}
+
+#hud.is-aiming .xhair-mouse .xh-vpost {
+  height: 14px;
+  top: calc(50% - 7px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-brace {
+  height: 10px;
+}
+
+#hud.is-aiming .xhair-mouse .xh-brace-l {
+  left: calc(50% - 9px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-brace-r {
+  left: calc(50% + 6px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-eq {
+  width: 7px;
+  height: 5px;
+}
+
+#hud.is-aiming .xhair-mouse .xh-eq-l {
+  left: calc(50% - 20px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-eq-r {
+  left: calc(50% + 13px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-dash {
+  width: 10px;
+}
+
+#hud.is-aiming .xhair-mouse .xh-out-l {
+  left: calc(50% - 36px);
+}
+
+#hud.is-aiming .xhair-mouse .xh-out-r {
+  left: calc(50% + 26px);
 }
 
 #hud.is-aiming .hud-sight {
@@ -1405,8 +1444,8 @@ canvas {
   background: #8aa0b8;
 }
 
-#hud.is-assist .xhair-mouse .xhair-dot {
-  border-color: #e0c070;
+#hud.is-assist .xhair-mouse {
+  color: #e0c070;
 }
 
 .xhair {
@@ -1429,14 +1468,122 @@ canvas {
   border-radius: 50%;
 }
 
-/* Mouse aim — hollow ring. */
-.xhair-mouse .xhair-dot {
-  border: 2px solid #f2e6c4;
+/* Free-look — large horizontal bracket: - =[o]= - */
+.xhair-mouse {
+  width: 148px;
+  height: 44px;
+  color: #f2e6c4;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.95));
+}
+
+.xhair-mouse .xh-pip {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translate(-50%, -50%);
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
   background: transparent;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75);
+  opacity: 0.95;
+}
+
+.xhair-mouse .xh-vpost {
+  position: absolute;
+  left: 50%;
+  top: calc(50% - 16px);
+  width: 2px;
+  height: 32px;
+  transform: translateX(-50%);
+  background: currentColor;
+  opacity: 0.72;
+}
+
+.xhair-mouse .xh-brace {
+  position: absolute;
+  top: 50%;
+  width: 5px;
+  height: 22px;
+  transform: translateY(-50%);
+  box-sizing: border-box;
+  opacity: 0.92;
+}
+
+.xhair-mouse .xh-brace-l {
+  left: calc(50% - 20px);
+  border-left: 2.5px solid currentColor;
+  border-top: 2.5px solid currentColor;
+  border-bottom: 2.5px solid currentColor;
+}
+
+.xhair-mouse .xh-brace-r {
+  left: calc(50% + 15px);
+  border-right: 2.5px solid currentColor;
+  border-top: 2.5px solid currentColor;
+  border-bottom: 2.5px solid currentColor;
+}
+
+.xhair-mouse .xh-eq {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 11px;
+  transform: translateY(-50%);
+  opacity: 0.9;
+}
+
+.xhair-mouse .xh-eq::before,
+.xhair-mouse .xh-eq::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: currentColor;
+}
+
+.xhair-mouse .xh-eq::before {
+  top: 0;
+}
+
+.xhair-mouse .xh-eq::after {
+  bottom: 0;
+}
+
+.xhair-mouse .xh-eq-l {
+  left: calc(50% - 42px);
+}
+
+.xhair-mouse .xh-eq-r {
+  left: calc(50% + 28px);
+}
+
+.xhair-mouse .xh-dash {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 2px;
+  transform: translateY(-50%);
+  background: currentColor;
+  opacity: 0.85;
+}
+
+.xhair-mouse .xh-out-l {
+  left: calc(50% - 78px);
+}
+
+.xhair-mouse .xh-out-r {
+  left: calc(50% + 52px);
 }
 
 /* Gun aim — filled dot, where the turret is actually pointed. */
+.xhair-barrel {
+  width: 18px;
+  height: 18px;
+}
+
 .xhair-barrel .xhair-dot {
   width: 8px;
   height: 8px;
@@ -1877,6 +2024,14 @@ canvas {
   opacity: 0.95;
 }
 
+.minimap-river {
+  fill: none;
+  stroke: #3a7a9a;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.88;
+}
+
 .is-desert .minimap-road {
   stroke: #8a6a40;
 }
@@ -1960,6 +2115,10 @@ canvas {
 
 .mm-key.mm-road {
   background: #d4a86a;
+}
+
+.mm-key.mm-river {
+  background: #3a7a9a;
 }
 
 .mm-key.mm-town {

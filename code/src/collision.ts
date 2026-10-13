@@ -37,6 +37,86 @@ function toWorld(lx: number, lz: number, yaw: number): { dx: number; dz: number 
   return { dx: lx * c + lz * s, dz: -lx * s + lz * c }
 }
 
+/** Spatial hash so tanks don't scan every tree every frame. */
+export type PropColliderGrid = {
+  cell: number
+  originX: number
+  originZ: number
+  nx: number
+  nz: number
+  buckets: PropCollider[][]
+}
+
+let _gridSrc: readonly PropCollider[] | null = null
+let _grid: PropColliderGrid | null = null
+const _nearBuf: PropCollider[] = []
+const _nearSeen = new Set<PropCollider>()
+
+export function buildPropColliderGrid(
+  colliders: readonly PropCollider[],
+  cell = 48,
+): PropColliderGrid {
+  let minX = Infinity
+  let maxX = -Infinity
+  let minZ = Infinity
+  let maxZ = -Infinity
+  for (const c of colliders) {
+    const r = c.radius
+    if (c.x - r < minX) minX = c.x - r
+    if (c.x + r > maxX) maxX = c.x + r
+    if (c.z - r < minZ) minZ = c.z - r
+    if (c.z + r > maxZ) maxZ = c.z + r
+  }
+  if (!Number.isFinite(minX)) {
+    return { cell, originX: 0, originZ: 0, nx: 1, nz: 1, buckets: [[]] }
+  }
+  minX -= cell
+  maxX += cell
+  minZ -= cell
+  maxZ += cell
+  const nx = Math.max(1, Math.ceil((maxX - minX) / cell))
+  const nz = Math.max(1, Math.ceil((maxZ - minZ) / cell))
+  const buckets: PropCollider[][] = Array.from({ length: nx * nz }, () => [])
+  for (const c of colliders) {
+    const x0 = Math.max(0, Math.floor((c.x - c.radius - minX) / cell))
+    const x1 = Math.min(nx - 1, Math.floor((c.x + c.radius - minX) / cell))
+    const z0 = Math.max(0, Math.floor((c.z - c.radius - minZ) / cell))
+    const z1 = Math.min(nz - 1, Math.floor((c.z + c.radius - minZ) / cell))
+    for (let iz = z0; iz <= z1; iz++) {
+      for (let ix = x0; ix <= x1; ix++) {
+        buckets[iz * nx + ix]!.push(c)
+      }
+    }
+  }
+  return { cell, originX: minX, originZ: minZ, nx, nz, buckets }
+}
+
+function collidersNear(
+  grid: PropColliderGrid,
+  x: number,
+  z: number,
+  radius: number,
+): PropCollider[] {
+  _nearBuf.length = 0
+  _nearSeen.clear()
+  const x0 = Math.max(0, Math.floor((x - radius - grid.originX) / grid.cell))
+  const x1 = Math.min(grid.nx - 1, Math.floor((x + radius - grid.originX) / grid.cell))
+  const z0 = Math.max(0, Math.floor((z - radius - grid.originZ) / grid.cell))
+  const z1 = Math.min(grid.nz - 1, Math.floor((z + radius - grid.originZ) / grid.cell))
+  for (let iz = z0; iz <= z1; iz++) {
+    for (let ix = x0; ix <= x1; ix++) {
+      const bucket = grid.buckets[iz * grid.nx + ix]!
+      for (let i = 0; i < bucket.length; i++) {
+        const c = bucket[i]!
+        if (_nearSeen.has(c)) continue
+        _nearSeen.add(c)
+        _nearBuf.push(c)
+      }
+    }
+  }
+  return _nearBuf
+}
+
 /**
  * Push a circle (tank) out of overlapping props.
  * Returns true if any solid pushed the agent (caller should hard-stop).
@@ -45,13 +125,26 @@ export function resolvePropCollisions(
   pos: THREE.Vector3,
   agentRadius: number,
   colliders: readonly PropCollider[],
-  passes = 3,
+  passes = 2,
 ): boolean {
   if (colliders.length === 0) return false
 
+  let list: readonly PropCollider[] = colliders
+  if (colliders.length > 48) {
+    if (_gridSrc !== colliders) {
+      _gridSrc = colliders
+      _grid = buildPropColliderGrid(colliders)
+    }
+    list = collidersNear(_grid!, pos.x, pos.z, agentRadius + 6)
+  }
+
   let hit = false
   for (let pass = 0; pass < passes; pass++) {
-    for (const c of colliders) {
+    if (colliders.length > 48 && _grid) {
+      list = collidersNear(_grid, pos.x, pos.z, agentRadius + 6)
+    }
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i]!
       if (isBox(c)) {
         if (resolveCircleVsBox(pos, agentRadius, c)) hit = true
       } else if (resolveCircleVsCircle(pos, agentRadius, c)) {
@@ -277,9 +370,10 @@ export function estimatePropCollider(
 ): Pick<PropCollider, 'radius' | 'maxY'> {
   switch (kind) {
     case 'tree':
+      // Trunk bole only — canopy must not be a solid wall (dense forest feel).
       return {
-        radius: THREE.MathUtils.clamp(height * 0.09, 0.55, 1.4),
-        maxY: THREE.MathUtils.clamp(height * 0.28, 2.2, 4.5),
+        radius: THREE.MathUtils.clamp(height * 0.042, 0.48, 0.95),
+        maxY: THREE.MathUtils.clamp(height * 0.3, 2.4, 5),
       }
     case 'rock':
       return {

@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import type { TeamId } from './nations'
-import { FOREST_TOWNS, nearestRoadPoint, type ForestTown } from './maps/forestOverwatch'
+import {
+  FOREST_OVERWATCH_DEPTH,
+  FOREST_TOWNS,
+  nearestRoadPoint,
+  type ForestTown,
+} from './maps/forestOverwatch'
 
 /** Red / Vostok attacks north along the diagonal towns. */
 export const FRONTLINE_ATTACKER: TeamId = 'red'
@@ -11,7 +16,10 @@ export const FRONTLINE_MATCH_SEC = 12 * 60
 export const FRONTLINE_RESPAWN_SEC = 5
 
 const SLOT_SPREAD = 24
-const LAST_TOWN_NEXT = { x: 0, z: 2300 }
+const LAST_TOWN_NEXT = {
+  x: FOREST_TOWNS[FOREST_TOWNS.length - 1]?.x ?? 0,
+  z: FOREST_OVERWATCH_DEPTH * 0.45,
+}
 
 export function frontlineTowns(): readonly ForestTown[] {
   return FOREST_TOWNS
@@ -113,7 +121,8 @@ export function tickFrontline(
 }
 
 function slotOffset(index: number): { x: number; z: number } {
-  const a = -Math.PI / 2 + (index % 3) * ((Math.PI * 2) / 3)
+  // Spread extras around the 2 sketch pads (and AI sharing a pad)
+  const a = -Math.PI / 2 + (index % 4) * (Math.PI / 2)
   return { x: Math.cos(a) * SLOT_SPREAD, z: Math.sin(a) * SLOT_SPREAD }
 }
 

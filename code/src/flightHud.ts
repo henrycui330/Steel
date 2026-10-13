@@ -45,10 +45,12 @@ export type RocketHudState = {
   remaining: number
 }
 
-/** F-16 missile lock + ammo. */
+/** Jet AAM / Apache AGM lock + ammo. */
 export type MissileHudState = {
   phase: 'idle' | 'soft' | 'acquiring' | 'hard'
   ammo?: number
+  /** Plate label — e.g. AAM / AGM (default MSL). */
+  label?: string
 }
 
 /** Screen rect of the scope, so the renderer can match its viewport. */
@@ -156,10 +158,10 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       <span class="fh-rkt-hint">R</span>
     </div>
     <div class="fh-msl" hidden>
-      <span class="fh-label">MSL</span>
+      <span class="fh-label fh-msl-label">MSL</span>
       <span class="fh-value fh-msl-status">—</span>
       <span class="fh-msl-ammo" hidden></span>
-      <span class="fh-msl-hint">P lock/unlock · M fire · Q chaff</span>
+      <span class="fh-msl-hint">P · M · Q</span>
     </div>
     <div class="fh-cm-banner" hidden>Releasing, Chaff, Flare</div>
     <div class="fh-scope" hidden>
@@ -241,6 +243,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   const rocketsEl = root.querySelector<HTMLElement>('.fh-rockets')!
   const rktCount = root.querySelector<HTMLElement>('.fh-rkt-count')!
   const mslEl = root.querySelector<HTMLElement>('.fh-msl')!
+  const mslLabelEl = root.querySelector<HTMLElement>('.fh-msl-label')!
   const mslStatus = root.querySelector<HTMLElement>('.fh-msl-status')!
   const mslAmmo = root.querySelector<HTMLElement>('.fh-msl-ammo')!
   const cmBanner = root.querySelector<HTMLElement>('.fh-cm-banner')!
@@ -274,6 +277,7 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
   let lastHp = -1
   let lastMsl = ''
   let lastMslAmmo = -1
+  let lastMslLabel = ''
   let lastCm = false
 
   return {
@@ -376,6 +380,8 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
       } else if (!rocketsEl.hidden) {
         rocketsEl.hidden = true
       }
+      root.classList.toggle('has-rockets', !!rockets)
+      root.classList.toggle('has-msl', !!missiles)
 
       if (!guns) {
         if (!gunsEl.hidden) gunsEl.hidden = true
@@ -405,6 +411,11 @@ export function createFlightHud(minimap?: HudMinimapConfig): FlightHud {
         if (!mslEl.hidden) mslEl.hidden = true
       } else {
         if (mslEl.hidden) mslEl.hidden = false
+        const plate = missiles.label ?? 'MSL'
+        if (plate !== lastMslLabel) {
+          lastMslLabel = plate
+          mslLabelEl.textContent = plate
+        }
         const label =
           missiles.phase === 'hard'
             ? 'LOCKED'
