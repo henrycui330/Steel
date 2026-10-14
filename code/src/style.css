@@ -66,9 +66,9 @@ canvas {
 #loading-overlay .loading-brand {
   margin: 0;
   font-family: var(--menu-display);
-  font-size: 1.85rem;
+  font-size: clamp(1.15rem, 4.5vw, 1.65rem);
   font-weight: 700;
-  letter-spacing: 0.28em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--menu-accent);
 }
@@ -260,8 +260,8 @@ canvas {
 }
 
 .hangar-header .menu-brand {
-  font-size: clamp(1.8rem, 5vw, 2.4rem);
-  letter-spacing: 0.14em;
+  font-size: clamp(1.35rem, 4vw, 2rem);
+  letter-spacing: 0.08em;
 }
 
 .hangar-body {
@@ -685,10 +685,10 @@ canvas {
 .menu-brand {
   margin: 0 0 0.35rem;
   font-family: var(--menu-display);
-  font-size: clamp(2.5rem, 8vw, 3.5rem);
+  font-size: clamp(1.55rem, 5.5vw, 2.55rem);
   font-weight: 700;
-  letter-spacing: 0.16em;
-  line-height: 1;
+  letter-spacing: 0.1em;
+  line-height: 1.05;
   text-transform: uppercase;
   color: var(--menu-accent);
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.55);
@@ -922,8 +922,8 @@ canvas {
   --hud-pad-bottom: max(0.85rem, env(safe-area-inset-bottom, 0px) + 0.55rem);
   --hud-koth-h: 0px;
   --hud-compass-h: 4.35rem;
-  --hud-corner-w: min(240px, calc(42vw - 1.25rem));
-  --hud-bottom-reserve: min(46vh, 17.5rem);
+  --hud-corner-w: min(340px, calc(48vw - 0.75rem));
+  --hud-bottom-reserve: min(42vh, 16.5rem);
 }
 
 #hud {
@@ -1336,27 +1336,129 @@ canvas {
   letter-spacing: 0.06em;
 }
 
-.combat-speed {
+/* ——— Metal dashboard cluster (skeuomorphic) ——— */
+.dash-cluster {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  width: 100%;
+  pointer-events: none;
+  filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.55));
+}
+
+.dash-panel {
   position: relative;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.5rem 0.45rem;
+  background:
+    linear-gradient(165deg, #6a6e74 0%, #4a4e54 28%, #3a3e44 62%, #2e3238 100%);
+  border: 1px solid #1a1c20;
+  border-radius: 0.55rem;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -2px 4px rgba(0, 0, 0, 0.35),
+    0 2px 0 #1c1e22;
 }
 
-.combat-speed .speed-text {
-  font-size: 1.35rem;
-  color: var(--hud-accent, #b8c96a);
+.dash-screw {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #d8d8d8 0%, #8a8a8a 45%, #3a3a3a 100%);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
 }
 
-.combat-speed .speed-text.is-rev {
-  color: var(--hud-warn, #e0a060);
+.dash-screw::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 20%;
+  width: 1px;
+  height: 60%;
+  background: rgba(20, 20, 20, 0.75);
+  transform: translateX(-50%) rotate(28deg);
 }
 
-.speed-unit {
+.dash-screw-tl { top: 5px; left: 5px; }
+.dash-screw-tr { top: 5px; right: 5px; }
+.dash-screw-bl { bottom: 5px; left: 5px; }
+.dash-screw-br { bottom: 5px; right: 5px; }
+
+.dash-vent {
+  height: 4px;
+  margin: 0 0.35rem 0.35rem;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #1a1a1a, #3a3a3a);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+.dash-speed {
+  width: min(9.6rem, 28vw);
+}
+
+.dash-aux {
+  width: min(11.2rem, 34vw);
+}
+
+.dash-aux-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+}
+
+.inst-face {
   display: block;
-  margin-top: -0.1rem;
-  font-size: 0.68rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--hud-muted, rgba(216, 224, 212, 0.55));
-  text-align: right;
+  width: 100%;
+  height: auto;
+}
+
+.inst-face-sm {
+  width: 100%;
+}
+
+.inst-tick {
+  stroke: rgba(230, 230, 230, 0.55);
+  stroke-width: 1.2;
+}
+
+.inst-tick-major {
+  stroke: #f2f2f2;
+  stroke-width: 2;
+}
+
+.inst-num {
+  fill: #f0f0f0;
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inst-face-label {
+  fill: #e8e8e8;
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.inst-fuel-ico {
+  fill: #e8e8e8;
+  font-size: 14px;
+}
+
+.inst-weapon {
+  margin-top: 0.35rem;
+  background: rgba(20, 22, 26, 0.72);
+  border-color: rgba(140, 145, 150, 0.4);
+  clip-path: none;
+  border-radius: 0.35rem;
+}
+
+.inst-weapon::before,
+.inst-weapon::after {
+  display: none;
 }
 
 /* Sight-centric gun ready — anchored above bottom corner reserve */
@@ -1655,9 +1757,11 @@ canvas {
 }
 
 .hud-br {
-  right: max(0.85rem, env(safe-area-inset-right, 0px) + 0.55rem);
+  right: max(1.1rem, env(safe-area-inset-right, 0px) + 0.85rem);
   bottom: var(--hud-pad-bottom);
   align-items: stretch;
+  overflow: visible;
+  max-height: none;
 }
 
 .hud-plate {
@@ -2446,6 +2550,10 @@ canvas {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+  background: rgba(8, 10, 12, 0.55);
+  border: 1px solid rgba(140, 150, 160, 0.28);
+  padding: 0.2rem;
+  border-radius: 2px;
 }
 
 .combat-magazine.is-empty .magazine-text {
@@ -2549,9 +2657,21 @@ canvas {
 
 @media (max-width: 640px) {
   :root {
-    --hud-corner-w: min(42vw, 168px);
-    --hud-bottom-reserve: min(40vh, 14rem);
+    --hud-corner-w: min(92vw, 340px);
+    --hud-bottom-reserve: min(36vh, 14rem);
     --hud-compass-h: 3.85rem;
+  }
+
+  .dash-cluster {
+    gap: 0.25rem;
+  }
+
+  .dash-speed {
+    width: min(7.2rem, 26vw);
+  }
+
+  .dash-aux {
+    width: min(8.4rem, 32vw);
   }
 
   .hud-corner {
@@ -2667,9 +2787,9 @@ canvas {
 
 .match-end-brand {
   margin: 0 0 0.35rem;
-  font-size: 1.1rem;
+  font-size: clamp(0.85rem, 2.5vw, 1.05rem);
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: #c4a35a;
 }

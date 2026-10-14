@@ -1,6 +1,6 @@
-# Steel
+# Armored Divisions
 
-Browser 3D tank skirmish (Vite + Three.js).
+Browser 3D tank skirmish (Vite + Three.js). Repo folder / GitHub Pages path remain `Steel`.
 
 ## Play
 

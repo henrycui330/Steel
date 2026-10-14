@@ -226,6 +226,7 @@ const BY_ID: Partial<Record<TankId, DamageSilhouette>> = {
   bradley: IFV,
   m3a3: IFV,
   desertWarrior: IFV,
+  bmp1u: IFV,
   btr82a: WHEELED,
   lav25: WHEELED,
   duster: SPAAG,

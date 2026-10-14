@@ -461,81 +461,59 @@ function prepareChallenger2(root: THREE.Object3D): boolean {
 }
 
 /**
- * WoT Chieftain/T95 — Hull.pri / Turret_01 / Gun_01 (+ Chassis track runs).
- * GLTFLoader strips `.` / `\\` from names (`Hull.pri` → `Hullpri`). Gun −Z → 180° Y.
+ * Chieftain Mk.5 (Sketchfab Object_* pack).
+ * Object_4 Hull · Object_2 Turret · Object_5 Cannon (authored tip already +Z — no Y bake).
  */
-function findNodeNameMatch(root: THREE.Object3D, re: RegExp): THREE.Object3D | null {
-  let group: THREE.Object3D | null = null
-  let mesh: THREE.Mesh | null = null
-  root.traverse((o) => {
-    if (!o.name || !re.test(o.name)) return
-    if (o instanceof THREE.Mesh) {
-      if (!mesh) mesh = o
-    } else if (!group) {
-      group = o
-    }
-  })
-  return group ?? mesh
-}
-
 function prepareChieftain(root: THREE.Object3D): boolean {
-  let isChieftain = false
+  let isMk5 = false
   root.traverse((o) => {
-    if (/gb87_chieftain|chieftain_t95|chieftaint95|chieftain.?t95/i.test(o.name)) {
-      isChieftain = true
+    if (/chieftain.?mk.?5|mk-5 main battle/i.test(o.name)) isMk5 = true
+    if (!(o instanceof THREE.Mesh) || !o.material) return
+    const mats = Array.isArray(o.material) ? o.material : [o.material]
+    for (const m of mats) {
+      if (m && /Cannon_128|Turret_995|Hull_361/i.test(m.name || '')) isMk5 = true
     }
   })
-  if (!isChieftain) return false
+  if (!isMk5) return false
 
-  const hull = findNodeNameMatch(root, /hullpri|hull\.pri/i)
-  const turret = findNodeNameMatch(root, /turret_01/i)
-  const barrel = findNodeNameMatch(root, /gun_01/i)
-  if (!hull || !turret || !barrel) {
-    const names: string[] = []
-    root.traverse((o) => {
-      if (o.name && names.length < 24) names.push(o.name)
-    })
-    console.warn('[Steel] Chieftain prep miss hull=', !!hull, 'turret=', !!turret, 'barrel=', !!barrel, names)
+  const hull = root.getObjectByName('Object_4')
+  const turret = root.getObjectByName('Object_2')
+  const barrel = root.getObjectByName('Object_5')
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turret instanceof THREE.Mesh) ||
+    !(barrel instanceof THREE.Mesh)
+  ) {
+    console.warn('[Steel] Chieftain Mk5 prep miss Object_4/2/5')
     return false
   }
 
-  // Pack already faces game +Z after Sketchfab Z-up. Extra 180 put the bustle
-  // in the camera and the gun in the sky.
+  // Tip is already +Z; prior Math.PI bake faced the wrong way — leave yaw 0.
+  root.rotation.y = 0
+  root.updateMatrixWorld(true)
+
   hull.name = 'Hull'
   turret.name = 'Turret'
   barrel.name = 'Barrel'
-  // Keep gun as a sibling of turret so the cam mount AABB is the turret body,
-  // not the bore.
   root.userData.forceDoubleSide = true
 
-  const chassis: THREE.Object3D[] = []
-  root.traverse((o) => {
-    if (o !== hull && /chassispri|chassis\.pri/i.test(o.name) && !(o instanceof THREE.Mesh)) {
-      chassis.push(o)
-    }
-  })
-  if (chassis.length === 0) {
-    root.traverse((o) => {
-      if (o instanceof THREE.Mesh && o !== hull && /chassispri|chassis\.pri/i.test(o.name)) {
-        chassis.push(o)
-      }
-    })
+  // Turret stack: shell + applique + bustle gear + glass/cupolas + cannon.
+  // Hull stack: skirts + tracks + wheels (must not yaw with the turret).
+  if (barrel.parent !== turret) turret.attach(barrel)
+  for (const n of ['Object_6', 'Object_7', 'Object_8', 'Object_9']) {
+    const part = root.getObjectByName(n)
+    if (part && part.parent !== turret) turret.attach(part)
   }
-  const size = new THREE.Vector3()
-  const _c = new THREE.Vector3()
-  const _b = new THREE.Box3()
-  for (const node of chassis) {
-    if (node.parent !== hull) hull.attach(node)
-    _b.setFromObject(node)
-    _b.getCenter(_c)
-    _b.getSize(size)
-    const longest = Math.max(size.x, size.y, size.z)
-    if (longest > 5) {
-      node.name = _c.x < 0 ? 'TrackL' : 'TrackR'
-    }
+  for (const n of ['Object_3', 'Object_10', 'Object_11', 'Object_12']) {
+    const part = root.getObjectByName(n)
+    if (part && part.parent !== hull) hull.attach(part)
   }
+  const track = root.getObjectByName('Object_10')
+  if (track) track.name = 'TrackL'
 
-  console.info('[Steel] Chieftain/T95: Hull + Turret_01 + Gun_01 (no extra yaw, double-side)')
+  console.info(
+    '[Steel] Chieftain Mk5: Hull Object_4+skirts/tracks/wheels · Turret Object_2+applique/gear/glass + Cannon Object_5',
+  )
   return true
 }
 
@@ -962,6 +940,60 @@ function prepareKhrizantema(root: THREE.Object3D): boolean {
   }
 
   console.info('[Steel] Khrizantema-S: mount2 turret + mount001 barrel (−90° Y); dish/sensors on Hull')
+  return true
+}
+
+/**
+ * BMP-1U Shkval — Sketchfab bake (4 material meshes under node `1`).
+ * Material001 hull · Material002 Shkval turret (30mm baked) · Material003 tracks · Material004 hull kit.
+ * Tip already +Z. Peel forward stick so elevation doesn't tip the whole turret brick.
+ */
+function prepareBmp1u(root: THREE.Object3D): boolean {
+  const hull = root.getObjectByName('1_Material001_0')
+  const turret = root.getObjectByName('1_Material002_0')
+  const tracks = root.getObjectByName('1_Material003_0')
+  const hullKit = root.getObjectByName('1_Material004_0')
+  // Unique 4-mesh fingerprint — pack has no "bmp/shkval" node names after load.
+  if (
+    !(hull instanceof THREE.Mesh) ||
+    !(turret instanceof THREE.Mesh) ||
+    !(tracks instanceof THREE.Mesh) ||
+    !(hullKit instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+
+  hull.name = 'Hull'
+  turret.name = 'Turret'
+  root.userData.forceDoubleSide = true
+
+  for (const part of [tracks, hullKit]) {
+    if (part && part.parent !== hull) hull.attach(part)
+  }
+  if (tracks) tracks.name = 'TrackL'
+
+  // Thin tube starts ~z≥0.47 (frac≈0.55); peel before finishRig elevates the brick.
+  const tBox = new THREE.Box3().setFromObject(turret)
+  const tSize = tBox.getSize(new THREE.Vector3())
+  const zCut = tBox.min.z + tSize.z * 0.55
+  const barrel = peelForwardGunStick(turret, 0.55)
+  if (barrel && barrel.parent !== turret) turret.attach(barrel)
+  if (!barrel) {
+    console.warn('[Steel] BMP-1U: barrel peel failed — elevation will tip whole turret')
+  } else {
+    // Peel can leave tip scrap islands on the turret — they shove the yaw ring forward.
+    const scrap = extractMeshRegion(turret, (p) => p.z >= zCut - 0.08, '_bmpScrap')
+    if (scrap) {
+      scrap.parent?.remove(scrap)
+      scrap.geometry.dispose()
+    }
+  }
+  // AABB still elongated; yaw ring must use vertex mass-center (not forward-biased AABB).
+  turret.userData.yawRingMassCenter = true
+
+  console.info(
+    `[Steel] BMP-1U Shkval: Hull Material001 + Turret Material002${barrel ? ' + peeled Barrel' : ''}`,
+  )
   return true
 }
 
@@ -1419,11 +1451,40 @@ function prepareM901(root: THREE.Object3D): boolean {
 }
 
 /**
+ * M42 Duster WT pack — vs M3A3 (shares Object_3/5/12/13/18/23/24 ids).
+ * Prefer name; else both Object_3+5 must be long track runs (M3A3 Object_5 is short).
+ */
+function isDusterPack(root: THREE.Object3D): boolean {
+  let named = false
+  root.traverse((o) => {
+    if (/m42|duster/i.test(o.name)) named = true
+  })
+  if (named) return true
+  const trackL = root.getObjectByName('Object_3')
+  const trackR = root.getObjectByName('Object_5')
+  const basket = root.getObjectByName('Object_23')
+  const guns = root.getObjectByName('Object_24')
+  if (
+    !(trackL instanceof THREE.Mesh) ||
+    !(trackR instanceof THREE.Mesh) ||
+    !(basket instanceof THREE.Mesh) ||
+    !(guns instanceof THREE.Mesh)
+  ) {
+    return false
+  }
+  const sL = new THREE.Box3().setFromObject(trackL).getSize(new THREE.Vector3())
+  const sR = new THREE.Box3().setFromObject(trackR).getSize(new THREE.Vector3())
+  return sL.z > 4 && sR.z > 4
+}
+
+/**
  * M3A3 Bradley — Object_* SpecGloss→metalrough bake.
  * Object_24 hull · Object_13 turret · Object_12 25mm tube · Object_18 TOW mast.
  * Gun already +Z. Fingerprint must beat prepareDuster (shares Object_3/5/23/24).
  */
 function prepareM3A3Bradley(root: THREE.Object3D): boolean {
+  // M42 Duster shares Object_12/13/18/24 — those are hull/gun pieces there, not Bradley.
+  if (isDusterPack(root)) return false
   // M55 SPG also has Object_12/13/18/24 — leave that path to prepareM55.
   if (isM55Pack(root)) return false
   // M551 Sheridan shares Object_12/13/18/24 ids too.
@@ -1541,14 +1602,7 @@ function preparePershing(root: THREE.Object3D): boolean {
  * Object_3 / Object_5 ≈ left/right track runs (fingerprint vs Pershing).
  */
 function prepareDuster(root: THREE.Object3D): boolean {
-  // M3A3 Bradley shares Object_3/5/23/24 — reject its turret/gun/TOW fingerprint.
-  if (
-    root.getObjectByName('Object_12') instanceof THREE.Mesh &&
-    root.getObjectByName('Object_13') instanceof THREE.Mesh &&
-    root.getObjectByName('Object_18') instanceof THREE.Mesh
-  ) {
-    return false
-  }
+  if (!isDusterPack(root)) return false
   // M55 SPG also shares Object_3/5/23/24.
   if (isM55Pack(root)) return false
   // M551 Sheridan shares Object_5/23/24 (Object_3 exists too).
@@ -1571,15 +1625,44 @@ function prepareDuster(root: THREE.Object3D): boolean {
   }
 
   const hull = root.getObjectByName('Object_11') ?? root.getObjectByName('Object_10')
-  if (hull) hull.name = 'Hull'
+  if (!(hull instanceof THREE.Mesh)) {
+    console.warn('[Steel] Duster: missing hull Object_11/10')
+    return false
+  }
+  hull.name = 'Hull'
 
+  // Hull: skirts/fenders/body + tracks/wheels (must not yaw with the open turret).
+  for (const n of [
+    'Object_3',
+    'Object_5',
+    'Object_7',
+    'Object_9',
+    'Object_10',
+    'Object_12',
+    'Object_13',
+    'Object_14',
+    'Object_15',
+    'Object_16',
+    'Object_17',
+    'Object_18',
+    'Object_19',
+    'Object_20',
+  ]) {
+    const part = root.getObjectByName(n)
+    if (part && part !== hull && part.parent !== hull) hull.attach(part)
+  }
+  trackL.name = 'TrackL'
+  trackR.name = 'TrackR'
+
+  // Turret basket + seats/sights + twin Bofors.
   turretMain.name = 'Turret'
   for (const n of ['Object_21', 'Object_22', 'Object_2', 'Object_6', 'Object_4', 'Object_8']) {
     const extra = root.getObjectByName(n)
-    if (extra) turretMain.attach(extra)
+    if (extra && extra.parent !== turretMain) turretMain.attach(extra)
   }
   barrel.name = 'Barrel'
-  console.info('[Steel] Duster: labeled Hull/Turret/Barrel (Object_23 + Object_24)')
+  if (barrel.parent !== turretMain) turretMain.attach(barrel)
+  console.info('[Steel] Duster: Hull Object_11 + Turret Object_23 + Barrel Object_24')
   return true
 }
 
@@ -1686,6 +1769,7 @@ function createYawPivot(
   const size = bodyBox.getSize(new THREE.Vector3())
   let ringX = (bodyBox.min.x + bodyBox.max.x) * 0.5
   let ringZ = (bodyBox.min.z + bodyBox.max.z) * 0.5
+  let ringY = bodyBox.min.y
   // +Z = gun forward.
   // Bustle-only turret mesh (barrel separate): elongated → bias forward toward ring.
   // Gun baked into turret (very long Z, no Barrel): bias aft toward the basket / ring.
@@ -1697,7 +1781,34 @@ function createYawPivot(
     // that sat the ring too far forward on Leo2).
     ringZ = bodyBox.min.z + size.z * 0.55
   }
-  const worldPos = new THREE.Vector3(ringX, bodyBox.min.y, ringZ)
+  // BMP / peeled IFVs: tip scraps stretch AABB — use vertex mass-center XZ instead.
+  if (turretMesh.userData.yawRingMassCenter && ringSrc instanceof THREE.Mesh) {
+    const pos = ringSrc.geometry?.attributes.position
+    if (pos) {
+      const v = new THREE.Vector3()
+      let sx = 0
+      let sy = 0
+      let sz = 0
+      let n = 0
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(ringSrc.matrixWorld)
+        sx += v.x
+        sy += v.y
+        sz += v.z
+        n++
+      }
+      if (n > 0) {
+        ringX = sx / n
+        ringZ = sz / n
+        // Ring on the floor of the basket (not floating mid-volume).
+        ringY = bodyBox.min.y
+        console.info(
+          `[Steel] Yaw ring mass-center xz=(${ringX.toFixed(2)}, ${ringZ.toFixed(2)})`,
+        )
+      }
+    }
+  }
+  const worldPos = new THREE.Vector3(ringX, ringY, ringZ)
   tankRoot.worldToLocal(worldPos)
   pivot.position.copy(worldPos)
   tankRoot.add(pivot)
@@ -1817,19 +1928,30 @@ function barrelHingeWorld(barrelMesh: THREE.Object3D, turretMesh: THREE.Object3D
 
   // Turret body only — setFromObject(turret) includes the gun and shoves the hinge forward (T-72).
   const turretBox = meshGeometryWorldBox(turretRingSource(turretMesh))
-  const turretFrontZ = turretBox.max.z
   const longAlongZ = size.z > size.x * 1.5 && size.z > size.y * 1.5 && size.z > 0.45
 
   if (longAlongZ) {
-    // Default: aft end of the tube (breech / mantlet root).
-    let hingeZ = barrelBox.min.z + size.z * 0.05
+    // Breech = end closer to the turret body (supports packs with tip on −Z).
+    const turretMidZ = (turretBox.min.z + turretBox.max.z) * 0.5
+    const tipIsMinZ =
+      Math.abs(barrelBox.min.z - turretMidZ) > Math.abs(barrelBox.max.z - turretMidZ)
+    let hingeZ = tipIsMinZ
+      ? barrelBox.max.z - size.z * 0.05
+      : barrelBox.min.z + size.z * 0.05
     // Recessed barrel (Leo2): mesh continues into the turret — hinge on the fat
     // collar near the port, not the thin tube at the turret face (that swings
     // the circular base into the hole).
-    const penetrate = (turretFrontZ - barrelBox.min.z) / size.z
+    const frontZ = tipIsMinZ ? turretBox.min.z : turretBox.max.z
+    const penetrate = tipIsMinZ
+      ? (barrelBox.max.z - frontZ) / size.z
+      : (frontZ - barrelBox.min.z) / size.z
     if (penetrate > 0.32) {
-      const collarZ = barrelCollarHingeZ(barrelMesh, barrelBox, turretFrontZ)
-      hingeZ = collarZ ?? turretFrontZ - Math.min(0.12, size.z * 0.02)
+      const collarZ = barrelCollarHingeZ(barrelMesh, barrelBox, frontZ)
+      hingeZ =
+        collarZ ??
+        (tipIsMinZ
+          ? frontZ + Math.min(0.12, size.z * 0.02)
+          : frontZ - Math.min(0.12, size.z * 0.02))
     }
     return new THREE.Vector3(cx, cy, hingeZ)
   }
@@ -1892,14 +2014,18 @@ function placeMuzzle(pitchPivot: THREE.Object3D, barrelMesh: THREE.Object3D): TH
   pitchPivot.updateMatrixWorld(true)
   barrelMesh.updateMatrixWorld(true)
   const box = new THREE.Box3().setFromObject(barrelMesh)
-  const tipWorld = new THREE.Vector3(
-    (box.min.x + box.max.x) * 0.5,
-    (box.min.y + box.max.y) * 0.5,
-    box.max.z,
-  )
+  const cx = (box.min.x + box.max.x) * 0.5
+  const cy = (box.min.y + box.max.y) * 0.5
+  // Prefer the end farther from the elevation hinge (handles −Z tip packs).
+  const hinge = new THREE.Vector3().setFromMatrixPosition(pitchPivot.matrixWorld)
+  const tipMax = new THREE.Vector3(cx, cy, box.max.z)
+  const tipMin = new THREE.Vector3(cx, cy, box.min.z)
+  const tipWorld =
+    tipMax.distanceToSquared(hinge) >= tipMin.distanceToSquared(hinge) ? tipMax : tipMin
   const tipLocal = pitchPivot.worldToLocal(tipWorld.clone())
-  // Stay on +Z; never sit behind the elevation hinge.
-  const z = Math.max(0.55, tipLocal.z)
+  // Keep muzzle ahead of the hinge along the bore (either +Z or −Z packs).
+  const z =
+    tipLocal.z >= 0 ? Math.max(0.55, tipLocal.z) : Math.min(-0.55, tipLocal.z)
 
   const muzzle = new THREE.Object3D()
   muzzle.name = 'muzzle'
@@ -2106,6 +2232,15 @@ function finishRig(root: THREE.Group, turretMesh: THREE.Object3D): PlayerTankHan
   let muzzle: THREE.Object3D
   if (barrelMesh) {
     pitchPivot = createPitchPivot(yawPivot, turretMesh, barrelMesh)
+    // Propagate −Z / +X bore from prepare* (e.g. Chieftain Mk5).
+    let p: THREE.Object3D | null = barrelMesh
+    while (p) {
+      if (p.userData.gunForward) {
+        pitchPivot.userData.gunForward = p.userData.gunForward
+        break
+      }
+      p = p.parent
+    }
     muzzle = placeMuzzle(pitchPivot, barrelMesh)
   } else {
     // Baked gun (T-34 / Pz-III): elevate the whole turret mesh around the yaw ring.
@@ -2141,6 +2276,7 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       preparePantsir(model) ||
       prepareKhrizantema(model) ||
       prepareKatyusha(model) ||
+      prepareBmp1u(model) ||
       prepareBtr82a(model) ||
       prepareT72(model) ||
       prepareT55(model) ||
@@ -2153,9 +2289,9 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareM55(model) ||
       prepareSheridan(model) ||
       prepareM901(model) ||
+      prepareDuster(model) ||
       prepareM3A3Bradley(model) ||
       prepareAbrams(model) ||
-      prepareDuster(model) ||
       preparePershing(model) ||
       prepareShermanFirefly(model) ||
       prepareChieftain(model) ||

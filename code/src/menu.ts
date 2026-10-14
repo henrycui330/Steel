@@ -198,7 +198,7 @@ function showAuth(root: HTMLDivElement, resolve: (s: MenuSelection) => void): vo
 
     root.innerHTML = `
       <div class="menu-panel menu-panel-auth">
-        <p class="menu-brand">Steel</p>
+        <p class="menu-brand">Armored Divisions</p>
         <p class="menu-tagline">Sign in to command</p>
         <div class="auth-mode" role="group" aria-label="Auth mode">
           <button type="button" class="auth-mode-btn${mode === 'offline' ? ' is-on' : ''}" data-mode="offline">Offline</button>
@@ -281,7 +281,7 @@ function showHome(
       : ''
   root.innerHTML = `
     <div class="menu-panel menu-panel-home">
-      <p class="menu-brand">Steel</p>
+      <p class="menu-brand">Armored Divisions</p>
       <p class="menu-tagline">Armor · grit · dust</p>
       <p class="auth-userline">Signed in as <strong>${escapeHtml(user.username)}</strong> · ${mode}</p>
       <p class="home-wallet" aria-label="Currency">
@@ -334,7 +334,7 @@ function showHome(
       root,
       resolve,
       'Credits',
-      'Steel — a small tank skirmish. Models from community / Sketchfab packs. Built with Three.js.',
+      'Armored Divisions — a small tank skirmish. Models from community / Sketchfab packs. Built with Three.js.',
     )
   })
   root.querySelector('[data-go="logout"]')!.addEventListener('click', () => {
@@ -469,7 +469,7 @@ function showMpLobby(
       state.status === 'open' && !!state.you?.host && state.players.length >= MIN_MP_START
     root.innerHTML = `
       <div class="menu-panel menu-panel-mp">
-        <p class="menu-brand">Steel</p>
+        <p class="menu-brand">Armored Divisions</p>
         <p class="menu-tagline">Multiplayer lobby</p>
         <p class="auth-userline">Signed in as <strong>${escapeHtml(user.username)}</strong></p>
         <p class="mp-status" data-status>${statusLine(state)}</p>
@@ -571,7 +571,7 @@ function showPlaceholder(
   clearRoot(root)
   root.innerHTML = `
     <div class="menu-panel">
-      <p class="menu-brand">Steel</p>
+      <p class="menu-brand">Armored Divisions</p>
       <h1 class="menu-title">${title}</h1>
       <p class="menu-sub">${body}</p>
       <button type="button" class="deploy-btn menu-back">Back</button>
@@ -633,7 +633,7 @@ function showTutorials(
           <button type="button" class="tutor-menu-card is-available${mode === 'systems-basics' ? ' is-selected' : ''}" data-tut="systems">
             <span class="tutor-menu-num">03</span>
             <span class="tutor-menu-name">Advanced — Systems</span>
-            <span class="tutor-menu-blurb">NVG · lock-on · ATGM</span>
+            <span class="tutor-menu-blurb">NVG · ATGM (manual)</span>
           </button>
         </div>
         <label class="auth-label tutor-tank-label">Training chassis
@@ -823,7 +823,7 @@ function showCustomize(
 
   root.innerHTML = `
     <div class="menu-panel menu-panel-wide customize-panel">
-      <p class="menu-brand">Steel</p>
+      <p class="menu-brand">Armored Divisions</p>
       <h1 class="menu-title">Customize</h1>
       <p class="menu-sub">Pick a tank · orbit · rotate with XYZ · wrap · Apply (this tank only).</p>
 
@@ -1015,7 +1015,7 @@ function showPlaneHangar(
 
   root.innerHTML = `
     <div class="menu-panel menu-panel-wide customize-panel">
-      <p class="menu-brand">Steel</p>
+      <p class="menu-brand">Armored Divisions</p>
       <h1 class="menu-title">Hangar</h1>
       <p class="menu-sub">Pick a plane · orbit · assign a loadout · Apply (this airframe only).</p>
 

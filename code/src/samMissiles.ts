@@ -66,6 +66,11 @@ export type SamMissileOpts = {
   logTag?: string
   /** Air-launched: no forced loft (ground SAMs keep upward bias). */
   airLaunch?: boolean
+  /**
+   * ATGM/TOW: no radar lock — fire along aim; missile follows sight (MCLOS).
+   * Hits any hostile it reaches (not a locked seeker).
+   */
+  manualAim?: boolean
   /** Visual scale of the missile mesh. */
   meshScale?: number
   /** Override max path length (metres). */
@@ -92,6 +97,8 @@ type LiveMissile = {
   speedNow: number
   dead: boolean
   spoofed: boolean
+  /** Follow getLaunchDir each frame — no lock seeker. */
+  manual: boolean
 }
 
 const _origin = new THREE.Vector3()
@@ -162,7 +169,11 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   const pen = opts.pen ?? PEN
   const logTag = opts.logTag ?? 'SAM'
   const airLaunch = !!opts.airLaunch
+  const manualAim = !!opts.manualAim
   const meshScale = opts.meshScale ?? 1
+  /** Invisible aim proxy for manual MCLOS missiles. */
+  const aimProxy = new THREE.Object3D()
+  aimProxy.name = 'atgmAimProxy'
 
   const geo = new THREE.CapsuleGeometry(0.18 * meshScale, 1.8 * meshScale, 3, 6)
   const mat = new THREE.MeshStandardMaterial({
@@ -327,22 +338,31 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   }
 
   function spawn(): boolean {
-    const target = opts.getLockedTarget()
-    if (!target) {
-      console.info(`[Steel] ${logTag} — need radar track (diamond / P lock) before M`)
-      return false
-    }
     if (ammo <= 0 || reload > 0) return false
 
     opts.getLaunchOrigin(_origin)
     opts.getLaunchDir(_dir)
     if (_dir.lengthSq() < 1e-6) _dir.set(0, 0.25, 1)
     _dir.normalize()
-    sampleTarget(target, _tgt)
-    _to.copy(_tgt).sub(_origin)
-    if (_to.lengthSq() > 1) {
-      _to.normalize()
-      _dir.lerp(_to, 0.85).normalize()
+
+    let target: THREE.Object3D
+    if (manualAim) {
+      // MCLOS: fly where the reticle points — no lock.
+      target = aimProxy
+      aimProxy.position.copy(_origin).addScaledVector(_dir, 80)
+    } else {
+      const locked = opts.getLockedTarget()
+      if (!locked) {
+        console.info(`[Steel] ${logTag} — hold P until LOCKED, then fire (LMB / M)`)
+        return false
+      }
+      target = locked
+      sampleTarget(target, _tgt)
+      _to.copy(_tgt).sub(_origin)
+      if (_to.lengthSq() > 1) {
+        _to.normalize()
+        _dir.lerp(_to, 0.85).normalize()
+      }
     }
     if (!airLaunch) _dir.y = Math.max(_dir.y, 0.08)
     _dir.normalize()
@@ -353,7 +373,8 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     mesh.quaternion.setFromUnitVectors(_up, _dir)
     scene.add(mesh)
 
-    sampleTarget(target, _tgt)
+    if (!manualAim) sampleTarget(target, _tgt)
+    else _tgt.copy(aimProxy.position)
     const launchSpd = speedLaunch
     live.push({
       mesh,
@@ -368,11 +389,14 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
       speedNow: launchSpd,
       dead: false,
       spoofed: false,
+      manual: manualAim,
     })
     ammo--
     reload = reloadSec
     console.info(
-      `[Steel] ${logTag} launch → ${target.name || 'lock'} · ammo ${ammo} · range ${maxRange}m`,
+      manualAim
+        ? `[Steel] ${logTag} manual launch · ammo ${ammo} · range ${maxRange}m`
+        : `[Steel] ${logTag} launch → ${target.name || 'lock'} · ammo ${ammo} · range ${maxRange}m`,
     )
     return true
   }
@@ -393,7 +417,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     const unit = hostileFor(m.target)
 
     // Hit a decoy — missile dies, no damage.
-    if (!unit) {
+    if (!unit && !m.manual) {
       if (close) {
         console.info(`[Steel] ${logTag} burned on chaff/flare`)
         return true
@@ -403,10 +427,14 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
 
     for (const h of opts.getHostiles()) {
       if (!h.alive) continue
-      const isLock = h.root === m.target || h.root === m.intended
-      if (!isLock && !h.containsPoint(m.mesh.position)) continue
+      const isLock = !m.manual && (h.root === m.target || h.root === m.intended)
+      h.root.getWorldPosition(_aim)
+      _aim.y += 1.4
+      const near =
+        m.manual && m.mesh.position.distanceTo(_aim) <= HIT_RADIUS * 1.15
+      if (!isLock && !near && !h.containsPoint(m.mesh.position)) continue
       if (isLock && !close && !h.containsPoint(m.mesh.position)) continue
-      if (!isLock && !close) continue
+      if (!isLock && !near && !close) continue
 
       let result = h.resolveShellHit(
         m.mesh.position,
@@ -533,36 +561,50 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
           m.vel.setLength(m.speedNow)
         }
 
-        maybeSpoof(m)
+        if (!m.manual) maybeSpoof(m)
 
-        const unit = hostileFor(m.target)
-        if (unit && !unit.alive) {
-          m.mesh.position.addScaledVector(m.vel, dt)
-          m.distFlown += m.speedNow * dt
-          m.trailBudget += m.speedNow * dt
-          while (m.trailBudget >= TRAIL_SPACING) {
-            m.trailBudget -= TRAIL_SPACING
-            emitTrail(m, Math.random() < 0.35)
-          }
-          if (m.age > 0.4) killMissile(m)
-          continue
-        }
-
-        // Lead pursuit — always track living / spoofed target.
-        if (m.target.visible || m.target.parent) {
-          sampleTarget(m.target, _tgt)
-          m.tgtVel.copy(_tgt).sub(m.prevTgt).multiplyScalar(1 / dtSafe)
-          const spd = m.tgtVel.length()
-          if (spd > 180) m.tgtVel.multiplyScalar(180 / spd)
-          m.prevTgt.copy(_tgt)
-
-          const dist = m.mesh.position.distanceTo(_tgt)
-          const tFlight = THREE.MathUtils.clamp(dist / Math.max(m.speedNow, 40), 0.05, 3.8)
-          _aim.copy(_tgt).addScaledVector(m.tgtVel, tFlight * 1.08)
-          _to.copy(_aim).sub(m.mesh.position)
+        if (m.manual) {
+          // Wire-guide: steer toward a point far along current aim.
+          opts.getLaunchOrigin(_origin)
+          opts.getLaunchDir(_dir)
+          if (_dir.lengthSq() < 1e-8) _dir.set(0, 0, 1)
+          else _dir.normalize()
+          aimProxy.position.copy(_origin).addScaledVector(_dir, 120)
+          _to.copy(aimProxy.position).sub(m.mesh.position)
           if (_to.lengthSq() > 0.25) {
             _to.normalize()
             steerToward(m, _to, dt)
+          }
+        } else {
+          const unit = hostileFor(m.target)
+          if (unit && !unit.alive) {
+            m.mesh.position.addScaledVector(m.vel, dt)
+            m.distFlown += m.speedNow * dt
+            m.trailBudget += m.speedNow * dt
+            while (m.trailBudget >= TRAIL_SPACING) {
+              m.trailBudget -= TRAIL_SPACING
+              emitTrail(m, Math.random() < 0.35)
+            }
+            if (m.age > 0.4) killMissile(m)
+            continue
+          }
+
+          // Lead pursuit — locked / spoofed target.
+          if (m.target.visible || m.target.parent) {
+            sampleTarget(m.target, _tgt)
+            m.tgtVel.copy(_tgt).sub(m.prevTgt).multiplyScalar(1 / dtSafe)
+            const spd = m.tgtVel.length()
+            if (spd > 180) m.tgtVel.multiplyScalar(180 / spd)
+            m.prevTgt.copy(_tgt)
+
+            const dist = m.mesh.position.distanceTo(_tgt)
+            const tFlight = THREE.MathUtils.clamp(dist / Math.max(m.speedNow, 40), 0.05, 3.8)
+            _aim.copy(_tgt).addScaledVector(m.tgtVel, tFlight * 1.08)
+            _to.copy(_aim).sub(m.mesh.position)
+            if (_to.lengthSq() > 0.25) {
+              _to.normalize()
+              steerToward(m, _to, dt)
+            }
           }
         }
 

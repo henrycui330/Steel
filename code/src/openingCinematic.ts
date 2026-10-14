@@ -98,7 +98,7 @@ export function createMatchOpening(opts: {
     dur: 3.2,
     pos: new THREE.Vector3(40, establishFocus.y + 95, southZ - 40),
     look: establishFocus.clone().setY(establishFocus.y + 8),
-    title: 'Steel',
+    title: 'Armored Divisions',
     sub: 'Forces deploying',
     flagUrl: null,
     accent: '#c4a35a',

@@ -144,7 +144,7 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
   root.innerHTML = opts.podium3d
     ? `
     <div class="stage-top">
-      <p class="match-end-brand">Steel</p>
+      <p class="match-end-brand">Armored Divisions</p>
       <h1 class="match-end-title">${escapeHtml(title)}</h1>
       <p class="match-end-sub">${escapeHtml(sub)}</p>
       ${rewardHtml(opts.reward)}
@@ -160,7 +160,7 @@ export function showMatchEnd(kindOrOpts: MatchEndKind | MatchEndOpts): void {
     : `
     <div class="match-end-panel${rows.length ? ' has-board' : ''}">
       ${nation ? `<img class="match-end-flag" src="${nationFlagSrc(nation)}" alt="${escapeHtml(nation.name)}" />` : ''}
-      <p class="match-end-brand">Steel</p>
+      <p class="match-end-brand">Armored Divisions</p>
       <h1 class="match-end-title">${escapeHtml(title)}</h1>
       <p class="match-end-sub">${escapeHtml(sub)}</p>
       ${rewardHtml(opts.reward)}

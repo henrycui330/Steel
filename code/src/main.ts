@@ -154,7 +154,7 @@ const renderer = new THREE.WebGLRenderer({
   logarithmicDepthBuffer: true,
   powerPreference: 'high-performance',
 })
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.25))
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.15))
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.setClearColor(PALETTE.sky, 1)
 renderer.shadowMap.enabled = true
@@ -206,7 +206,7 @@ sun.shadow.camera.bottom = -100
 scene.add(sun)
 
 /** Local shadow volume that follows the player (map-wide frustum was a FPS killer). */
-const SHADOW_FOLLOW_EXTENT = 110
+const SHADOW_FOLLOW_EXTENT = 90
 const _sunDir = new THREE.Vector3(0.55, 0.85, 0.35).normalize()
 let shadowFollowPlayer = false
 
@@ -240,7 +240,7 @@ function configureShadowsForMap(sizeX: number, sizeZ: number): void {
   camera.far = Math.min(camera.far, Math.max(2200, arenaSize * 1.05, AIR_CEILING + 350))
   camera.updateProjectionMatrix()
   console.info(
-    `[Steel] Shadows — local ${e}m follow · map ${sun.shadow.mapSize.x} · BasicShadowMap · dpr≤1.25`,
+    `[Steel] Shadows — local ${e}m follow · map ${sun.shadow.mapSize.x} · BasicShadowMap · dpr≤1.15`,
   )
 }
 
@@ -407,7 +407,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
   loading.id = 'loading-overlay'
   const tip = pickLoadingTip()
   loading.innerHTML = `
-    <p class="loading-brand">Steel</p>
+    <p class="loading-brand">Armored Divisions</p>
     <div class="loading-silhouette" aria-hidden="true"></div>
     <p class="loading-msg">Loading ${mapOpt.name}…</p>
     <p class="loading-tip">${tip}</p>
@@ -2141,16 +2141,18 @@ async function startMission(sel: MenuSelection): Promise<void> {
     hud.bindDamageTank(tank, turret, barrel)
     hud.setVisible(true)
 
-    // L1 lock-on: SPAAG / ATGM (auto-aim in L2 for AA).
-    const groundLock = option.antiAir || option.samMissiles ? createLockOn() : null
-    const groundLockHud = option.antiAir || option.samMissiles ? createLockOnHud() : null
+    // L1 lock-on: SPAAG only. ATGM/TOW are manual (no radar lock).
+    const groundLock = option.antiAir ? createLockOn() : null
+    const groundLockHud = option.antiAir ? createLockOnHud() : null
     groundLockHud?.setVisible(false)
     const _gLockOrigin = new THREE.Vector3()
     const _gLockLook = new THREE.Vector3()
     const samLabel = option.samLabel ?? 'SAM'
     let tutorialAtgmFired = false
+    // ATGM/TOW (!antiAir): manual aim, no lock. SPAAG SAM: still radar lock.
+    const atgmManual = !!option.samMissiles && !option.antiAir
     const sam =
-      option.samMissiles && groundLock
+      option.samMissiles && (groundLock || atgmManual)
         ? createSamMissiles({
             scene,
             getLaunchOrigin: (out) => {
@@ -2160,7 +2162,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             getLaunchDir: (out) => {
               getAimDirection(out)
             },
-            getLockedTarget: () => groundLock.getLockedTarget(),
+            getLockedTarget: () => groundLock?.getLockedTarget() ?? null,
             getHostiles: () =>
               isSystemsTutorial
                 ? practiceTargets
@@ -2175,6 +2177,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             pen: option.samPen,
             // Flat ATGM flight when not a SPAAG loft profile.
             airLaunch: !option.antiAir,
+            manualAim: atgmManual,
             logTag: samLabel,
             onKill: (victim) => {
               board.noteKill(tank)
@@ -2877,17 +2880,21 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (groundLock && groundLockHud && alive && !matchOver && !killCam.active()) {
         muzzle.getWorldPosition(_gLockOrigin)
         getAimDirection(_gLockLook)
-        const lockFoes = isSystemsTutorial
-          ? practiceTargets.map((d) => ({
-              root: d.root,
-              alive: d.alive,
-              aircraft: false,
-            }))
-          : enemies.map((u) => ({
-              root: u.root,
-              alive: u.alive,
-              aircraft: !!u.aircraft,
-            }))
+        // ATGM/TOW chassis: only ground foes (air-preferring soft lock stole the diamond).
+        const atgmGroundOnly = !!option.samMissiles && !option.antiAir
+        const lockFoes = (
+          isSystemsTutorial
+            ? practiceTargets.map((d) => ({
+                root: d.root,
+                alive: d.alive,
+                aircraft: false as boolean,
+              }))
+            : enemies.map((u) => ({
+                root: u.root,
+                alive: u.alive,
+                aircraft: !!u.aircraft,
+              }))
+        ).filter((f) => !atgmGroundOnly || !f.aircraft)
         const lockFrame = groundLock.update({
           dt,
           origin: _gLockOrigin,
@@ -2941,8 +2948,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       )
       if (sam) {
         const ammoBefore = sam.ammo()
-        const samFire =
-          isSamFire() || (useAtgm && wantsFire && canFire)
+        const samFire = canFire && (isSamFire() || (useAtgm && wantsFire))
         sam.update(dt, alive && !matchOver && samFire)
         if (sam.ammo() < ammoBefore) tutorialAtgmFired = true
       }

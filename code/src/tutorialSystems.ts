@@ -50,12 +50,6 @@ const STEPS: StepDef[] = [
     hint: 'N = NVG toggle',
   },
   {
-    id: 'lock',
-    title: 'Hard lock',
-    body: 'Aim at the gold practice panzer ahead. Hold P until the diamond fills and you get a hard lock.',
-    hint: 'P = hold lock · aim center mass',
-  },
-  {
     id: 'atgm',
     title: 'Select ATGM',
     body: 'Press 3 to arm the missile slot (TOW / Shillelagh / Konkurs — whatever this chassis carries).',
@@ -64,13 +58,13 @@ const STEPS: StepDef[] = [
   {
     id: 'fire',
     title: 'Fire ATGM',
-    body: 'With a lock (or a clean shot), press M or left-click to launch. Kill the practice panzer.',
-    hint: 'M / LMB = fire missile',
+    body: 'Aim at the gold practice panzer and press M or left-click. Missiles follow your sight — no lock. Kill it.',
+    hint: 'M / LMB = fire · keep reticle on target',
   },
   {
     id: 'done',
     title: 'Lesson complete',
-    body: 'You can run NVG, hold a lock, and fire ATGMs. Take these into Skirmish / KOTH.',
+    body: 'You can run NVG and fire ATGMs. Take these into Skirmish / KOTH.',
     hint: 'Return to hangar when ready.',
   },
 ]
@@ -188,20 +182,6 @@ export function createSystemsTutorial(opts: {
         if (ctx.nvgOn) advance()
         return
       }
-      if (s.id === 'lock') {
-        const dist =
-          ctx.dummyDistM != null ? ` · panzer ${ctx.dummyDistM.toFixed(0)} m` : ''
-        hintEl.textContent =
-          ctx.lockPhase === 'hard'
-            ? 'LOCKED'
-            : ctx.lockPhase === 'acquiring'
-              ? `Acquiring… hold P${dist}`
-              : ctx.lockPhase === 'soft'
-                ? `Soft track — hold P${dist}`
-                : `Aim at the gold panzer · hold P${dist}`
-        if (ctx.lockPhase === 'hard') advance()
-        return
-      }
       if (s.id === 'atgm') {
         hintEl.textContent =
           ctx.weapon === 'atgm' ? 'ATGM armed' : 'Press 3 for ATGM'
@@ -219,13 +199,10 @@ export function createSystemsTutorial(opts: {
           return
         }
         if (ctx.atgmFired) {
-          hintEl.textContent = 'Missile away — wait for impact'
+          hintEl.textContent = 'Missile away — keep aim on target'
           return
         }
-        hintEl.textContent =
-          ctx.lockPhase === 'hard'
-            ? 'M / LMB = fire · stay locked'
-            : 'Re-lock (P) if needed · M / LMB = fire'
+        hintEl.textContent = 'Aim at panzer · M / LMB = fire'
       }
     },
     isComplete: () => complete,

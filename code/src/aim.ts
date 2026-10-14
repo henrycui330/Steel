@@ -257,6 +257,8 @@ export function updateTurretAim(
   barrelPitchPivot.getWorldQuaternion(_quat)
   if (skinnedX) {
     _fwd.set(1, 0, 0).applyQuaternion(_quat).normalize()
+  } else if (barrelPitchPivot.userData.gunForward === '-z') {
+    _fwd.set(0, 0, -1).applyQuaternion(_quat).normalize()
   } else {
     _fwd.set(0, 0, 1).applyQuaternion(_quat).normalize()
   }

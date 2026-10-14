@@ -35,6 +35,7 @@ export type TankId =
   | 't55'
   | 't64'
   | 'btr82a'
+  | 'bmp1u'
   | 'khrizantema'
   | 'shilka'
   | 'pantsir'
@@ -164,8 +165,8 @@ export type TankOption = {
    */
   antiAir?: boolean
   /**
-   * Pantsir-style SAM / BMP ATGM: M fires seekers at the hard-locked target (off-boresight OK).
-   * Enables lock-on even when `antiAir` is false.
+   * Ground missile slot (Digit3 / M).
+   * SPAAG (`antiAir`): radar lock + seekers. ATGM/TOW chassis: manual aim, no lock.
    */
   samMissiles?: boolean
   /** Override SAM/ATGM magazine size (default 12). */
@@ -542,6 +543,21 @@ const LAV25_DRIVE: DriveProfile = {
   turnInPlace: 1.2,
   tiltMax: (6 * Math.PI) / 180,
   tiltFromAccel: 0.009,
+  massClass: 'light',
+}
+
+/** BMP-1U Shkval — tracked IFV · 30mm + ATGM (Bradley-class pace). */
+const BMP1U_DRIVE: DriveProfile = {
+  maxSpeed: 18.5,
+  maxReverse: 7.5,
+  accel: 12.5,
+  reverseAccel: 8.5,
+  brakeDecel: 26,
+  coastDrag: 5.2,
+  turnRate: 2.4,
+  turnInPlace: 1.2,
+  tiltMax: (5.5 * Math.PI) / 180,
+  tiltFromAccel: 0.01,
   massClass: 'light',
 }
 
@@ -1038,10 +1054,10 @@ export const TANK_OPTIONS: TankOption[] = [
   },
   {
     id: 'chieftain',
-    name: 'Chieftain/T95',
+    name: 'Chieftain Mk.5',
     role: 'MBT · British · 120mm',
     blurb: 'L11 120mm · stillhouse armour · slow and stubborn',
-    url: assetUrl('models/chieftain_t95.glb?v=1'),
+    url: assetUrl('models/chieftain_mk5.glb?v=4'),
     reloadSec: 6.2,
     maxHp: 1420,
     targetWidth: 3.5,
@@ -1260,7 +1276,7 @@ export const TANK_OPTIONS: TankOption[] = [
     name: 'M42 Duster',
     role: 'SPAAG · twin 40mm',
     blurb: 'Open turret · twin Bofors · owns low-flying aircraft',
-    url: assetUrl('models/m42_duster.glb?v=1'),
+    url: assetUrl('models/m42_duster.glb?v=2'),
     reloadSec: 0.38,
     maxHp: 560,
     targetWidth: 3.23,
@@ -1325,7 +1341,7 @@ export const TANK_OPTIONS: TankOption[] = [
     id: 'm901',
     name: 'M901 ITV',
     role: 'ATGM · twin TOW',
-    blurb: 'M113 hammerhead · TOW primary · lock+fire · soft aluminum',
+    blurb: 'M113 hammerhead · TOW primary · manual aim · soft aluminum',
     url: assetUrl('models/m901_itv.glb?v=1'),
     reloadSec: 6.0,
     noMainGun: true,
@@ -1677,10 +1693,46 @@ export const TANK_OPTIONS: TankOption[] = [
     },
   },
   {
+    id: 'bmp1u',
+    name: 'BMP-1U Shkval',
+    role: 'IFV · 30mm + TOW',
+    blurb: 'Shkval turret · 2A72 30mm · TOW ATGM (1/2/3) · aluminium hull',
+    url: assetUrl('models/bmp1u_shkval.glb?v=3'),
+    reloadSec: 0.15,
+    recoilScale: 0.12,
+    maxHp: 720,
+    targetWidth: 3.05,
+    vintageCrew: false,
+    nation: 'soviet',
+    samMissiles: true,
+    samAmmo: 4,
+    samReloadSec: 6.5,
+    samSpeed: 95,
+    samDamage: 920,
+    samPen: 850,
+    samLabel: 'TOW',
+    aimPitchMinDeg: -5,
+    aimPitchMaxDeg: 55,
+    rigidRig: false,
+    drive: BMP1U_DRIVE,
+    armor: armorKit({ front: 32, side: 18, rear: 14, turret: 28 }),
+    gun: {
+      aphePen: 62,
+      apheDmg: 118,
+      hePen: 14,
+      heDmg: 75,
+      heBlast: 110,
+      traverseRadPerSec: 7.5,
+      elevateRadPerSec: 6.2,
+      apLabel: 'AP-T 30mm',
+      heLabel: 'HEI 30mm',
+    },
+  },
+  {
     id: 'khrizantema',
     name: '9P157 Khrizantema-S',
     role: 'ATGM · twin 9M123',
-    blurb: 'Radar ATGM · lock+M seekers · soft hull, hard punches',
+    blurb: 'Twin ATGM · manual aim (3 / M) · soft hull, hard punches',
     url: assetUrl('models/khrizantema.glb?v=1'),
     reloadSec: 6.0,
     /** No cannon — coax MG + M-key ATGM only. */

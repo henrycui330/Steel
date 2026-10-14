@@ -41,6 +41,7 @@ Soviet:
  T-55
  T-64
     BTR-82A
+    BMP-1U Shkval
     9P157 Khrizantema-S
     ZSU-23-4 Shilka
     Pantsir-S2

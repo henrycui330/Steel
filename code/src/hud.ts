@@ -160,6 +160,79 @@ function speedToKmh(speedU: number): number {
   return Math.abs(speedU) * 3.6
 }
 
+/** Analog gauge: value 0…max → degrees (0° = up). Sweep starts left of top. */
+const GAUGE_START_DEG = -120
+const GAUGE_SWEEP_DEG = 240
+const SPEEDO_MAX_KMH = 120
+const TACH_MAX_RPM = 4000
+
+function gaugeAngleDeg(value: number, max: number): number {
+  const t = Math.max(0, Math.min(1, value / max))
+  return GAUGE_START_DEG + t * GAUGE_SWEEP_DEG
+}
+
+function redNeedleSvg(tipY = 26): string {
+  return `
+    <polygon points="100,${tipY} 104,106 100,118 96,106" fill="#d01818"/>
+    <circle cx="100" cy="100" r="8" fill="#1a1a1a" stroke="#c8c8c8" stroke-width="1.4"/>
+    <circle cx="100" cy="100" r="3.4" fill="#8a8a8a"/>
+  `
+}
+
+function appendGaugeTicks(
+  ticksG: SVGGElement,
+  numsG: SVGGElement | null,
+  opts: {
+    max: number
+    majorEvery: number
+    minorEvery: number
+    labelDiv?: number
+    labelFn?: (v: number) => string
+    numR?: number
+  },
+): void {
+  const {
+    max,
+    majorEvery,
+    minorEvery,
+    labelDiv = 1,
+    labelFn,
+    numR = 46,
+  } = opts
+  for (let v = 0; v <= max + 1e-6; v += minorEvery) {
+    const major = Math.abs(v % majorEvery) < 1e-6
+    const deg = gaugeAngleDeg(v, max)
+    const rad = (deg * Math.PI) / 180
+    const inner = major ? 56 : 64
+    const outer = 80
+    const x1 = 100 + Math.sin(rad) * inner
+    const y1 = 100 - Math.cos(rad) * inner
+    const x2 = 100 + Math.sin(rad) * outer
+    const y2 = 100 - Math.cos(rad) * outer
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+    line.setAttribute('x1', x1.toFixed(2))
+    line.setAttribute('y1', y1.toFixed(2))
+    line.setAttribute('x2', x2.toFixed(2))
+    line.setAttribute('y2', y2.toFixed(2))
+    line.setAttribute('class', major ? 'inst-tick inst-tick-major' : 'inst-tick')
+    ticksG.appendChild(line)
+    if (major && numsG) {
+      const lx = 100 + Math.sin(rad) * numR
+      const ly = 100 - Math.cos(rad) * numR
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      text.setAttribute('x', lx.toFixed(2))
+      text.setAttribute('y', ly.toFixed(2))
+      text.setAttribute('class', 'inst-num')
+      text.setAttribute('text-anchor', 'middle')
+      text.setAttribute('dominant-baseline', 'middle')
+      text.textContent = labelFn
+        ? labelFn(v)
+        : String(Math.round(v / labelDiv))
+      numsG.appendChild(text)
+    }
+  }
+}
+
 /** Heading deg 0–360; 0 = +Z (N). */
 function yawToHeadingDeg(yawRad: number): number {
   let deg = THREE.MathUtils.radToDeg(yawRad)
@@ -635,8 +708,7 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       </div>
       <div class="dmg-drive">
         <div><span class="dmg-k">GEAR</span> <span class="dmg-gear">N</span></div>
-        <div><span class="dmg-k">RPM</span> <span class="dmg-rpm">0</span></div>
-        <div><span class="dmg-k">SPD</span> <span class="dmg-spd">0</span> <span class="dmg-k">km/h</span></div>
+        <div><span class="dmg-k">HULL</span> <span class="dmg-spd">OK</span></div>
       </div>
     </div>
     <div class="hud-chips">
@@ -678,18 +750,50 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     dmgTicks.appendChild(line)
   }
 
-  // Bottom-right: speed + weapon + ammo
+  // Bottom-right: metal dash cluster (speed / tach+fuel / status) + gun ammo
   const weapon = document.createElement('div')
   weapon.className = 'hud-corner hud-br'
   weapon.innerHTML = `
-    <div class="hud-plate combat-speed">
-      <div class="hud-plate-head">
-        <span class="combat-label">Spd</span>
-        <span class="combat-value speed-text">0</span>
+    <div class="dash-cluster" aria-label="Vehicle dashboard">
+      <div class="dash-panel dash-speed">
+        <i class="dash-screw dash-screw-tl"></i>
+        <i class="dash-screw dash-screw-tr"></i>
+        <i class="dash-screw dash-screw-bl"></i>
+        <i class="dash-screw dash-screw-br"></i>
+        <svg class="inst-face" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="92" fill="#0a0a0a" stroke="#2a2a2a" stroke-width="3"/>
+          <g class="inst-ticks"></g>
+          <g class="inst-nums"></g>
+          <text class="inst-face-label" x="100" y="148" text-anchor="middle">KM/H</text>
+          <g class="inst-needle-spd">${redNeedleSvg(24)}</g>
+        </svg>
+        <span class="speed-text" hidden>0</span>
       </div>
-      <span class="speed-unit">km/h</span>
+      <div class="dash-panel dash-aux">
+        <i class="dash-screw dash-screw-tl"></i>
+        <i class="dash-screw dash-screw-tr"></i>
+        <i class="dash-screw dash-screw-bl"></i>
+        <i class="dash-screw dash-screw-br"></i>
+        <div class="dash-vent"></div>
+        <div class="dash-aux-row">
+          <svg class="inst-face inst-face-sm" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="90" fill="#0a0a0a" stroke="#2a2a2a" stroke-width="2.5"/>
+            <g class="inst-ticks-rpm"></g>
+            <g class="inst-nums-rpm"></g>
+            <text class="inst-face-label" x="100" y="150" text-anchor="middle">x1000</text>
+            <g class="inst-needle-rpm">${redNeedleSvg(30)}</g>
+          </svg>
+          <svg class="inst-face inst-face-sm" viewBox="0 0 200 200" aria-hidden="true">
+            <circle cx="100" cy="100" r="90" fill="#0a0a0a" stroke="#2a2a2a" stroke-width="2.5"/>
+            <g class="inst-ticks-fuel"></g>
+            <g class="inst-nums-fuel"></g>
+            <text class="inst-fuel-ico" x="100" y="152" text-anchor="middle">⛽</text>
+            <g class="inst-needle-fuel">${redNeedleSvg(30)}</g>
+          </svg>
+        </div>
+      </div>
     </div>
-    <div class="hud-plate combat-weapon-block">
+    <div class="hud-plate combat-weapon-block inst-weapon">
       <div class="hud-plate-head">
         <span class="combat-label">Gun</span>
         <span class="combat-value weapon-text">MAIN · 1</span>
@@ -707,6 +811,35 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const ammoBox = weapon.querySelector('.combat-ammo') as HTMLDivElement
   const magazinePlate = weapon.querySelector('.combat-magazine') as HTMLElement
   const magazineText = weapon.querySelector('.magazine-text') as HTMLElement
+
+  const speedTicks = weapon.querySelector('.inst-ticks') as SVGGElement
+  const speedNums = weapon.querySelector('.inst-nums') as SVGGElement
+  const rpmTicks = weapon.querySelector('.inst-ticks-rpm') as SVGGElement
+  const rpmNums = weapon.querySelector('.inst-nums-rpm') as SVGGElement
+  const fuelTicks = weapon.querySelector('.inst-ticks-fuel') as SVGGElement
+  const fuelNums = weapon.querySelector('.inst-nums-fuel') as SVGGElement
+  appendGaugeTicks(speedTicks, speedNums, {
+    max: SPEEDO_MAX_KMH,
+    majorEvery: 15,
+    minorEvery: 5,
+  })
+  appendGaugeTicks(rpmTicks, rpmNums, {
+    max: TACH_MAX_RPM,
+    majorEvery: 1000,
+    minorEvery: 200,
+    labelDiv: 1000,
+  })
+  appendGaugeTicks(fuelTicks, fuelNums, {
+    max: 1,
+    majorEvery: 1,
+    minorEvery: 0.25,
+    labelFn: (v) => (v <= 0 ? 'E' : v >= 1 ? 'F' : ''),
+    numR: 52,
+  })
+  const needleSpd = weapon.querySelector('.inst-needle-spd') as SVGGElement
+  const needleRpm = weapon.querySelector('.inst-needle-rpm') as SVGGElement
+  const needleFuel = weapon.querySelector('.inst-needle-fuel') as SVGGElement
+
   for (const id of AMMO_ORDER) {
     const def = AMMO_TYPES[id]
     const btn = document.createElement('div')
@@ -762,7 +895,6 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const dmgTag = status.querySelector('.dmg-tag') as HTMLElement
   const dmgCrewN = status.querySelector('.dmg-crew-n') as HTMLElement
   const dmgGear = status.querySelector('.dmg-gear') as HTMLElement
-  const dmgRpm = status.querySelector('.dmg-rpm') as HTMLElement
   const dmgSpd = status.querySelector('.dmg-spd') as HTMLElement
   let dmgTankId: TankId | undefined
   const dmgPreview = createDamagePreview(dmgDial)
@@ -875,13 +1007,34 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       dmgPanel.classList.toggle('is-fuel-empty', !!state.fuelEmpty)
 
       const kmh = Math.round(speedToKmh(state.speedU ?? 0))
+      const kmhClamped = Math.min(kmh, SPEEDO_MAX_KMH)
       speedText.textContent = `${kmh}`
-      speedText.classList.toggle('is-rev', (state.speedU ?? 0) < -0.15)
 
       const { gear, rpm } = arcadeGearRpm(state.speedU ?? 0)
       dmgGear.textContent = gear
-      dmgRpm.textContent = String(rpm)
-      dmgSpd.textContent = String(kmh)
+      needleSpd.setAttribute(
+        'transform',
+        `rotate(${gaugeAngleDeg(kmhClamped, SPEEDO_MAX_KMH).toFixed(2)} 100 100)`,
+      )
+      needleRpm.setAttribute(
+        'transform',
+        `rotate(${gaugeAngleDeg(rpm, TACH_MAX_RPM).toFixed(2)} 100 100)`,
+      )
+
+      const fuelFrac = state.fuelEmpty
+        ? 0.04
+        : state.fuelLeaking
+          ? 0.32
+          : 0.88
+      needleFuel.setAttribute(
+        'transform',
+        `rotate(${gaugeAngleDeg(fuelFrac, 1).toFixed(2)} 100 100)`,
+      )
+
+      // Hull integrity readout in the damage plate (speed lives on the speedo)
+      if (hullPct <= 0.25) dmgSpd.textContent = 'CRIT'
+      else if (hullPct <= 0.55) dmgSpd.textContent = 'DMG'
+      else dmgSpd.textContent = 'OK'
 
       const heading = yawToHeadingDeg(headingRad)
       compassDeg.textContent = `${String(Math.round(heading)).padStart(3, '0')}°`

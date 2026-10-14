@@ -42,8 +42,8 @@ export type ForestTown = {
  */
 export const FOREST_TOWNS: readonly ForestTown[] = [
   { id: 'c', name: 'Point C', x: -420 * MAP_SCALE, z: -380 * MAP_SCALE, radius: 155 },
-  // Midwood / Point B — KOTH center (on the giant river ford)
-  { id: 'mid', name: 'Midwood', x: 0, z: 0, radius: 165 },
+  // Midwood / Point B — dry bank just south of the river (houses stay out of water)
+  { id: 'mid', name: 'Midwood', x: 0, z: -100 * MAP_SCALE, radius: 150 },
   { id: 'a', name: 'Point A', x: 420 * MAP_SCALE, z: 380 * MAP_SCALE, radius: 155 },
 ]
 
@@ -69,7 +69,7 @@ export const FOREST_CROP_FIELDS: readonly ForestCropField[] = [
 ]
 
 /**
- * Open-field scrub meadows — pines cleared, bushes dense for open-camo
+ * Open-field scrub meadows — pines cleared; light bush preference (not packed).
  * (away from dense forest belts / river chokes).
  */
 export const FOREST_OPEN_SCRUB: ReadonlyArray<{
@@ -162,11 +162,14 @@ export const FOREST_PROP_URLS: readonly string[] = [
   FANCY_CAR_URL,
 ]
 /** Kept moderate — pines share 1–2 merged meshes via InstancedMesh. */
-const TREE_COUNT = 720
+const TREE_COUNT = 560
 /** Broadleaf oaks mixed into the temperate belt. */
-const OAK_COUNT = 320
-/** Photoreal bush scatter — one GLB, chunked InstancedMesh (scale/yaw vary). */
-const BUSH_COUNT = 5800
+const OAK_COUNT = 240
+/**
+ * Photoreal bush scatter — map-wide even cover (was 5800 packed into scrub).
+ * Lower count + min spacing = fewer draws in any one chunk.
+ */
+const BUSH_COUNT = 3600
 /** Cap mid-distance wrecks (fancy + destroyed). */
 const WRECK_CAP = 24
 /** Flank spawn pads (sketch: 2 N + 2 S) — clear trees / flatten. */
@@ -183,15 +186,23 @@ const ROAD_CLEAR_HALF = 22
 const ROAD_FLAT_HALF = 18
 const ROAD_Y = 0.05
 /** Terrain grid — enough detail on 3500² without crushing the GPU. */
-const TERRAIN_SEG_X = 240
-const TERRAIN_SEG_Z = 240
+const TERRAIN_SEG_X = 220
+const TERRAIN_SEG_Z = 220
 /** Split InstancedMesh draws so frustum culling can drop off-screen chunks. */
-const PROP_CHUNK_CELLS = 6
+const PROP_CHUNK_CELLS = 8
 
 /** Distance LOD — hide far chunks (props stay loaded; not drawn). */
-const LOD_RANGE_BUSH = 380
-const LOD_RANGE_TREE = 720
-const LOD_RANGE_AO = 260
+const LOD_RANGE_BUSH = 280
+const LOD_RANGE_TREE = 500
+const LOD_RANGE_AO = 170
+
+/** Soft belt bias — most foliage is even map-wide; belts stay slightly denser. */
+const DENSE_BELT_SHARE = 0.32
+const SCRUB_BUSH_SHARE = 0.28
+/** Min spacing (m) so clumps don't pile into one GPU chunk. */
+const BUSH_MIN_SPACING = 16
+const PINE_MIN_SPACING = 28
+const OAK_MIN_SPACING = 38
 
 type FoliageLodChunk = {
   mesh: THREE.Object3D
@@ -283,7 +294,7 @@ function roadPt(x: number, z: number): RoadPt {
 }
 
 /**
- * Sketch paths — west bridge corridor, east bridge corridor, C–B–A spine,
+ * Sketch paths — west/east corridors, C–B–A spine, Meridian→Midwood approach,
  * south + north laterals between flank spawns.
  */
 const ROAD_CTRL: readonly (readonly RoadPt[])[] = [
@@ -307,21 +318,29 @@ const ROAD_CTRL: readonly (readonly RoadPt[])[] = [
     roadPt(480, 680),
     roadPt(520, 920),
   ],
-  // Capture spine C → B → A
+  // Capture spine C → Midwood (dry south bank) → A
   [
     roadPt(-420, -380),
-    roadPt(-220, -140),
-    roadPt(0, 0),
-    roadPt(220, 220),
+    roadPt(-220, -200),
+    roadPt(0, -100),
+    roadPt(180, 80),
     roadPt(420, 380),
   ],
-  // South lateral (red spawn belt)
+  // Meridian (north) → Midwood — crosses river on a dedicated center bridge
+  [
+    roadPt(0, 940),
+    roadPt(20, 520),
+    roadPt(0, 200),
+    roadPt(0, 60),
+    roadPt(0, -100),
+  ],
+  // South lateral (red / Vostok spawn belt)
   [
     roadPt(-520, -920),
     roadPt(0, -940),
     roadPt(520, -920),
   ],
-  // North lateral (blue spawn belt)
+  // North lateral (blue / Meridian spawn belt)
   [
     roadPt(-520, 920),
     roadPt(0, 940),
@@ -645,11 +664,30 @@ function findRiverCrossing(road: readonly RoadPt[]): BridgeSite | null {
   return best
 }
 
-/** West corridor + east corridor crossings (sketch bridges). */
-const BRIDGE_SITES: readonly BridgeSite[] = [
-  findRiverCrossing(ROAD_POLYLINES[0]!),
-  findRiverCrossing(ROAD_POLYLINES[1]!),
-].filter((s): s is BridgeSite => !!s)
+/** Keep bridges that are meaningfully apart (avoid double decks). */
+function dedupeBridgeSites(
+  sites: readonly (BridgeSite | null)[],
+  minDist = 110,
+): BridgeSite[] {
+  const out: BridgeSite[] = []
+  for (const s of sites) {
+    if (!s) continue
+    if (out.some((o) => Math.hypot(o.x - s.x, o.z - s.z) < minDist)) continue
+    out.push(s)
+  }
+  return out
+}
+
+/**
+ * West + east corridors, Meridian→Midwood approach, capture spine.
+ * Indices match ROAD_CTRL / ROAD_POLYLINES order.
+ */
+const BRIDGE_SITES: readonly BridgeSite[] = dedupeBridgeSites([
+  findRiverCrossing(ROAD_POLYLINES[0]!), // west
+  findRiverCrossing(ROAD_POLYLINES[1]!), // east
+  findRiverCrossing(ROAD_POLYLINES[3]!), // Meridian → Midwood
+  findRiverCrossing(ROAD_POLYLINES[2]!), // spine (if it still hits water)
+])
 
 /** Snap a world point onto the nearest road ribbon (frontline defender rallies). */
 export function nearestRoadPoint(x: number, z: number): { x: number; z: number } {
@@ -869,6 +907,48 @@ function inDenseForest(x: number, z: number, pad = 1): boolean {
     if (nx * nx + nz * nz <= 1) return true
   }
   return false
+}
+
+type SpacingGrid = Map<string, Array<{ x: number; z: number }>>
+
+function spacingTooClose(
+  grid: SpacingGrid,
+  x: number,
+  z: number,
+  minDist: number,
+  cellSize: number,
+): boolean {
+  const ix = Math.floor(x / cellSize)
+  const iz = Math.floor(z / cellSize)
+  const min2 = minDist * minDist
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const bucket = grid.get(`${ix + dx},${iz + dz}`)
+      if (!bucket) continue
+      for (let i = 0; i < bucket.length; i++) {
+        const p = bucket[i]!
+        const ddx = p.x - x
+        const ddz = p.z - z
+        if (ddx * ddx + ddz * ddz < min2) return true
+      }
+    }
+  }
+  return false
+}
+
+function spacingRemember(
+  grid: SpacingGrid,
+  x: number,
+  z: number,
+  cellSize: number,
+): void {
+  const key = `${Math.floor(x / cellSize)},${Math.floor(z / cellSize)}`
+  let bucket = grid.get(key)
+  if (!bucket) {
+    bucket = []
+    grid.set(key, bucket)
+  }
+  bucket.push({ x, z })
 }
 
 function inSpawnPad(x: number, z: number, pad = 1): boolean {
@@ -1104,14 +1184,16 @@ async function placePineTrees(
   const halfZ = FOREST_OVERWATCH_DEPTH * 0.46
   const placements: Array<{ x: number; z: number; yaw: number; height: number }> =
     []
+  const spacing: SpacingGrid = new Map()
+  const cell = PINE_MIN_SPACING
   let attempts = 0
-  const maxAttempts = TREE_COUNT * 18
-  const denseTarget = Math.floor(TREE_COUNT * 0.72)
+  const maxAttempts = TREE_COUNT * 28
+  const denseTarget = Math.floor(TREE_COUNT * DENSE_BELT_SHARE)
   while (placements.length < TREE_COUNT && attempts < maxAttempts) {
     attempts++
     let x: number
     let z: number
-    // Pack most pines into sketch dense belts
+    // Mild belt bias — rest even across the map (no open-area skip)
     if (placements.length < denseTarget) {
       const belt = FOREST_DENSE[Math.floor(rand() * FOREST_DENSE.length)]!
       const ang = rand() * Math.PI * 2
@@ -1121,9 +1203,10 @@ async function placePineTrees(
     } else {
       x = (rand() - 0.5) * 2 * halfX
       z = (rand() - 0.5) * 2 * halfZ
-      if (!inDenseForest(x, z) && rand() < 0.55) continue
     }
     if (blockedForTree(x, z)) continue
+    if (spacingTooClose(spacing, x, z, PINE_MIN_SPACING, cell)) continue
+    spacingRemember(spacing, x, z, cell)
     placements.push({
       x,
       z,
@@ -1309,9 +1392,11 @@ async function placeOakTrees(
   const halfZ = FOREST_OVERWATCH_DEPTH * 0.46
   const placements: Array<{ x: number; z: number; yaw: number; height: number }> =
     []
+  const spacing: SpacingGrid = new Map()
+  const cell = OAK_MIN_SPACING
   let attempts = 0
-  const maxAttempts = OAK_COUNT * 18
-  const denseTarget = Math.floor(OAK_COUNT * 0.7)
+  const maxAttempts = OAK_COUNT * 28
+  const denseTarget = Math.floor(OAK_COUNT * DENSE_BELT_SHARE)
   while (placements.length < OAK_COUNT && attempts < maxAttempts) {
     attempts++
     let x: number
@@ -1327,6 +1412,8 @@ async function placeOakTrees(
       z = (rand() - 0.5) * 2 * halfZ
     }
     if (blockedForTree(x, z)) continue
+    if (spacingTooClose(spacing, x, z, OAK_MIN_SPACING, cell)) continue
+    spacingRemember(spacing, x, z, cell)
     placements.push({
       x,
       z,
@@ -1435,11 +1522,13 @@ async function placeBushes(
   const halfZ = FOREST_OVERWATCH_DEPTH * 0.46
   const placements: Array<{ x: number; z: number; yaw: number; height: number }> =
     []
+  const spacing: SpacingGrid = new Map()
+  const cell = BUSH_MIN_SPACING
 
-  // Pack hard into scrub meadows (same bush GLB — scale/yaw only)
-  const scrubTarget = Math.floor(BUSH_COUNT * 0.88)
+  // Mild scrub preference, then even map-wide fill (min spacing stops clumps)
+  const scrubTarget = Math.floor(BUSH_COUNT * SCRUB_BUSH_SHARE)
   let scrubAttempts = 0
-  const maxScrubAttempts = scrubTarget * 28
+  const maxScrubAttempts = scrubTarget * 36
   while (placements.length < scrubTarget && scrubAttempts < maxScrubAttempts) {
     scrubAttempts++
     const scrub = FOREST_OPEN_SCRUB[Math.floor(rand() * FOREST_OPEN_SCRUB.length)]!
@@ -1448,6 +1537,8 @@ async function placeBushes(
     const x = scrub.x + Math.cos(ang) * r * scrub.rx * 0.98
     const z = scrub.z + Math.sin(ang) * r * scrub.rz * 0.98
     if (blockedForBush(x, z)) continue
+    if (spacingTooClose(spacing, x, z, BUSH_MIN_SPACING, cell)) continue
+    spacingRemember(spacing, x, z, cell)
     placements.push({
       x,
       z,
@@ -1456,14 +1547,15 @@ async function placeBushes(
     })
   }
 
-  // Light rural scatter for the rest
   let attempts = 0
-  const maxAttempts = BUSH_COUNT * 22
+  const maxAttempts = BUSH_COUNT * 36
   while (placements.length < BUSH_COUNT && attempts < maxAttempts) {
     attempts++
     const x = (rand() - 0.5) * 2 * halfX
     const z = (rand() - 0.5) * 2 * halfZ
     if (blockedForBush(x, z)) continue
+    if (spacingTooClose(spacing, x, z, BUSH_MIN_SPACING, cell)) continue
+    spacingRemember(spacing, x, z, cell)
     placements.push({
       x,
       z,
@@ -1499,8 +1591,8 @@ async function placeBushes(
     LOD_RANGE_BUSH,
   )
 
-  // Sparse AO discs (every 3rd) — same bushes, fewer transparent quads
-  for (let i = 0; i < bushPlacements.length; i += 3) {
+  // Sparse AO discs (every 4th) — fewer transparent quads
+  for (let i = 0; i < bushPlacements.length; i += 4) {
     const pl = bushPlacements[i]!
     contacts.push({
       x: pl.x,
@@ -1510,7 +1602,7 @@ async function placeBushes(
   }
 
   console.info(
-    `[Steel] Forest bushes — ${count} instances · ${draws} chunk draws · 1 GLB scale/yaw · ${FOREST_OPEN_SCRUB.length} scrub meadows`,
+    `[Steel] Forest bushes — ${count} instances · ${draws} chunk draws · even spacing ≥${BUSH_MIN_SPACING}m · scrub share ~${Math.round(SCRUB_BUSH_SHARE * 100)}%`,
   )
   return count
 }
@@ -1804,15 +1896,37 @@ function townRing(
   return spots
 }
 
+/** Buildings need dry ground — wet channel + inner mud shelf are off-limits. */
+function inRiverForBuilding(x: number, z: number): boolean {
+  return distToRiver(x, z) < RIVER_HALF_W + RIVER_SHELF * 0.55
+}
+
 function houseSpots(): PropSpot[] {
   const spots: PropSpot[] = []
   for (const town of FOREST_TOWNS) {
     const r = town.radius
-    spots.push(
+    const raw = [
       ...townRing(town, 8, r * 0.32, 13.2, 0.18),
       ...townRing(town, 6, r * 0.52, 12.8, 0.72),
       ...townRing(town, 5, r * 0.72, 12.4, 1.2),
-    )
+    ]
+    for (const s of raw) {
+      if (inRiverForBuilding(s.x, s.z)) continue
+      spots.push(s)
+    }
+    // Midwood: extra dry rings on the south bank if water culls many spots
+    if (town.id === 'mid') {
+      const extra = [
+        ...townRing(town, 6, r * 0.4, 13.0, 0.4),
+        ...townRing(town, 5, r * 0.62, 12.6, 0.95),
+      ]
+      for (const s of extra) {
+        if (inRiverForBuilding(s.x, s.z)) continue
+        // Prefer southern half (away from river)
+        if (s.z > town.z + r * 0.15) continue
+        spots.push(s)
+      }
+    }
   }
   return spots
 }
@@ -1860,6 +1974,7 @@ async function placeTownHouses(
   for (let i = 0; i < spots.length; i++) {
     const spot = spots[i]!
     if (onAsphalt(spot.x, spot.z)) continue
+    if (inRiverForBuilding(spot.x, spot.z)) continue
     const pick = templates[i % templates.length]!
     const targetH = spot.h * (pick.h / 13)
     plantRuin(pick.piece, group, colliders, spot.x, spot.z, spot.yaw, targetH)

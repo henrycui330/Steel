@@ -4,7 +4,8 @@ import { nationByTeam } from './nations'
 
 export const KOTH_WIN_SEC = 90
 export const KOTH_RADIUS = 55
-export const KOTH_CENTER = { x: 0, z: 0 }
+/** Match Forest Midwood (dry bank south of river) — 0, −100×1.75. */
+export const KOTH_CENTER = { x: 0, z: -175 }
 export const KOTH_RESPAWN_SEC = 5
 
 export type HillOwner = TeamId | 'contested' | 'none'
