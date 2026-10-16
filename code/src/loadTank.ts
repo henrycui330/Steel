@@ -239,6 +239,41 @@ function prepareChaffee(root: THREE.Object3D): boolean {
 }
 
 /**
+ * Pz-V Panther A (mid prod) — hull.001 / turret.001 / weapon.001 (+X gun).
+ * Same node names as Cromwell — fingerprint on panther. −90° Y → game +Z.
+ */
+function preparePanther(root: THREE.Object3D): boolean {
+  let isPanther = false
+  root.traverse((o) => {
+    if (/panther/i.test(o.name)) isPanther = true
+  })
+  if (!isPanther) return false
+
+  const turret =
+    root.getObjectByName('turret001') ?? root.getObjectByName('turret.001')
+  const barrel =
+    root.getObjectByName('weapon001') ?? root.getObjectByName('weapon.001')
+  const hull = root.getObjectByName('hull001') ?? root.getObjectByName('hull.001')
+  if (!turret || !barrel) return false
+
+  root.rotation.y = -Math.PI / 2
+  root.updateMatrixWorld(true)
+
+  if (hull) hull.name = 'Hull'
+  turret.name = 'Turret'
+  // Coax / muzzle brake bits ride with the elevating gun.
+  for (const n of ['weapon2001', 'weapon2.001']) {
+    const coax = root.getObjectByName(n)
+    if (coax && coax !== barrel) barrel.attach(coax)
+  }
+  barrel.name = 'Barrel'
+  if (barrel.parent !== turret) turret.attach(barrel)
+
+  console.info('[Steel] Panther A: hull.001 + turret.001 + weapon.001 (−90° Y)')
+  return true
+}
+
+/**
  * Cromwell IV — named hull001 / turret001 / weapon001 (Three.js strips dots).
  * Pack faces +X; bake −90° so nose is game +Z.
  */
@@ -250,10 +285,12 @@ function prepareCromwell(root: THREE.Object3D): boolean {
   const hull = root.getObjectByName('hull001') ?? root.getObjectByName('hull.001')
   if (!turret || !barrel) return false
   let isCromwell = false
+  let isPanther = false
   root.traverse((o) => {
     if (/cromwell/i.test(o.name)) isCromwell = true
+    if (/panther/i.test(o.name)) isPanther = true
   })
-  if (!isCromwell) return false
+  if (isPanther || !isCromwell) return false
 
   root.rotation.y = -Math.PI / 2
   root.updateMatrixWorld(true)
@@ -2298,6 +2335,7 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareChallenger2(model) ||
       prepareConqueror(model) ||
       prepareChurchill(model) ||
+      preparePanther(model) ||
       prepareCromwell(model) ||
       prepareChaffee(model) ||
       prepareToshueyiPz4(model)

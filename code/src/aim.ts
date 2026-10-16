@@ -171,6 +171,23 @@ export function getBarrelDirection(out = new THREE.Vector3()): THREE.Vector3 {
   return out.copy(_barrelDir)
 }
 
+/** World gun-forward from a barrel pitch pivot (MP remote fire). */
+export function gunForwardFromBarrel(
+  barrelPitchPivot: THREE.Object3D,
+  out = new THREE.Vector3(),
+): THREE.Vector3 {
+  barrelPitchPivot.updateMatrixWorld(true)
+  barrelPitchPivot.getWorldQuaternion(_quat)
+  if (barrelPitchPivot.userData.gunForward === 'x') {
+    out.set(1, 0, 0)
+  } else if (barrelPitchPivot.userData.gunForward === '-z') {
+    out.set(0, 0, -1)
+  } else {
+    out.set(0, 0, 1)
+  }
+  return out.applyQuaternion(_quat).normalize()
+}
+
 export function getAimImpactPoint(): THREE.Vector3 {
   return mouseWorld
 }

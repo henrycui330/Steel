@@ -37,6 +37,10 @@ export type CombatHudState = {
   turretRelRad?: number
   /** Drive speed in world units / sec (≈ m/s). */
   speedU?: number
+  /** Manual gearbox label (D / N / R). */
+  gear?: string
+  /** Tach 0…1 from drive (gear band + throttle). */
+  rpm01?: number
   /** Aim rangefinder distance in meters, or null if no hit. */
   rangeM?: number | null
   /** Player world XZ for minimap. */
@@ -707,7 +711,6 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
         <span class="dmg-leg dmg-leg-ammo">AMMO</span>
       </div>
       <div class="dmg-drive">
-        <div><span class="dmg-k">GEAR</span> <span class="dmg-gear">N</span></div>
         <div><span class="dmg-k">HULL</span> <span class="dmg-spd">OK</span></div>
       </div>
     </div>
@@ -755,6 +758,22 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   weapon.className = 'hud-corner hud-br'
   weapon.innerHTML = `
     <div class="dash-cluster" aria-label="Vehicle dashboard">
+      <div class="dash-panel dash-gear" aria-label="Gear selector">
+        <i class="dash-screw dash-screw-tl"></i>
+        <i class="dash-screw dash-screw-tr"></i>
+        <i class="dash-screw dash-screw-bl"></i>
+        <i class="dash-screw dash-screw-br"></i>
+        <div class="gear-face">
+          <div class="gear-rail" aria-hidden="true"></div>
+          <div class="gear-gate">
+            <span class="gear-slot" data-g="R">R</span>
+            <span class="gear-slot is-active" data-g="N">N</span>
+            <span class="gear-slot" data-g="D">D</span>
+          </div>
+          <div class="gear-readout"><span class="gear-text">N</span></div>
+          <p class="gear-keys">E ↑ · Q ↓</p>
+        </div>
+      </div>
       <div class="dash-panel dash-speed">
         <i class="dash-screw dash-screw-tl"></i>
         <i class="dash-screw dash-screw-tr"></i>
@@ -894,8 +913,9 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
   const dmgDial = status.querySelector('.dmg-dial') as HTMLElement
   const dmgTag = status.querySelector('.dmg-tag') as HTMLElement
   const dmgCrewN = status.querySelector('.dmg-crew-n') as HTMLElement
-  const dmgGear = status.querySelector('.dmg-gear') as HTMLElement
   const dmgSpd = status.querySelector('.dmg-spd') as HTMLElement
+  const gearText = weapon.querySelector('.gear-text') as HTMLElement
+  const gearSlots = weapon.querySelectorAll('.gear-slot')
   let dmgTankId: TankId | undefined
   const dmgPreview = createDamagePreview(dmgDial)
 
@@ -953,17 +973,6 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
     return max > 0 ? THREE.MathUtils.clamp(hp / max, 0, 1) : 0
   }
 
-  function arcadeGearRpm(speedU: number): { gear: string; rpm: number } {
-    const spd = Math.abs(speedU)
-    if (spd < 0.4) return { gear: 'N', rpm: 750 }
-    const gearN =
-      spd < 3.5 ? 1 : spd < 7 ? 2 : spd < 11 ? 3 : spd < 15 ? 4 : spd < 19 ? 5 : 6
-    const band = spd < 3.5 ? 3.5 : spd < 7 ? 3.5 : spd < 11 ? 4 : spd < 15 ? 4 : 4
-    const inBand = ((spd % band) / band) * 0.85 + 0.15
-    const rpm = Math.round(1100 + inBand * 1600)
-    return { gear: String(gearN), rpm }
-  }
-
   return {
     setVisible(visible) {
       root.style.display = visible ? 'block' : 'none'
@@ -1010,8 +1019,12 @@ export function createHud(minimap?: HudMinimapConfig): GameHud {
       const kmhClamped = Math.min(kmh, SPEEDO_MAX_KMH)
       speedText.textContent = `${kmh}`
 
-      const { gear, rpm } = arcadeGearRpm(state.speedU ?? 0)
-      dmgGear.textContent = gear
+      const gearLabel = state.gear ?? 'N'
+      gearText.textContent = gearLabel
+      gearSlots.forEach((el) => {
+        el.classList.toggle('is-active', (el as HTMLElement).dataset.g === gearLabel)
+      })
+      const rpm = Math.round((state.rpm01 ?? 0.18) * TACH_MAX_RPM)
       needleSpd.setAttribute(
         'transform',
         `rotate(${gaugeAngleDeg(kmhClamped, SPEEDO_MAX_KMH).toFixed(2)} 100 100)`,

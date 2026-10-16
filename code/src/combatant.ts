@@ -148,6 +148,11 @@ export type Combatant = {
   getModule: (id: ModuleId) => ModuleState
   /** Restore HP / alive after a KOTH respawn (mesh must still exist). */
   revive: () => void
+  /**
+   * MP guest: apply host-authoritative hull HP / alive.
+   * Triggers onDestroyed once when flipping alive → dead.
+   */
+  applyAuthorityState: (hp: number, nextAlive: boolean) => void
 }
 
 export type CombatantOptions = {
@@ -380,6 +385,23 @@ export function createCombatant(
       console.info(
         `[Steel] ${label} respawned hull ${modules.hull.hp}/${modules.hull.maxHp}`,
       )
+    },
+    applyAuthorityState(hp, nextAlive) {
+      const clamped = Math.max(0, Math.min(maxHp, Math.round(hp)))
+      if (!nextAlive) {
+        modules.hull.hp = 0
+        if (alive) {
+          alive = false
+          pendingApheWreck = null
+          console.info(`[Steel] ${label} authority KILL · hull 0/${maxHp}`)
+          opts.onDestroyed?.(root, { severe: false })
+        }
+        return
+      }
+      if (!alive) {
+        this.revive()
+      }
+      modules.hull.hp = clamped
     },
     previewShellHit(p, velocity, shellStats) {
       if (!alive) return null

@@ -29,6 +29,10 @@ export type MpTankPose = {
   yaw: number
   turret: number
   barrel: number
+  /** Hull HP — host authority. */
+  hp: number
+  /** Alive flag — host authority. */
+  alive: boolean
 }
 
 /** Guest → host control packet (compact keys). */

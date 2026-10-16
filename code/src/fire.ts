@@ -116,6 +116,8 @@ export type FireSystem = {
     propColliders?: readonly PropCollider[],
     /** Main-gun spent casing ejects from this (turret), not the muzzle. */
     turret?: THREE.Object3D | null,
+    /** Override shell leave dir (MP host firing a remote barrel). */
+    shotDir?: THREE.Vector3 | null,
   ) => boolean
   setReloadSec: (sec: number) => void
   /**
@@ -1237,7 +1239,12 @@ export function createFireSystem(
         noMainGun,
       }
     },
-    update(dt, wantsFire, muzzle, dummies, camera, propColliders, turret) {
+    update(dt, wantsFire, muzzle, dummies, camera, propColliders, turret, shotDir) {
+      const leaveDir = (): THREE.Vector3 =>
+        shotDir && shotDir.lengthSq() > 1e-8
+          ? shotDir.clone().normalize()
+          : aimDirFromMuzzle(muzzle, camera, new THREE.Vector3())
+
       if (reloadGate > 0) {
         reloadGate = Math.max(0, reloadGate - dt)
         if (reloadGate <= 0 && reloadGateAmmo) {
@@ -1276,7 +1283,7 @@ export function createFireSystem(
           pending = {
             remaining: MG_RELEASE_DELAY,
             ammoId: 'mg',
-            dir: aimDirFromMuzzle(muzzle, camera, new THREE.Vector3()),
+            dir: leaveDir(),
           }
           stock.mg--
           mgCooldown = MG_COOLDOWN
@@ -1300,7 +1307,7 @@ export function createFireSystem(
           pending = {
             remaining: MG_RELEASE_DELAY,
             ammoId: 'he',
-            dir: aimDirFromMuzzle(muzzle, camera, new THREE.Vector3()),
+            dir: leaveDir(),
           }
           magazineLeft--
           magazineShotCooldown = MAGAZINE_SHOT_COOLDOWN
@@ -1326,7 +1333,7 @@ export function createFireSystem(
           pending = {
             remaining: SHELL_RELEASE_DELAY,
             ammoId: fired,
-            dir: aimDirFromMuzzle(muzzle, camera, new THREE.Vector3()),
+            dir: leaveDir(),
           }
           stock[fired]--
           chambered = null

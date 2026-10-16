@@ -1,4 +1,4 @@
-/** Keyboard: WASD drive, Shift brake, Space fire, C camera (turret/chase/hull), U arty map; ↑/↓ ammo; 1/2 gun; RMB aim. */
+/** Keyboard: WASD drive, Shift brake, Space fire, C camera (turret/chase/hull), U arty map; ↑/↓ ammo; 1/2 gun; RMB aim; E/Q gear. */
 export type DriveInput = {
   forward: number
   turn: number
@@ -17,6 +17,8 @@ let weaponSelectQueued: WeaponId | null = null
 let zoomDeltaQueued = 0
 let artilleryMapToggleQueued = false
 let nvgToggleQueued = false
+/** Edge: +1 = E upshift, −1 = Q downshift. */
+let gearShiftQueued = 0
 
 function isDown(code: string): boolean {
   return keys.has(code)
@@ -246,6 +248,13 @@ export function consumeNvgToggle(): boolean {
   return true
 }
 
+/** Edge-triggered manual gear: +1 up (E), −1 down (Q). */
+export function consumeGearShift(): number {
+  const s = gearShiftQueued
+  gearShiftQueued = 0
+  return s
+}
+
 export function bindDriveInput(): void {
   window.addEventListener('keydown', (e) => {
     // Don’t steal keys while the HTML menu is up (scroll / forms).
@@ -283,6 +292,12 @@ export function bindDriveInput(): void {
     if (e.code === 'KeyN' && !e.repeat) {
       nvgToggleQueued = true
     }
+    if (e.code === 'KeyE' && !e.repeat) {
+      gearShiftQueued = 1
+    }
+    if (e.code === 'KeyQ' && !e.repeat) {
+      gearShiftQueued = -1
+    }
     keys.add(e.code)
   })
   window.addEventListener('keyup', (e) => {
@@ -315,5 +330,6 @@ export function bindDriveInput(): void {
     zoomDeltaQueued = 0
     artilleryMapToggleQueued = false
     nvgToggleQueued = false
+    gearShiftQueued = 0
   })
 }

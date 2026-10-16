@@ -623,7 +623,7 @@ function showTutorials(
           <button type="button" class="tutor-menu-card is-available${mode === 'land-basics' ? ' is-selected' : ''}" data-tut="land">
             <span class="tutor-menu-num">01</span>
             <span class="tutor-menu-name">Basics — Land</span>
-            <span class="tutor-menu-blurb">Drive · cameras · test fire · paint</span>
+            <span class="tutor-menu-blurb">Gears · drive · cameras · test fire · paint</span>
           </button>
           <button type="button" class="tutor-menu-card is-available${mode === 'air-basics' ? ' is-selected' : ''}" data-tut="air">
             <span class="tutor-menu-num">02</span>

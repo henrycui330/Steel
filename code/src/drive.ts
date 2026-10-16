@@ -2,13 +2,31 @@ import * as THREE from 'three'
 import type { DriveProfile, MassClass } from './tankCatalog'
 
 export type DriveControls = {
-  /** -1 reverse, 0 idle, +1 forward throttle */
+  /** -1 reverse, 0 idle, +1 forward throttle (W/S) */
   forward: number
   /** -1 right, +1 left */
   turn: number
   /** Hard brake toward zero speed */
   brake: boolean
+  /** Edge: +1 upshift (E), −1 downshift (Q). */
+  gearShift?: number
+  /**
+   * MP remotes / non-manual: pick D / R / N from `forward` each frame.
+   * Local player leaves this false/undefined.
+   */
+  autoGear?: boolean
 }
+
+/** Manual gearbox — R ↔ N ↔ D (Q down / E up). */
+export const MANUAL_GEARS = [
+  { id: 'R', dir: -1, speedFrac: 1.0, accelMul: 1.0 },
+  { id: 'N', dir: 0, speedFrac: 0, accelMul: 0 },
+  { id: 'D', dir: 1, speedFrac: 1.0, accelMul: 1.0 },
+] as const
+
+export type ManualGearId = (typeof MANUAL_GEARS)[number]['id']
+
+const GEAR_N_INDEX = MANUAL_GEARS.findIndex((g) => g.id === 'N')
 
 /** Per-track longitudinal speeds (m/s) — TR3 dual-track. */
 export type TrackSpeeds = {
@@ -22,6 +40,10 @@ export type DriveController = {
   getTrackSpeeds: () => TrackSpeeds
   /** Smoothed throttle −1…+1 (for engine / immersion). */
   getThrottle: () => number
+  /** Current manual gear label (D / N / R). */
+  getGear: () => ManualGearId
+  /** Tach proxy 0…1 from gear band + throttle. */
+  getRpm01: () => number
   /** Vertical ride velocity (m/s) — bumps / landings. */
   getRideVel: () => number
   /** Always false — crest hop removed; soft hang stays “grounded”. */
@@ -105,7 +127,7 @@ const ACCEL_PITCH_HEADROOM = 1.35
 /** How fast turn-lean eases in/out (slightly snappier than terrain). */
 const LEAN_SMOOTH = 8
 /** TP1c — throttle catches power (1/s exp rate). */
-const THROTTLE_ENGAGE = 3.2
+const THROTTLE_ENGAGE = 2.4
 /** TP1c — throttle falls off slower → coast inertia. */
 const THROTTLE_RELEASE = 2.15
 /** TP1c — brake snuffs throttle fast (still responsive). */
@@ -119,7 +141,7 @@ const THROTTLE_EPS = 0.03
  */
 export const SPEED_FEEL = 1.32
 /** Scales accel / reverse only (top speed stays SPEED_FEEL). Lower = heavier get-up. */
-const ACCEL_FEEL = 0.62
+const ACCEL_FEEL = 0.45
 /**
  * At full speed, turn authority falls toward this fraction of catalog turnRate
  * (WT: heavy chassis won't pivot at pace).
@@ -255,6 +277,9 @@ export function createDriveController(profile: DriveProfile): DriveController {
   let leftTrackOut = false
   let rightTrackOut = false
   let lastTrackOutLog = 'ok'
+  /** Start in N — E into D to roll. */
+  let gearIdx = GEAR_N_INDEX >= 0 ? GEAR_N_INDEX : 1
+  let rpm01 = 0.18
 
   const {
     maxSpeed: catalogMaxSpeed,
@@ -411,6 +436,8 @@ export function createDriveController(profile: DriveProfile): DriveController {
     getSpeed: () => (vL + vR) * 0.5,
     getTrackSpeeds: () => ({ left: vL, right: vR }),
     getThrottle: () => throttle,
+    getGear: () => MANUAL_GEARS[gearIdx]?.id ?? 'N',
+    getRpm01: () => rpm01,
     getRideVel: () => rideVel,
     isAirborne: () => airborne,
     killSpeed() {
@@ -468,33 +495,94 @@ export function createDriveController(profile: DriveProfile): DriveController {
       const brakeMul = slip > 0.2 ? 1 - slip * 0.55 : 1
       const coastMul = slip > 0.2 ? 1 - slip * 0.4 : 1
 
-      // TP1c — smoothed throttle (brake cuts fast; release coasts); TR4 mass scales rates
-      const want = brake ? 0 : forward
+      // —— Manual gearbox (E up / Q down). MP remotes use autoGear. ——
+      if (controls.autoGear) {
+        if (forward > 0.15) gearIdx = MANUAL_GEARS.length - 1 // D
+        else if (forward < -0.15) gearIdx = 0 // R
+        else gearIdx = GEAR_N_INDEX >= 0 ? GEAR_N_INDEX : 1
+      } else {
+        const shift = controls.gearShift ?? 0
+        if (shift > 0 && gearIdx < MANUAL_GEARS.length - 1) {
+          gearIdx++
+          console.info(`[Steel] Gear → ${MANUAL_GEARS[gearIdx]!.id}`)
+        } else if (shift < 0 && gearIdx > 0) {
+          gearIdx--
+          console.info(`[Steel] Gear → ${MANUAL_GEARS[gearIdx]!.id}`)
+        }
+      }
+      const gear = MANUAL_GEARS[gearIdx]!
+
+      // Player: W = accel in gear dir (D forward / R backward), S = brake.
+      // autoGear (AI/MP): signed forward still means +D / −R throttle.
+      let powerReq = 0
+      let braking = brake
+      if (controls.autoGear) {
+        powerReq = gear.dir === 0 ? 0 : Math.abs(forward)
+      } else {
+        powerReq = gear.dir === 0 ? 0 : Math.max(0, forward)
+        if (forward < -0.1) braking = true
+      }
+
+      // TP1c — smoothed throttle (signed by gear dir for engine SFX)
+      const want = braking ? 0 : powerReq * gear.dir
       let thrRate = THROTTLE_ENGAGE * mass.thrEngageMul
-      if (brake) thrRate = THROTTLE_BRAKE
+      if (braking) thrRate = THROTTLE_BRAKE
       else if (want === 0) thrRate = THROTTLE_RELEASE * mass.thrReleaseMul
       else if (Math.sign(want) !== Math.sign(throttle) && Math.abs(throttle) > 0.05) {
-        // Direction flip — dump old throttle a bit quicker
         thrRate = THROTTLE_ENGAGE * mass.thrEngageMul * 1.35
       }
       throttle += (want - throttle) * (1 - Math.exp(-thrRate * dt))
       if (Math.abs(throttle) < 0.008) throttle = 0
 
-      if (brake) {
+      const gearCapFwd = capFwd * gear.speedFrac
+      const gearCapRev = capRev * gear.speedFrac
+
+      if (braking) {
         if (speed > 0) speed = Math.max(0, speed - brakeDecel * brakeMul * dt)
         else if (speed < 0) speed = Math.min(0, speed + brakeDecel * brakeMul * dt)
-      } else if (throttle > THROTTLE_EPS) {
-        speed = Math.min(capFwd, speed + aFwd * throttle * dt)
-      } else if (throttle < -THROTTLE_EPS) {
-        speed = Math.max(-capRev, speed - aRev * -throttle * dt)
+      } else if (gear.dir > 0 && powerReq > THROTTLE_EPS) {
+        // Still rolling back — kill reverse before pulling away in a forward gear.
+        if (speed < -0.05) {
+          speed = Math.min(0, speed + brakeDecel * brakeMul * 0.85 * dt)
+        } else {
+          speed = Math.min(gearCapFwd, speed + aFwd * gear.accelMul * powerReq * dt)
+        }
+      } else if (gear.dir < 0 && powerReq > THROTTLE_EPS) {
+        if (speed > 0.05) {
+          speed = Math.max(0, speed - brakeDecel * brakeMul * 0.85 * dt)
+        } else {
+          speed = Math.max(-gearCapRev, speed - aRev * gear.accelMul * powerReq * dt)
+        }
       } else {
         const drag = coastDrag * coastMul * COAST_INERTIA
         if (speed > 0) speed = Math.max(0, speed - drag * dt)
         else if (speed < 0) speed = Math.min(0, speed + drag * dt)
       }
 
-      if (Math.abs(speed) < 0.02 && Math.abs(throttle) < THROTTLE_EPS && !brake) {
+      // Soft clamp if somehow over gear (downshift lugging / grade).
+      if (gear.dir > 0 && speed > gearCapFwd + 0.15) {
+        speed = Math.max(gearCapFwd, speed - brakeDecel * 0.35 * dt)
+      } else if (gear.dir < 0 && speed < -(gearCapRev + 0.15)) {
+        speed = Math.min(-gearCapRev, speed + brakeDecel * 0.35 * dt)
+      } else if (gear.dir === 0) {
+        // Neutral — no power; slight extra drag
+        const nDrag = coastDrag * coastMul * COAST_INERTIA * 1.35
+        if (speed > 0) speed = Math.max(0, speed - nDrag * dt)
+        else if (speed < 0) speed = Math.min(0, speed + nDrag * dt)
+      }
+
+      if (Math.abs(speed) < 0.02 && Math.abs(throttle) < THROTTLE_EPS && !braking) {
         speed = 0
+      }
+
+      // Tach: idle in N; otherwise band by speed-in-gear + throttle.
+      if (gear.dir === 0) {
+        rpm01 = THREE.MathUtils.lerp(rpm01, 0.18 + powerReq * 0.05, 1 - Math.exp(-4 * dt))
+      } else {
+        const cap = gear.dir > 0 ? Math.max(gearCapFwd, 0.5) : Math.max(gearCapRev, 0.5)
+        const inBand = THREE.MathUtils.clamp(Math.abs(speed) / cap, 0, 1.15)
+        const target = 0.22 + inBand * 0.55 + powerReq * 0.22
+        rpm01 = THREE.MathUtils.lerp(rpm01, THREE.MathUtils.clamp(target, 0.15, 1), 1 - Math.exp(-5 * dt))
       }
 
       // Sample grade early — TR4 applies force to speed before track split.
@@ -524,13 +612,14 @@ export function createDriveController(profile: DriveProfile): DriveController {
         const downCap = capFwd * GRADE_DOWN_CAP
         if (speed > downCap) speed = downCap
         if (speed < -capRev) speed = -capRev
-        // Mild floor: still crawling uphill if throttle held (no forever-stuck).
+        // Mild floor: still crawling uphill if in a forward gear with power.
         if (
-          throttle > THROTTLE_EPS &&
+          gear.dir > 0 &&
+          Math.abs(throttle) > THROTTLE_EPS &&
           grade > GRADE_TAX_START &&
-          speed < capFwd * 0.1
+          speed < gearCapFwd * 0.1
         ) {
-          speed = Math.max(speed, capFwd * 0.08)
+          speed = Math.max(speed, gearCapFwd * 0.08)
         }
       }
 

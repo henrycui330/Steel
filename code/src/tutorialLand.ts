@@ -10,6 +10,8 @@ export type LandTutorialCtx = {
   position: THREE.Vector3
   turnInput: number
   braking: boolean
+  /** Current manual gear (D / N / R). */
+  gear: string
   cameraMode: CameraMode
   cameraToggled: boolean
   dummyAlive: boolean
@@ -28,6 +30,7 @@ export type LandTutorialHandle = {
 
 type StepId =
   | 'welcome'
+  | 'gear'
   | 'drive'
   | 'steer'
   | 'brake'
@@ -48,14 +51,20 @@ const STEPS: StepDef[] = [
   {
     id: 'welcome',
     title: 'Basics — Land',
-    body: 'Interactive range. Complete each task — movement, camera effects, a live shot, then paint.',
+    body: 'Interactive range. Complete each task — gears, movement, camera effects, a live shot, then paint.',
     hint: 'Click Start, then click the game to capture the mouse.',
+  },
+  {
+    id: 'gear',
+    title: 'Shift into gear',
+    body: 'You start in N (neutral) — W will not move you. Press E to shift into D (drive). Q shifts down into R (reverse). W always accelerates; S always brakes.',
+    hint: 'E = D · Q = R · W = accel · S = brake',
   },
   {
     id: 'drive',
     title: 'Drive forward',
-    body: 'Hold W to throttle. Cover about 25 metres from your spawn.',
-    hint: 'W = forward · S = reverse',
+    body: 'In D, hold W to throttle. Cover about 25 metres from your spawn. (In R, W rolls you backward; S still brakes.)',
+    hint: 'W = accel · S = brake',
   },
   {
     id: 'steer',
@@ -66,8 +75,8 @@ const STEPS: StepDef[] = [
   {
     id: 'brake',
     title: 'Brake',
-    body: 'Build a little speed, then hold Shift (or Ctrl) to scrub it off.',
-    hint: 'Shift / Ctrl = brake',
+    body: 'Build a little speed, then hold S (or Shift / Ctrl) to scrub it off.',
+    hint: 'S / Shift / Ctrl = brake',
   },
   {
     id: 'camera',
@@ -96,7 +105,7 @@ const STEPS: StepDef[] = [
   {
     id: 'done',
     title: 'Lesson complete',
-    body: 'You can drive, aim, shoot, change cameras, and paint your tank. Try Basics — Air or Advanced — Systems next.',
+    body: 'You can shift gears, drive, aim, shoot, change cameras, and paint your tank. Try Basics — Air or Advanced — Systems next.',
     hint: 'Return to hangar when ready.',
   },
 ]
@@ -284,6 +293,16 @@ export function createLandTutorial(opts: {
       if (stepDist < 8) driveDist += stepDist
       lastPos.copy(ctx.position)
 
+      if (s.id === 'gear') {
+        hintEl.textContent =
+          ctx.gear === 'N'
+            ? 'Gear N — press E into D'
+            : ctx.gear === 'D'
+              ? 'In D — good. Continuing…'
+              : 'Gear R — press E twice (R → N → D)'
+        if (ctx.gear === 'D') advance()
+        return
+      }
       if (s.id === 'drive') {
         fillEl.style.transform = `scaleX(${Math.min(1, driveDist / 25) * ((stepIndex + 1) / STEPS.length)})`
         if (driveDist >= 25) advance()

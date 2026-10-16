@@ -13,10 +13,10 @@ import {
   createStallAlarm,
 } from './audio'
 import { addArenaWalls, arenaWallColliders, clampToArena, type ArenaHalf } from './arena'
-import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, resetAim, resetAimPitchLimits, resetAimYawLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, setAimYawLimits, updateTurretAim, type AimFrame } from './aim'
+import { bindMouseAim, getAimDirection, getAimPitch, getAimYaw, gunForwardFromBarrel, resetAim, resetAimPitchLimits, resetAimYawLimits, setAimHeightAt, setAimLocalYawPitch, setAimPitchLimits, setAimPrecision, setAimRates, setAimYawLimits, updateTurretAim, type AimFrame } from './aim'
 import { type CameraMode, adjustAimZoom, getAimFov, nextCameraMode, punchCameraShake, resetAimCamSight, resetCameraShake, setAimCamSight, setTerrainCameraRumble, updatePlayerCamera } from './camera'
 import { findClearSpawnNear, resolvePropCollisions, type PropCollider } from './collision'
-import { createCombatant } from './combatant'
+import { createCombatant, type Combatant } from './combatant'
 import './cosmetics'
 import type { DummyTarget } from './dummy'
 import { spawnStaticPz3Dummy } from './dummy'
@@ -37,6 +37,7 @@ import {
   consumeZoomDelta,
   consumeNvgToggle,
   getDriveInput,
+  consumeGearShift,
   bindFlightInput,
   getFlightInput,
   resetFlightInput,
@@ -1319,6 +1320,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
       const dt = realDt
 
       const raw = getFlightInput(dt)
+      // Q is chaff in air — don't bank a tank gear shift for later.
+      consumeGearShift()
       if (consumeNvgToggle()) nvg.toggle()
       if (
         raw.eject &&
@@ -1930,8 +1933,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
       team: TeamId
       handle: Awaited<ReturnType<typeof loadTankChassis>>
       drive: ReturnType<typeof createDriveController> | null
+      /** Host: hittable + wreck. Guest: optional for authority death FX. */
+      combat: Combatant | null
+      /** Host-only gun sim for this peer. */
+      fire: ReturnType<typeof createFireSystem> | null
       input: MpInput
       inputAge: number
+      /** Guest: last authority alive (detect death edge). */
+      seenAlive: boolean
     }
     const emptyMpInput = (): MpInput => ({
       f: 0,
@@ -1942,6 +1951,26 @@ async function startMission(sel: MenuSelection): Promise<void> {
       ap: 0,
     })
     const remotes: MpRemoteUnit[] = []
+    const _mpGunDir = new THREE.Vector3()
+
+    function combatantAsTarget(c: Combatant): DummyTarget {
+      return {
+        root: c.root,
+        get alive() {
+          return c.alive
+        },
+        get hp() {
+          return c.hp
+        },
+        get maxHp() {
+          return c.maxHp
+        },
+        containsPoint: (p) => c.containsPoint(p),
+        resolveShellHit: (p, v, s, ctx) => c.resolveShellHit(p, v, s, ctx),
+        previewShellHit: (p, v, s) => c.previewShellHit(p, v, s),
+      }
+    }
+
     if (mp) {
       for (let i = 0; i < mp.peers.length; i++) {
         const peer = mp.peers[i]!
@@ -1958,14 +1987,54 @@ async function startMission(sel: MenuSelection): Promise<void> {
         handle.root.rotation.order = 'YXZ'
         handle.root.rotation.y = remoteYaw
         scene.add(handle.root)
+
+        let combat: Combatant | null = null
+        let remoteFire: ReturnType<typeof createFireSystem> | null = null
+        if (mp.isHost) {
+          combat = createCombatant(handle.root, {
+            maxHp: remoteOpt.maxHp,
+            armor: remoteOpt.armor,
+            label: `MP:${peer.userId.slice(0, 6)}`,
+            onDestroyed: (r) => {
+              console.info(`[Steel] MP remote destroyed ${peer.userId.slice(0, 6)}`)
+              spawnDestroyedWreck(scene, r, smoke, false)
+            },
+          })
+          remoteFire = createFireSystem(scene, playable.x, remoteOpt.reloadSec)
+          remoteFire.setReloadSec(remoteOpt.reloadSec)
+          remoteFire.setMagazine(remoteOpt.magazineSize ?? 0, remoteOpt.reloadSec)
+          remoteFire.setNoMainGun(!!remoteOpt.noMainGun)
+          remoteFire.setAtgmAvailable(false)
+          remoteFire.setGunProfile(remoteOpt.gun)
+          remoteFire.setAmmoStock(
+            defaultAmmoRacks({
+              reloadSec: remoteOpt.reloadSec,
+              magazineSize: remoteOpt.magazineSize,
+              antiAir: remoteOpt.antiAir,
+              noMainGun: remoteOpt.noMainGun,
+            }),
+          )
+          remoteFire.setPlayableBounds(playable)
+          remoteFire.setHeightAt(heightAt ?? null)
+          remoteFire.setOnKill((victim) => {
+            board.noteKill(handle.root)
+            console.info(
+              `[Steel] MP kill by ${peer.userId.slice(0, 6)} → ${victim.name || 'target'}`,
+            )
+          })
+        }
+
         remotes.push({
           userId: peer.userId,
           tankId: peer.tankId,
           team: peer.team,
           handle,
           drive,
+          combat,
+          fire: remoteFire,
           input: emptyMpInput(),
           inputAge: 999,
+          seenAlive: true,
         })
         console.info(
           `[Steel] MP remote ${peer.tankId} (${peer.userId.slice(0, 6)}) ${peer.team}[${peer.spawnIndex}] @ (${remoteSpawn.x.toFixed(0)}, ${remoteSpawn.z.toFixed(0)})`,
@@ -1978,6 +2047,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       root: THREE.Object3D,
       tur: THREE.Object3D,
       bar: THREE.Object3D,
+      combat: Combatant,
     ): MpTankPose {
       const barrelAng = bar.userData.gunForward === 'x' ? bar.rotation.z : bar.rotation.x
       return {
@@ -1988,6 +2058,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
         yaw: root.rotation.y,
         turret: tur.rotation.y,
         barrel: barrelAng,
+        hp: combat.hp,
+        alive: combat.alive,
       }
     }
 
@@ -2673,16 +2745,29 @@ async function startMission(sel: MenuSelection): Promise<void> {
     function updateTank(dt: number): AimFrame {
       const alive = playerCombat.alive && !matchOver
       const { forward, turn, brake, fire: wantsFire } = getDriveInput()
+      const gearShift = consumeGearShift()
       if (consumeNvgToggle()) nvg.toggle()
 
       const mpGuest = !!(mp && mpSess && !mpSess.isHost)
-      // Guest: snap every *other* tank. Own hull is driven locally (prediction).
+      // Guest: snap every *other* tank. Own hull driven locally; HP from host.
       if (mpGuest && mpSess.lastSnap && mp) {
         for (const pose of mpSess.lastSnap) {
-          if (pose.id === mp.myUserId) continue
+          if (pose.id === mp.myUserId) {
+            if (typeof pose.hp === 'number' && typeof pose.alive === 'boolean') {
+              playerCombat.applyAuthorityState(pose.hp, pose.alive)
+            }
+            continue
+          }
           const remote = remotes.find((r) => r.userId === pose.id)
           if (!remote) continue
-          applyTankPose(remote.handle.root, remote.handle.turret, remote.handle.barrel, pose)
+          if (pose.alive !== false) {
+            applyTankPose(remote.handle.root, remote.handle.turret, remote.handle.barrel, pose)
+            remote.seenAlive = true
+          } else if (remote.seenAlive) {
+            remote.seenAlive = false
+            console.info(`[Steel] MP peer ${pose.id.slice(0, 6)} authority dead`)
+            spawnDestroyedWreck(scene, remote.handle.root, smoke, false)
+          }
         }
       }
 
@@ -2732,6 +2817,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
             forward: trackDrive.immobilized ? 0 : forward,
             turn: trackDrive.immobilized ? 0 : turn,
             brake: trackDrive.immobilized || brake,
+            gearShift: trackDrive.immobilized ? 0 : gearShift,
           },
           tank,
           (pos) => {
@@ -2789,17 +2875,29 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (mp && mpSess?.isHost && !matchOver) {
         const mods = env.getDriveMods()
         for (const remote of remotes) {
+          remote.combat?.tickMobility(dt)
           if (!remote.drive) continue
           remote.inputAge += dt
+          if (remote.combat && !remote.combat.alive) {
+            remote.drive.killSpeed()
+            continue
+          }
           const stale = remote.inputAge > 0.45
           const gFwd = stale ? 0 : remote.input.f
           const gTurn = stale ? 0 : remote.input.u
           const gBrake = stale ? true : remote.input.b
-          remote.drive.setMobilityMul(mods.mobilityMul)
+          const trackMods = remote.combat?.getTrackDriveMods()
+          remote.drive.setMobilityMul(mods.mobilityMul * (trackMods?.forwardMul ?? 1))
           remote.drive.setSlip(mods.slip)
+          remote.drive.setTrackOut(!!trackMods?.leftOut, !!trackMods?.rightOut)
           remote.drive.update(
             dt,
-            { forward: gFwd, turn: gTurn, brake: gBrake },
+            {
+              forward: trackMods?.immobilized ? 0 : gFwd,
+              turn: gTurn * (trackMods?.turnMul ?? 1),
+              brake: trackMods?.immobilized || gBrake,
+              autoGear: true,
+            },
             remote.handle.root,
             (pos) => {
               const blocked =
@@ -2927,6 +3025,24 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
       const aim: AimFrame = updateTurretAim(dt, camera, tank, turret, barrel, muzzle, dummies)
 
+      /** Hostiles for a shooter on `shooterTeam` (MP + AI). */
+      function mpFoesFor(shooterTeam: TeamId): DummyTarget[] {
+        const out: DummyTarget[] = []
+        if (team !== shooterTeam && playerCombat.alive) {
+          out.push(combatantAsTarget(playerCombat))
+        }
+        for (const r of remotes) {
+          if (r.team !== shooterTeam && r.combat?.alive) {
+            out.push(combatantAsTarget(r.combat))
+          }
+        }
+        const aiList = shooterTeam === team ? enemies : friendlies
+        for (const u of aiList) {
+          if (u.alive) out.push(u as unknown as DummyTarget)
+        }
+        return out
+      }
+
       const useMg = fire.getWeapon() === 'mg'
       const useAtgm = fire.getWeapon() === 'atgm'
       const activeMuzzle = useMg ? mgMuzzle : muzzle
@@ -2937,15 +3053,53 @@ async function startMission(sel: MenuSelection): Promise<void> {
       if (crew && !useMg && !useAtgm && !option.antiAir) {
         fireWanted = crew.gateFire(fireWanted, hudReady)
       }
+      const playerTargets: readonly DummyTarget[] =
+        isRangeLand || !mp
+          ? dummies
+          : [
+              ...(enemies as unknown as DummyTarget[]),
+              ...remotes
+                .filter((r) => r.team !== team && r.combat?.alive)
+                .map((r) => combatantAsTarget(r.combat!)),
+            ]
       const fired = fire.update(
         dt,
         fireWanted,
         activeMuzzle,
-        dummies,
+        playerTargets,
         camera,
         mapColliders,
         turret,
       )
+
+      // Host: fire each guest gun from their input (barrel-aimed).
+      if (mp && mpSess?.isHost && !matchOver) {
+        for (const remote of remotes) {
+          if (!remote.fire || !remote.combat?.alive) {
+            remote.fire?.update(dt, false, remote.handle.muzzle, undefined, undefined, mapColliders, remote.handle.turret)
+            continue
+          }
+          const stale = remote.inputAge > 0.45
+          const want = !stale && remote.input.fire
+          gunForwardFromBarrel(remote.handle.barrel, _mpGunDir)
+          const foes = mpFoesFor(remote.team)
+          const did = remote.fire.update(
+            dt,
+            want,
+            remote.handle.muzzle,
+            foes,
+            undefined,
+            mapColliders,
+            remote.handle.turret,
+            _mpGunDir,
+          )
+          if (did) {
+            console.info(
+              `[Steel] MP host fired for ${remote.userId.slice(0, 6)} · foes ${foes.length}`,
+            )
+          }
+        }
+      }
       if (sam) {
         const ammoBefore = sam.ammo()
         const samFire = canFire && (isSamFire() || (useAtgm && wantsFire))
@@ -2989,6 +3143,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           position: tank.position,
           turnInput: turn,
           braking: brake,
+          gear: drive.getGear(),
           cameraMode,
           cameraToggled,
           dummyAlive: !!live,
@@ -3112,9 +3267,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
           mpSess.client.send({
             t: 'snap',
             tanks: [
-              poseFromTank(mp.myUserId, tank, turret, barrel),
+              poseFromTank(mp.myUserId, tank, turret, barrel, playerCombat),
               ...remotes.map((r) =>
-                poseFromTank(r.userId, r.handle.root, r.handle.turret, r.handle.barrel),
+                poseFromTank(
+                  r.userId,
+                  r.handle.root,
+                  r.handle.turret,
+                  r.handle.barrel,
+                  r.combat!,
+                ),
               ),
             ],
           })
@@ -3210,6 +3371,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
         headingRad: tank.rotation.y,
         turretRelRad: turret.rotation.y,
         speedU: drive.getSpeed(),
+        gear: drive.getGear(),
+        rpm01: drive.getRpm01(),
         rangeM: aim.rangeM,
         posX: tank.position.x,
         posZ: tank.position.z,
