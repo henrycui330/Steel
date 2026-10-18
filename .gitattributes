@@ -1,0 +1,2 @@
+soviet_t34-76_medium_tank.glb filter=lfs diff=lfs merge=lfs -text
+Aircraft/a-10_thunderbolt_ii.glb filter=lfs diff=lfs merge=lfs -text
