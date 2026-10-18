@@ -9,16 +9,55 @@ export interface RoomEnv {
   STEEL_ROOM: DurableObjectNamespace
 }
 
+type MpAccessoryWire = {
+  kind: 'bush'
+  pos: [number, number, number]
+  yaw: number
+  scale: number
+}
+
 type Seat = {
   userId: string
   username: string
   host: boolean
   tankId?: string
+  accessories?: MpAccessoryWire[]
 }
 
 const MAX_PLAYERS = 6
 const MIN_START = 2
 const DEFAULT_TANK = 'tiger'
+const MAX_ACCESSORIES = 12
+
+function sanitizeAccessories(raw: unknown): MpAccessoryWire[] {
+  if (!Array.isArray(raw)) return []
+  const out: MpAccessoryWire[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const o = item as Record<string, unknown>
+    if (o.kind !== 'bush') continue
+    const pos = o.pos
+    if (!Array.isArray(pos) || pos.length !== 3) continue
+    const px = Number(pos[0])
+    const py = Number(pos[1])
+    const pz = Number(pos[2])
+    const yaw = Number(o.yaw)
+    const scale = Number(o.scale)
+    if (![px, py, pz, yaw, scale].every((n) => Number.isFinite(n))) continue
+    out.push({
+      kind: 'bush',
+      pos: [
+        Math.max(-8, Math.min(8, px)),
+        Math.max(-2, Math.min(6, py)),
+        Math.max(-8, Math.min(8, pz)),
+      ],
+      yaw,
+      scale: Math.max(0.25, Math.min(2.8, scale)),
+    })
+    if (out.length >= MAX_ACCESSORIES) break
+  }
+  return out
+}
 
 function lobbyPayload(seats: Seat[]) {
   return {
@@ -28,6 +67,7 @@ function lobbyPayload(seats: Seat[]) {
       username: s.username,
       host: s.host,
       tankId: s.tankId,
+      accessories: s.accessories ?? [],
     })),
   }
 }
@@ -45,6 +85,7 @@ function matchPlayersFromSeats(seats: Seat[]) {
     tankId: s.tankId || DEFAULT_TANK,
     team: (i % 2 === 0 ? 'red' : 'blue') as 'red' | 'blue',
     spawnIndex: Math.floor(i / 2) % 3,
+    accessories: s.accessories ?? [],
   }))
 }
 
@@ -134,9 +175,14 @@ export class SteelRoom implements DurableObject {
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') return
-    let data: { t?: string; tankId?: string; tanks?: unknown }
+    let data: { t?: string; tankId?: string; accessories?: unknown; tanks?: unknown }
     try {
-      data = JSON.parse(message) as { t?: string; tankId?: string; tanks?: unknown }
+      data = JSON.parse(message) as {
+        t?: string
+        tankId?: string
+        accessories?: unknown
+        tanks?: unknown
+      }
     } catch {
       ws.send(JSON.stringify({ t: 'error', message: 'Bad JSON' }))
       return
@@ -163,8 +209,12 @@ export class SteelRoom implements DurableObject {
       const id = data.tankId.trim().slice(0, 32)
       if (!id) return
       seat.tankId = id
+      seat.accessories = sanitizeAccessories(data.accessories)
       ws.serializeAttachment(seat)
       this.broadcast(JSON.stringify(lobbyPayload([...this.seats.values()])))
+      console.info(
+        `[SteelRoom] tank user=${seat.username} id=${id} acc=${seat.accessories.length}`,
+      )
       return
     }
 
@@ -199,6 +249,12 @@ export class SteelRoom implements DurableObject {
     }
 
     if (data.t === 'snap' && seat.host && Array.isArray(data.tanks)) {
+      this.broadcast(message, ws)
+      return
+    }
+
+    // Host shell FX fan-out — every peer draws the same tracer / smoke.
+    if (data.t === 'shot' && seat.host) {
       this.broadcast(message, ws)
       return
     }

@@ -1,5 +1,9 @@
 import { TANK_OPTIONS, type TankId } from './tankCatalog'
 import {
+  normalizeAccessories,
+  type TankAccessory,
+} from './tankAccessories'
+import {
   WRAP_OPTIONS,
   getSelectedWrapId,
   type WrapId,
@@ -7,12 +11,14 @@ import {
 
 export type TankCosmetics = {
   wrapId: WrapId
+  accessories: TankAccessory[]
 }
 
 export type CosmeticsMap = Partial<Record<TankId, TankCosmetics>>
 
 export const DEFAULT_COSMETICS: TankCosmetics = {
   wrapId: 'stock',
+  accessories: [],
 }
 
 const STORAGE_KEY = 'steel.cosmetics'
@@ -31,7 +37,10 @@ function normalizeEntry(raw: unknown): TankCosmetics | null {
   const o = raw as Record<string, unknown>
   const wrapId = isWrapId(o.wrapId) ? o.wrapId : null
   if (!wrapId) return null
-  return { wrapId }
+  return {
+    wrapId,
+    accessories: normalizeAccessories(o.accessories),
+  }
 }
 
 function readMap(): CosmeticsMap {
@@ -70,7 +79,7 @@ function migrateFromGlobalWrapIfNeeded(): void {
     const legacy = getSelectedWrapId()
     const map: CosmeticsMap = {}
     for (const t of TANK_OPTIONS) {
-      map[t.id] = { wrapId: legacy }
+      map[t.id] = { wrapId: legacy, accessories: [] }
     }
     writeMap(map)
     localStorage.setItem(MIGRATED_KEY, '1')
@@ -86,8 +95,11 @@ function migrateFromGlobalWrapIfNeeded(): void {
 export function getTankCosmetics(tankId: TankId): TankCosmetics {
   migrateFromGlobalWrapIfNeeded()
   const entry = readMap()[tankId]
-  if (!entry) return { ...DEFAULT_COSMETICS }
-  return { wrapId: entry.wrapId }
+  if (!entry) return { ...DEFAULT_COSMETICS, accessories: [] }
+  return {
+    wrapId: entry.wrapId,
+    accessories: entry.accessories.map((a) => ({ ...a, pos: [...a.pos] as [number, number, number] })),
+  }
 }
 
 /** Merge-patch one tank; other chassis untouched. */
@@ -97,23 +109,33 @@ export function setTankCosmetics(
 ): TankCosmetics {
   migrateFromGlobalWrapIfNeeded()
   const map = readMap()
-  const prev = map[tankId] ?? { ...DEFAULT_COSMETICS }
+  const prev = map[tankId] ?? { ...DEFAULT_COSMETICS, accessories: [] }
   const next: TankCosmetics = {
     wrapId: isWrapId(patch.wrapId) ? patch.wrapId : prev.wrapId,
+    accessories:
+      patch.accessories !== undefined
+        ? normalizeAccessories(patch.accessories)
+        : prev.accessories,
   }
   map[tankId] = next
   writeMap(map)
-  console.info(`[Steel] Cosmetics ${tankId}: wrap=${next.wrapId}`)
-  return { ...next }
+  console.info(
+    `[Steel] Cosmetics ${tankId}: wrap=${next.wrapId} · accessories=${next.accessories.length}`,
+  )
+  return getTankCosmetics(tankId)
 }
 
-/** Set the same wrap on every chassis. */
+/** Set the same wrap on every chassis (accessories untouched). */
 export function setAllTankWraps(wrapId: WrapId): void {
   if (!isWrapId(wrapId)) return
   migrateFromGlobalWrapIfNeeded()
   const map = readMap()
   for (const t of TANK_OPTIONS) {
-    map[t.id] = { wrapId }
+    const prev = map[t.id]
+    map[t.id] = {
+      wrapId,
+      accessories: prev?.accessories ?? [],
+    }
   }
   writeMap(map)
   console.info(`[Steel] Cosmetics wrap → all tanks: ${wrapId}`)
@@ -127,10 +149,25 @@ export function getAllTankCosmetics(): CosmeticsMap {
 export function cosmeticsSelfTest(): boolean {
   const a0 = getTankCosmetics('abrams')
   const p0 = getTankCosmetics('pz3')
-  setTankCosmetics('pz3', { wrapId: 'nato' })
+  setTankCosmetics('pz3', {
+    wrapId: 'nato',
+    accessories: [
+      {
+        id: 'test_bush',
+        kind: 'bush',
+        pos: [0.5, 0.2, -0.3],
+        yaw: 0.2,
+        scale: 0.9,
+      },
+    ],
+  })
   const a1 = getTankCosmetics('abrams')
   const p1 = getTankCosmetics('pz3')
-  const ok = a1.wrapId === a0.wrapId && p1.wrapId === 'nato'
+  const ok =
+    a1.wrapId === a0.wrapId &&
+    p1.wrapId === 'nato' &&
+    p1.accessories.length === 1 &&
+    p1.accessories[0]?.kind === 'bush'
   setTankCosmetics('pz3', p0)
   console.info(`[Steel] cosmeticsSelfTest ${ok ? 'PASS' : 'FAIL'}`, {
     before: { abrams: a0, pz3: p0 },

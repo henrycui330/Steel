@@ -1,15 +1,21 @@
 /** Shared multiplayer message types (client ↔ SteelRoom DO). */
 
+import type { MpAccessoryWire } from '../tankAccessories'
+
 /** Lobby / match seat limit (must match Durable Object). */
 export const MAX_MP_PLAYERS = 6
 /** Host may start once this many seats are filled. */
 export const MIN_MP_START = 2
+
+export type { MpAccessoryWire }
 
 export type MpPlayer = {
   id: string
   username: string
   host: boolean
   tankId?: string
+  /** Tank camo props (bushes) — set with `tank` lobby message. */
+  accessories?: MpAccessoryWire[]
 }
 
 export type MpMatchPlayer = {
@@ -19,6 +25,7 @@ export type MpMatchPlayer = {
   tankId: string
   team: 'red' | 'blue'
   spawnIndex: number
+  accessories?: MpAccessoryWire[]
 }
 
 export type MpTankPose = {
@@ -53,13 +60,35 @@ export type MpInput = {
   ap: number
 }
 
+/**
+ * Host-authoritative shell spawn (compact keys).
+ * Fans out so every client can draw the projectile + muzzle smoke.
+ */
+export type MpShot = {
+  /** Shooter user id */
+  id: string
+  /** Muzzle world origin */
+  x: number
+  y: number
+  z: number
+  /** Unit leave direction */
+  dx: number
+  dy: number
+  dz: number
+  /** Ammo: he | aphe | mg */
+  a: string
+  /** Rack / rocket mesh (Katyusha etc.) */
+  r?: boolean
+}
+
 export type MpClientMsg =
   | { t: 'ping' }
   | { t: 'leave' }
-  | { t: 'tank'; tankId: string }
+  | { t: 'tank'; tankId: string; accessories?: MpAccessoryWire[] }
   | { t: 'start' }
   | { t: 'snap'; tanks: MpTankPose[] }
   | ({ t: 'input' } & MpInput)
+  | ({ t: 'shot' } & MpShot)
 
 export type MpServerMsg =
   | {
@@ -80,6 +109,7 @@ export type MpServerMsg =
     }
   | { t: 'snap'; tanks: MpTankPose[] }
   | ({ t: 'input' } & MpInput)
+  | ({ t: 'shot' } & MpShot)
   | { t: 'peerLeft'; message: string }
   | { t: 'pong' }
   | { t: 'error'; message: string }

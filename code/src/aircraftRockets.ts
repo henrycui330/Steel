@@ -3,10 +3,17 @@ import type { HeightSampler } from './ballistics'
 import type { GunTarget } from './aircraftGuns'
 import { spawnExplosion } from './explosions'
 import { segmentHitsPropCollider, type PropCollider } from './collision'
+import {
+  cloneHvarFlight,
+  ensureHvarTemplate,
+  hvarTemplateReady,
+} from './munitionHvar'
+import type { RocketStation, RocketStoreKind } from './aircraftHardpoints'
 
 /**
  * Unguided wing rockets (Corsair HVAR-style).
  * Forward along the nose; light gravity; HE blast on impact.
+ * AIM-9 / AIM-120 are seekers — see samMissiles (P lock / M fire).
  */
 
 const ROCKET_COUNT = 8
@@ -38,6 +45,8 @@ type Rocket = {
   age: number
   dead: boolean
   trailBudget: number
+  /** GLB clone — shared template mats; don't dispose on kill. */
+  sharedMesh: boolean
 }
 
 type TrailPuff = {
@@ -68,15 +77,27 @@ export type RocketOptions = {
   propColliders?: readonly PropCollider[]
   /** Override wing/stub stations (local XYZ). */
   stations?: ReadonlyArray<readonly [number, number, number]>
+  /** Stations with store kind (HVAR). Preferred over bare locals. */
+  rocketStations?: readonly RocketStation[]
   /** Magazine size (default 8). */
   count?: number
+  /** Called when a rocket leaves a station (hide hung store). */
+  onStationLaunch?: () => void
 }
 
 export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   const { scene, root, heightAt, bounds, velocity } = opts
   const walls = opts.propColliders ?? []
-  const stations = opts.stations ?? STATIONS
-  const magazine = Math.max(1, opts.count ?? ROCKET_COUNT)
+  const rocketStations: RocketStation[] = opts.rocketStations
+    ? [...opts.rocketStations]
+    : (opts.stations ?? STATIONS).map((local) => ({
+        local,
+        kind: 'rocket' as RocketStoreKind,
+      }))
+  const magazine = Math.max(
+    1,
+    opts.count ?? (rocketStations.length > 0 ? rocketStations.length : ROCKET_COUNT),
+  )
 
   const bodyGeo = new THREE.CylinderGeometry(0.07, 0.09, 1.15, 6)
   bodyGeo.rotateX(Math.PI / 2)
@@ -115,6 +136,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   let gap = 0
   let station = 0
   let onKill: ((victim: THREE.Object3D) => void) | null = null
+  void ensureHvarTemplate()
 
   const _nose = new THREE.Vector3()
   const _pos = new THREE.Vector3()
@@ -234,45 +256,75 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     }
   }
 
+  function makeFlightMesh(_kind: RocketStoreKind): {
+    mesh: THREE.Object3D
+    shared: boolean
+    label: string
+  } {
+    if (hvarTemplateReady()) {
+      const glb = cloneHvarFlight()
+      if (glb) return { mesh: glb, shared: true, label: 'HVAR' }
+    }
+    return { mesh: makeProceduralRocket(), shared: false, label: 'HVAR' }
+  }
+
   function fireOne(): void {
     if (remaining <= 0) return
     root.updateMatrixWorld(true)
     root.getWorldQuaternion(_q)
     _nose.set(0, 0, 1).applyQuaternion(_q)
 
-    const st = stations[station % stations.length]!
+    const st =
+      rocketStations[station % rocketStations.length] ??
+      ({ local: [0, 0, 0] as const, kind: 'rocket' as RocketStoreKind })
     station++
-    _local.set(st[0], st[1], st[2])
+    _local.set(st.local[0], st.local[1], st.local[2])
     _pos.copy(_local).applyQuaternion(_q).add(root.position)
+    opts.onStationLaunch?.()
 
-    const body = new THREE.Mesh(bodyGeo, bodyMat.clone())
-    const tip = new THREE.Mesh(tipGeo, tipMat.clone())
-    tip.position.z = 0.65
-    const group = new THREE.Group()
-    group.add(body, tip)
+    const { mesh: group, shared: sharedMesh, label } = makeFlightMesh(st.kind)
     group.position.copy(_pos)
     group.quaternion.copy(_q)
     group.name = 'hvarRocket'
     scene.add(group)
 
     const vel = velocity.clone().addScaledVector(_nose, MUZZLE_BOOST)
-    live.push({ root: group, vel, age: 0, dead: false, trailBudget: 0 })
+    live.push({
+      root: group,
+      vel,
+      age: 0,
+      dead: false,
+      trailBudget: 0,
+      sharedMesh,
+    })
     remaining--
     gap = FIRE_GAP
     // Launch bloom — a few hot puffs at the rail.
     const just = live[live.length - 1]!
     emitTrail(just, true)
     emitTrail(just, true)
-    console.info(`[Steel] HVAR launch · ${remaining} left`)
+    console.info(
+      `[Steel] ${label} launch · ${sharedMesh ? 'GLB' : 'procedural'} · ${remaining} left`,
+    )
+  }
+
+  function makeProceduralRocket(): THREE.Group {
+    const body = new THREE.Mesh(bodyGeo, bodyMat.clone())
+    const tip = new THREE.Mesh(tipGeo, tipMat.clone())
+    tip.position.z = 0.65
+    const group = new THREE.Group()
+    group.add(body, tip)
+    return group
   }
 
   function killRocket(r: Rocket): void {
     if (r.dead) return
     r.dead = true
     scene.remove(r.root)
+    if (r.sharedMesh) return
     r.root.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return
-      // Shared geos — only dispose cloned materials.
+      // Procedural — dispose cloned materials; geos are shared.
       const m = o.material
       if (Array.isArray(m)) m.forEach((x) => x.dispose())
       else m.dispose()

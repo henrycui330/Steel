@@ -24,8 +24,8 @@ import { createDriveController, SPEED_FEEL } from './drive'
 import { createGermanCrewVoice } from './germanCrew'
 import { createSovietCrewVoice } from './sovietCrew'
 import { createFriendlyMarkers } from './friendlyMarkers'
-import { createFireSystem } from './fire'
-import { defaultAmmoRacks } from './ammo'
+import { createFireSystem, type ShellSpawnInfo } from './fire'
+import { defaultAmmoRacks, type AmmoId } from './ammo'
 import { createHud } from './hud'
 import {
   bindDriveInput,
@@ -53,6 +53,11 @@ import { createHitAnalyzer } from './hitAnalyzer'
 import { createCountermeasures, readPublishedDecoys } from './countermeasures'
 import { createArtilleryController, type ArtilleryController } from './artillery'
 import { loadPlayerTank, loadTankChassis } from './loadTank'
+import {
+  accessoriesFromWire,
+  applyTankAccessories,
+  preloadBushAccessory,
+} from './tankAccessories'
 import { loadPlayerAircraft, type AircraftHandle } from './loadAircraft'
 import { createAircraftFlight } from './aircraftFlight'
 import { createAircraftChaseCamera } from './aircraftCamera'
@@ -61,6 +66,24 @@ import { createAircraftGuns } from './aircraftGuns'
 import { createAircraftBombs } from './aircraftBombs'
 import { createAircraftRockets } from './aircraftRockets'
 import { resolveAircraftStores } from './aircraftLoadouts'
+import {
+  attachAircraftHardpoints,
+  hasHardpointPicker,
+} from './aircraftHardpoints'
+import {
+  aamTemplateReady,
+  cloneAamFlight,
+  makeAamFallback,
+  type AamKind,
+} from './munitionAam'
+import type { MissileStoreKind } from './aircraftHardpoints'
+import {
+  cloneHellfireFlight,
+  ensureHellfireTemplate,
+  hellfireTemplateReady,
+  makeHellfireFallback,
+} from './munitionHellfire'
+import { attachLiteningPod, ensureLiteningTemplate } from './munitionLitening'
 import { createImpactCinematic, KILL_SHOT } from './impactCinematic'
 import { createDeathCam, type DeathKiller } from './deathCam'
 import { createMatchTape } from './matchTape'
@@ -76,7 +99,7 @@ import { createAirTutorial, type AirTutorialHandle } from './tutorialAir'
 import { createSystemsTutorial, type SystemsTutorialHandle } from './tutorialSystems'
 import { nationByTeam } from './nations'
 import { getMpSession } from './net/mpSession'
-import type { MpInput, MpTankPose } from './net/mpProtocol'
+import type { MpInput, MpShot, MpTankPose } from './net/mpProtocol'
 import {
   createHillRing,
   createKothState,
@@ -490,6 +513,25 @@ async function startMission(sel: MenuSelection): Promise<void> {
           console.warn('[Steel] Remote tank load failed', remoteRes.reason)
         }
       }
+      // Hang peer bushes so everyone sees the same camo props.
+      const peerAccJobs: Promise<void>[] = []
+      for (let i = 0; i < mp.peers.length; i++) {
+        const peer = mp.peers[i]!
+        const handle = remoteHandlesEarly[i]
+        const list = accessoriesFromWire(peer.accessories)
+        if (!handle || list.length === 0) continue
+        peerAccJobs.push(
+          applyTankAccessories(handle.root, list).then(() => {
+            console.info(
+              `[Steel] MP remote accessories ${peer.userId.slice(0, 6)} · ${list.length} bush`,
+            )
+          }),
+        )
+      }
+      if (peerAccJobs.length > 0) {
+        void preloadBushAccessory()
+        await Promise.all(peerAccJobs)
+      }
     }
   } catch (err) {
     console.warn('[Steel] Map / tank / smoke load failed', err)
@@ -750,6 +792,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
     const _lockLook = new THREE.Vector3()
     const airMslLabel = option.samLabel ?? (option.jet ? 'AAM' : 'MSL')
     let airMslRail = 0
+    /** Kind for the rail about to fire (set in getLaunchOrigin). */
+    let airAamKind: MissileStoreKind = 'aim9'
 
     const countermeasures = createCountermeasures({
       scene,
@@ -761,54 +805,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       },
     })
 
-    const airAam =
-      airLock != null
-        ? createSamMissiles({
-            scene,
-            getLaunchOrigin: (out) => {
-              // Alternate stub/wing rails — heli inboard, jet further out.
-              air.root.getWorldPosition(out)
-              const side = airMslRail % 2 === 0 ? -1 : 1
-              airMslRail++
-              const lat = option.helicopter ? 2.05 : 1.8
-              const y = option.helicopter ? -0.55 : -0.35
-              const z = option.helicopter ? 0.35 : 0.8
-              _lockLook.set(side * lat, y, z).applyQuaternion(air.root.quaternion)
-              out.add(_lockLook)
-            },
-            getLaunchDir: (out) => {
-              out.set(0, 0, 1).applyQuaternion(air.root.quaternion).normalize()
-            },
-            // Soft diamond or hard lock — both feed the seeker.
-            getLockedTarget: () => airLock.getTrackTarget(),
-            getHostiles: () => airEnemies,
-            getDecoys: () => countermeasures.getDecoys(),
-            heightAt: sampleY,
-            propColliders: mapColliders,
-            onKill: (victim) => {
-              airBoard.noteKill(air.root)
-              console.info(
-                `[Steel] ${airMslLabel} destroyed ${victim.name || 'target'}`,
-              )
-            },
-            maxAmmo: option.samAmmo ?? 6,
-            reloadSec: option.samReloadSec ?? 1.4,
-            speed: option.samSpeed ?? 175,
-            damage: option.samDamage ?? 520,
-            pen: option.samPen,
-            color: option.helicopter ? 0xc8d4a8 : 0xffe8a0,
-            logTag: airMslLabel,
-            airLaunch: true,
-            meshScale: option.helicopter ? 1.15 : 1.35,
-          })
-        : null
+    // Seekers created after hardpoints so AIM rails set ammo / launch points.
+    let airAam: ReturnType<typeof createSamMissiles> | null = null
     // Keep stub API for lock-phase logging only.
     const airMissile = airLock ? createMissileLockStub(airLock) : null
-    if (airAam) {
-      console.info(
-        `[Steel] ${option.name} armed — ${airMslLabel} ×${option.samAmmo ?? 6} · hold P lock · M fire`,
-      )
-    }
 
     let airKoth = createKothState()
     const airHillRing = isKoth ? createHillRing(scene) : null
@@ -1011,7 +1011,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
 
     const stores = resolveAircraftStores(tankId)
     console.info(
-      `[Steel] Hangar stores ${option.name}: ${stores.label} · bombs ×${stores.bombCount} · rockets ${stores.rockets ? 'yes' : 'no'}`,
+      `[Steel] Hangar stores ${option.name}: ${stores.label} · bombs ×${stores.bombCount} · rockets ${stores.rockets ? 'yes' : 'no'} · AAM ×${stores.aamCount}`,
     )
 
     const guns = createAircraftGuns({
@@ -1034,6 +1034,133 @@ async function startMission(sel: MenuSelection): Promise<void> {
       console.info(`[Steel] Corsair guns destroyed ${victim.name || 'target'}`)
     })
 
+    const airHp =
+      hasHardpointPicker(option.id)
+        ? attachAircraftHardpoints(air.root, {
+            plane: option.id,
+            stations: stores.stations,
+            markers: false,
+          })
+        : null
+
+    const bombStations = airHp?.bombStations ?? []
+    const rocketStations = airHp?.rocketStations ?? []
+    const rocketLocals = airHp?.rocketLocals ?? []
+    const aamStations = airHp?.aamStations ?? []
+    const hasGbu = bombStations.some((s) => s.kind === 'gbu27')
+    const hasHellfireRail = aamStations.some((s) => s.kind === 'hellfire')
+    // Litening hung store (pylon or chin stub) — visual only; lock is nose P-hold.
+    const pylonLitening = airHp?.getLiteningMount() ?? null
+    const wantsLitening =
+      !!pylonLitening || hasGbu || !!option.helicopter || hasHellfireRail
+    let liteningChin: THREE.Group | null = null
+    if (wantsLitening) {
+      void ensureLiteningTemplate()
+      if (pylonLitening) {
+        console.info('[Steel] Litening TGP on pylon (visual)')
+      } else {
+        liteningChin = attachLiteningPod(
+          air.root,
+          option.helicopter ? [0.85, -0.55, 1.1] : [1.05, -1.42, 0.15],
+        )
+      }
+    }
+    const hpAamAmmo = aamStations.length
+    const aamAmmo =
+      hpAamAmmo > 0
+        ? hpAamAmmo
+        : hasHardpointPicker(option.id)
+          ? 0
+          : (option.samAmmo ?? 6)
+
+    if (airLock != null && aamAmmo > 0) {
+      const stubHellfire = !!option.helicopter && !hasHellfireRail
+      if (stubHellfire || hasHellfireRail) void ensureHellfireTemplate()
+      const mslLabel = hasHellfireRail
+        ? aamStations.every((s) => s.kind === 'hellfire')
+          ? 'Hellfire'
+          : 'MSL'
+        : airMslLabel
+      airAam = createSamMissiles({
+        scene,
+        getLaunchOrigin: (out) => {
+          const rails = airHp?.aamStations ?? []
+          if (rails.length > 0) {
+            const st = rails[airMslRail % rails.length]!
+            airAamKind = st.kind
+            airMslRail++
+            air.root.getWorldPosition(out)
+            _lockLook
+              .set(st.local[0], st.local[1], st.local[2])
+              .applyQuaternion(air.root.quaternion)
+            out.add(_lockLook)
+            return
+          }
+          // Alternate stub/wing rails — heli inboard, jet further out.
+          air.root.getWorldPosition(out)
+          const side = airMslRail % 2 === 0 ? -1 : 1
+          airMslRail++
+          const lat = option.helicopter ? 2.05 : 1.8
+          const y = option.helicopter ? -0.55 : -0.35
+          const z = option.helicopter ? 0.35 : 0.8
+          _lockLook.set(side * lat, y, z).applyQuaternion(air.root.quaternion)
+          out.add(_lockLook)
+        },
+        getLaunchDir: (out) => {
+          out.set(0, 0, 1).applyQuaternion(air.root.quaternion).normalize()
+        },
+        getLockedTarget: () => airLock.getTrackTarget(),
+        getHostiles: () => airEnemies,
+        getDecoys: () => countermeasures.getDecoys(),
+        heightAt: sampleY,
+        propColliders: mapColliders,
+        onKill: (victim) => {
+          airBoard.noteKill(air.root)
+          console.info(
+            `[Steel] ${mslLabel} destroyed ${victim.name || 'target'}`,
+          )
+        },
+        createMissileMesh: () => {
+          const kind = airAamKind
+          if (kind === 'hellfire' || stubHellfire) {
+            if (hellfireTemplateReady()) {
+              const glb = cloneHellfireFlight()
+              if (glb) return glb
+            }
+            return makeHellfireFallback()
+          }
+          if (!airHp || (airHp.aamStations?.length ?? 0) === 0) return null
+          if (aamTemplateReady(kind as AamKind)) {
+            const glb = cloneAamFlight(kind as AamKind)
+            if (glb) return glb
+          }
+          return makeAamFallback(kind as AamKind)
+        },
+        onLaunch: () => {
+          airHp?.consumeAam()
+        },
+        maxAmmo: aamAmmo,
+        reloadSec: option.samReloadSec ?? 1.4,
+        speed: option.samSpeed ?? 175,
+        damage: option.samDamage ?? 520,
+        pen: option.samPen,
+        color:
+          hasHellfireRail || stubHellfire ? 0xc8d4a8 : 0xffe8a0,
+        logTag: mslLabel,
+        airLaunch: true,
+        meshScale: option.helicopter || hasHellfireRail ? 1.15 : 1.35,
+      })
+      console.info(
+        `[Steel] ${option.name} armed — ${mslLabel} ×${aamAmmo}${hpAamAmmo > 0 ? ' (hardpoint)' : ''}${
+          hasHellfireRail || stubHellfire ? ' · Hellfire' : ''
+        } · hold P lock · M fire`,
+      )
+    } else if (airLock != null && hasHardpointPicker(option.id)) {
+      console.info(
+        `[Steel] ${option.name} — no AIM rails · hangar Rockets/AAMs or Strike for P+M`,
+      )
+    }
+
     const bombs =
       stores.bombCount > 0
         ? createAircraftBombs({
@@ -1044,6 +1171,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
             velocity: flight.velocity,
             bombCount: stores.bombCount,
             propColliders: mapColliders,
+            ...(airHp && bombStations.length > 0
+              ? {
+                  bombStations,
+                  onStationRelease: () => airHp.consumeBomb(),
+                }
+              : {}),
           })
         : null
     bombs?.setOnKill((victim) => {
@@ -1055,10 +1188,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
     })
     if (stores.bombCount > 0) {
       console.info(
-        `[Steel] ${option.name} armed — bombs ×${stores.bombCount} · press B`,
+        `[Steel] ${option.name} armed — bombs ×${stores.bombCount}${
+          hasGbu ? ' · GBU needs P hard-lock' : ''
+        } · press B`,
       )
     }
-
     const rockets = stores.rockets
       ? createAircraftRockets({
           scene,
@@ -1067,7 +1201,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           bounds: playable,
           velocity: flight.velocity,
           propColliders: mapColliders,
-          // Apache stub wings — tighter than Corsair HVAR stations.
+          // Apache stub wings — tighter than Corsair tip rails.
           ...(option.helicopter
             ? {
                 count: 14,
@@ -1080,7 +1214,14 @@ async function startMission(sel: MenuSelection): Promise<void> {
                   [3.05, -0.6, -0.1],
                 ] as const,
               }
-            : {}),
+            : airHp && rocketStations.length > 0
+              ? {
+                  count: rocketStations.length,
+                  rocketStations,
+                  stations: rocketLocals,
+                  onStationLaunch: () => airHp.consumeRocket(),
+                }
+              : {}),
         })
       : null
     rockets?.setOnKill((victim) => {
@@ -1094,6 +1235,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
     let scopeOn = false
     const scopeCam = new THREE.PerspectiveCamera(20, 1, 1, camera.far)
     const scopeLook = new THREE.Vector3()
+    /** Drop edge + targets held until after lock update (GBU needs hard-lock lase). */
+    let pendingAirBombDrop = false
+    let pendingAirGunTargets: readonly import('./aircraftGuns').GunTarget[] = []
 
     let airEnded = false
     let deferredAirEnd: {
@@ -1188,6 +1332,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
       airMissile?.reset()
       airAam?.dispose()
       rockets?.dispose()
+      bombs?.dispose()
+      if (liteningChin) {
+        liteningChin.removeFromParent()
+        liteningChin = null
+      }
+      airHp?.dispose()
       disposeExplosions()
       countermeasures.dispose()
       airLockHud?.setVisible(false)
@@ -1318,6 +1468,8 @@ async function startMission(sel: MenuSelection): Promise<void> {
       }
       // Sim step — no bomb cinematic time dilation.
       const dt = realDt
+      pendingAirBombDrop = false
+      pendingAirGunTargets = []
 
       const raw = getFlightInput(dt)
       // Q is chaff in air — don't bank a tank gear shift for later.
@@ -1476,13 +1628,15 @@ async function startMission(sel: MenuSelection): Promise<void> {
         const gunTargets = isAirTutorial
           ? airPracticeTargets
           : airEnemies
+        // Captured here — bombs run after lock so GBU sees this frame's hard-lock.
+        pendingAirBombDrop = input.dropBomb
+        pendingAirGunTargets = gunTargets
         if (!airCrashed && !tm.flameout && !ejectCam.active()) {
           guns.update(dt, input.fire, gunTargets, camera)
           if (input.toggleSight) {
             scopeOn = !scopeOn
             console.info(`[Steel] Bombsight ${scopeOn ? 'ON' : 'OFF'}`)
           }
-          bombs?.update(dt, input.dropBomb, gunTargets, camera)
           rockets?.update(dt, input.fireRocket, airEnemies)
         } else {
           rockets?.update(dt, false, airEnemies)
@@ -1589,7 +1743,6 @@ async function startMission(sel: MenuSelection): Promise<void> {
         airLockHud.setVisible(lockUi)
         if (lockUi) {
           air.root.getWorldPosition(_lockOrigin)
-          // Nose-forward cone (chase cam sits behind — camera look was flaky).
           _lockLook.set(0, 0, 1).applyQuaternion(air.root.quaternion).normalize()
           const lockFrame = airLock.update({
             dt,
@@ -1615,14 +1768,30 @@ async function startMission(sel: MenuSelection): Promise<void> {
           if (airMissile) {
             airMissilePhase = noteMissileLockChange(airMissile, airMissilePhase)
           }
+
+          // GBU lase = hard lock (nose P-hold).
+          const hardLock = airLock.getLockedTarget()
+          if (hardLock) {
+            hardLock.getWorldPosition(_lockOrigin)
+            bombs?.setLaserDesignation(_lockOrigin, true)
+          } else {
+            bombs?.setLaserDesignation(null, false)
+          }
         } else {
           airLock.reset()
           airLockHud.apply({ phase: 'idle', diamond: null, lockedBanner: false })
           mslHud = airAam
             ? { phase: 'idle', ammo: airAam.ammo(), label: airMslLabel }
             : null
+          bombs?.setLaserDesignation(null, false)
         }
       }
+
+      // Bombs after lock so GBU sees this frame's hard-lock lase.
+      if (!airCrashed && !tm.flameout && !ejectCam.active()) {
+        bombs?.update(dt, pendingAirBombDrop, pendingAirGunTargets, camera)
+      }
+      pendingAirBombDrop = false
 
       // After lock update so soft/hard track is current; hold M like Pantsir.
       if (airAam) {
@@ -2022,6 +2191,9 @@ async function startMission(sel: MenuSelection): Promise<void> {
               `[Steel] MP kill by ${peer.userId.slice(0, 6)} → ${victim.name || 'target'}`,
             )
           })
+          remoteFire.setOnShellSpawn((info) => {
+            broadcastMpShot(peer.userId, info)
+          })
         }
 
         remotes.push({
@@ -2080,9 +2252,69 @@ async function startMission(sel: MenuSelection): Promise<void> {
     let mpSnapAcc = 0
     let mpInputAcc = 0
     let mpInputLogAcc = 0
+
+    function parseMpAmmo(a: string): AmmoId {
+      if (a === 'mg' || a === 'aphe' || a === 'he') return a
+      return 'he'
+    }
+
+    function broadcastMpShot(shooterId: string, info: ShellSpawnInfo): void {
+      if (!mpSess?.isHost) return
+      const pkt: { t: 'shot' } & MpShot = {
+        t: 'shot',
+        id: shooterId,
+        x: info.origin.x,
+        y: info.origin.y,
+        z: info.origin.z,
+        dx: info.dir.x,
+        dy: info.dir.y,
+        dz: info.dir.z,
+        a: info.ammoId,
+      }
+      if (info.rocket) pkt.r = true
+      mpSess.client.send(pkt)
+    }
+
+    const _mpShotOrigin = new THREE.Vector3()
+    const _mpShotDir = new THREE.Vector3()
+    function mpShotSmoke(
+      origin: THREE.Vector3,
+      dir: THREE.Vector3,
+      ammoId: AmmoId,
+      rocket: boolean,
+    ): void {
+      _mpShotOrigin.copy(origin)
+      _mpShotDir.copy(dir).normalize()
+      if (ammoId === 'mg') {
+        smoke.muzzleBurst(_mpShotOrigin, _mpShotDir)
+      } else {
+        if (!rocket) smoke.gunBlastCloud(_mpShotOrigin, _mpShotDir)
+        smoke.muzzleBurst(_mpShotOrigin, _mpShotDir)
+      }
+    }
+
+    if (mpSess?.isHost && mp) {
+      fire.setOnShellSpawn((info) => {
+        broadcastMpShot(mp.myUserId, info)
+      })
+    }
+
     if (mpSess && !mpSess.isHost) {
       mpSess.client.onSnap((tanks) => {
         mpSess.lastSnap = tanks
+      })
+      mpSess.client.onShot((shot) => {
+        const origin = new THREE.Vector3(shot.x, shot.y, shot.z)
+        const dir = new THREE.Vector3(shot.dx, shot.dy, shot.dz)
+        if (dir.lengthSq() < 1e-8) return
+        dir.normalize()
+        const ammoId = parseMpAmmo(shot.a)
+        const rocket = !!shot.r
+        fire.spawnRemoteShell(origin, dir, ammoId, rocket)
+        mpShotSmoke(origin, dir, ammoId, rocket)
+        console.info(
+          `[Steel] MP shot FX from ${shot.id.slice(0, 6)} · ${ammoId}${rocket ? ' rocket' : ''}`,
+        )
       })
     }
     if (mpSess?.isHost) {
@@ -3094,6 +3326,12 @@ async function startMission(sel: MenuSelection): Promise<void> {
             _mpGunDir,
           )
           if (did) {
+            remote.handle.muzzle.updateMatrixWorld(true)
+            remote.handle.muzzle.getWorldPosition(_muzzleWorld)
+            const remoteOpt = tankOptionById(remote.tankId)
+            const rocket = (remoteOpt.magazineSize ?? 0) > 0
+            const ammoId: AmmoId = remote.fire.getWeapon() === 'mg' ? 'mg' : 'he'
+            mpShotSmoke(_muzzleWorld, _mpGunDir, ammoId, rocket)
             console.info(
               `[Steel] MP host fired for ${remote.userId.slice(0, 6)} · foes ${foes.length}`,
             )

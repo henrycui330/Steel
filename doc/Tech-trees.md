@@ -3,7 +3,7 @@ Germany:
 Panzer III
 Jagdpanzer 38(t) Hetzer
 Panzer IV
-Pz-V Panther A
+PzKpfw VI Tiger I
 Leopard 1
 Leopard 2
 PzH 2000

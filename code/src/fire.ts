@@ -73,6 +73,16 @@ type Shell = {
   accum: number
   /** Distance budget for aircraft-style rocket smoke trail. */
   trailBudget: number
+  /** MP guest FX — fly + trail only; host owns damage. */
+  visualOnly: boolean
+}
+
+/** Fired when a live (authoritative) shell mesh enters the scene. */
+export type ShellSpawnInfo = {
+  origin: THREE.Vector3
+  dir: THREE.Vector3
+  ammoId: AmmoId
+  rocket: boolean
 }
 
 type RocketTrailPuff = {
@@ -164,6 +174,20 @@ export type FireSystem = {
       /** Main-gun damaging hit on an enemy (pen/blast/kill) — not ricochet / no-pen / miss. */
       onEnemyHit?: () => void
     } | null,
+  ) => void
+  /**
+   * Host MP: called when an authoritative shell actually leaves the muzzle
+   * (after release delay) so peers can spawn matching FX.
+   */
+  setOnShellSpawn: (fn: ((info: ShellSpawnInfo) => void) | null) => void
+  /**
+   * Guest / remote FX: spawn a non-damaging shell that still trails + hits ground.
+   */
+  spawnRemoteShell: (
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    ammoId: AmmoId,
+    rocket?: boolean,
   ) => void
   dispose: () => void
 }
@@ -367,6 +391,7 @@ export function createFireSystem(
   let onKill: ((victim: THREE.Object3D) => void) | null = null
   let onHitAnalyze: ((report: HitAnalyzeReport) => void) | null = null
   let onLethalShot: ((shot: TrackedProjectile) => void) | null = null
+  let onShellSpawn: ((info: ShellSpawnInfo) => void) | null = null
   let voiceHooks: {
     onBeginLoad?: (id: AmmoId) => void
     onChambered?: (id: AmmoId) => void
@@ -609,9 +634,15 @@ export function createFireSystem(
     return mesh
   }
 
-  function spawnShell(muzzle: THREE.Object3D, ammoId: AmmoId, dir: THREE.Vector3): void {
+  function spawnShellAt(
+    origin: THREE.Vector3,
+    dir: THREE.Vector3,
+    ammoId: AmmoId,
+    opts?: { rocket?: boolean; visualOnly?: boolean },
+  ): void {
     const isMg = ammoId === 'mg'
-    const isRocket = !isMg && magazineSize > 0
+    const isRocket = !!opts?.rocket || (!isMg && magazineSize > 0)
+    const visualOnly = !!opts?.visualOnly
     let mesh: THREE.Object3D
     if (isMg) {
       const def = ammoById(ammoId)
@@ -634,9 +665,8 @@ export function createFireSystem(
       }
     }
 
-    muzzle.updateMatrixWorld(true)
-    muzzle.getWorldPosition(_origin)
     _dir.copy(dir).normalize()
+    _origin.copy(origin)
 
     mesh.position.copy(_origin).addScaledVector(_dir, isMg ? 0.5 : isRocket ? 0.7 : 0.35)
     const speed = isMg ? MG_SPEED : isRocket ? SHELL_SPEED * 0.82 : SHELL_SPEED
@@ -653,6 +683,7 @@ export function createFireSystem(
       tracked: false,
       accum: 0,
       trailBudget: 0,
+      visualOnly,
     }
     shells.push(shell)
     if (isRocket) {
@@ -662,6 +693,20 @@ export function createFireSystem(
       // Boom1 — one muzzle puff so the shell path reads immediately.
       emitShellTrail(shell, shell.ammoId === 'he')
     }
+    if (!visualOnly && onShellSpawn) {
+      onShellSpawn({
+        origin: _origin.clone(),
+        dir: _dir.clone(),
+        ammoId,
+        rocket: isRocket,
+      })
+    }
+  }
+
+  function spawnShell(muzzle: THREE.Object3D, ammoId: AmmoId, dir: THREE.Vector3): void {
+    muzzle.updateMatrixWorld(true)
+    muzzle.getWorldPosition(_origin)
+    spawnShellAt(_origin, dir, ammoId)
   }
 
   /** Brass leaves the turret breech side — not the muzzle tip. */
@@ -1151,6 +1196,15 @@ export function createFireSystem(
     setOnLethalShot(fn) {
       onLethalShot = fn
     },
+    setOnShellSpawn(fn) {
+      onShellSpawn = fn
+    },
+    spawnRemoteShell(origin, dir, ammoId, rocket) {
+      if (ammoId === 'mg') playRocketFireSound()
+      else if (rocket) playRocketFireSound()
+      else playFireSound()
+      spawnShellAt(origin, dir, ammoId, { rocket: !!rocket, visualOnly: true })
+    },
     setVoiceHooks(hooks) {
       voiceHooks = hooks
     },
@@ -1383,7 +1437,8 @@ export function createFireSystem(
 
           // A ricochet returns false: the round lives on with a reflected
           // velocity, so keep stepping it through the rest of the frame.
-          if (processDummyHits(shell, i, dummies, camera)) {
+          // MP visual shells skip damage — host already resolved the hit.
+          if (!shell.visualOnly && processDummyHits(shell, i, dummies, camera)) {
             removed = true
             break
           }
@@ -1434,7 +1489,13 @@ export function createFireSystem(
 
         // Kill cam cue. MG rounds are excluded: a burst would re-trigger on
         // every round in the air, and a fatal .30 cal is a fluke, not a shot.
-        if (onLethalShot && !shell.tracked && shell.ammoId !== 'mg' && dummies) {
+        if (
+          onLethalShot &&
+          !shell.visualOnly &&
+          !shell.tracked &&
+          shell.ammoId !== 'mg' &&
+          dummies
+        ) {
           const lethal = predictLethalHit({
             position: shell.mesh.position,
             velocity: shell.velocity,

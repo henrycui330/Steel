@@ -7,6 +7,7 @@ import {
   type MpMatchPlayer,
   type MpPlayer,
   type MpServerMsg,
+  type MpShot,
   type MpTankPose,
 } from './mpProtocol'
 
@@ -31,6 +32,7 @@ type LobbyListener = (state: MpLobbyState) => void
 type StartListener = (match: MpStartPayload) => void
 type SnapListener = (tanks: MpTankPose[]) => void
 type InputListener = (input: MpInput) => void
+type ShotListener = (shot: MpShot) => void
 type PeerLeftListener = (message: string) => void
 
 function httpToWsBase(apiBase: string): string {
@@ -82,6 +84,7 @@ export type MpClient = {
   onStart: (fn: StartListener) => () => void
   onSnap: (fn: SnapListener) => () => void
   onInput: (fn: InputListener) => () => void
+  onShot: (fn: ShotListener) => () => void
   onPeerLeft: (fn: PeerLeftListener) => () => void
   connect: (code: string) => void
   send: (msg: MpClientMsg) => void
@@ -102,6 +105,7 @@ export function createMpClient(): MpClient {
   const startListeners = new Set<StartListener>()
   const snapListeners = new Set<SnapListener>()
   const inputListeners = new Set<InputListener>()
+  const shotListeners = new Set<ShotListener>()
   const peerLeftListeners = new Set<PeerLeftListener>()
 
   function setState(patch: Partial<MpLobbyState>): void {
@@ -146,6 +150,11 @@ export function createMpClient(): MpClient {
       for (const fn of inputListeners) fn(input)
       return
     }
+    if (msg.t === 'shot') {
+      const { t: _t, ...shot } = msg
+      for (const fn of shotListeners) fn(shot)
+      return
+    }
     if (msg.t === 'peerLeft') {
       console.warn('[Steel] MP peerLeft', msg.message)
       for (const fn of peerLeftListeners) fn(msg.message)
@@ -177,6 +186,10 @@ export function createMpClient(): MpClient {
     onInput(fn) {
       inputListeners.add(fn)
       return () => inputListeners.delete(fn)
+    },
+    onShot(fn) {
+      shotListeners.add(fn)
+      return () => shotListeners.delete(fn)
     },
     onPeerLeft(fn) {
       peerLeftListeners.add(fn)

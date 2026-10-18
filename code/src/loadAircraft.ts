@@ -13,7 +13,7 @@ const BF109_URL = assetUrl('models/bf109.glb?v=1')
 const SPITFIRE_URL = assetUrl('models/spitfire.glb?v=1')
 const F35B_URL = assetUrl('models/f35b.glb?v=1')
 const TORNADO_URL = assetUrl('models/tornado.glb?v=1')
-const F16_URL = assetUrl('models/f16a.glb?v=4')
+const F16_URL = assetUrl('models/f16c_falcon.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=2')
 const MIG21_URL = assetUrl('models/mig21.glb?v=3')
 const SU25_URL = assetUrl('models/su25.glb?v=3')
@@ -52,6 +52,12 @@ type AircraftRigOpts = {
   name: string
   /** Real wingspan in metres — scale target after nose alignment. */
   targetWingspan: number
+  /**
+   * Which horizontal axis is wingspan after nose alignment.
+   * Default `max` (wider of X/Z). Use `x` when the airframe is longer than
+   * its span (F-16C etc.) so length isn't mistaken for wingspan.
+   */
+  wingspanAxis?: 'max' | 'x' | 'z'
   /**
    * Extra yaw baked into the inner model so the nose faces game **+Z**.
    * Older Yak pack needed −π/2; FG-1D Corsair + current Yak are already +Z.
@@ -219,8 +225,14 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
   model.updateMatrixWorld(true)
   const raw = new THREE.Box3().setFromObject(model)
   const rawSize = raw.getSize(new THREE.Vector3())
-  // Wingspan = wider horizontal axis (some packs are nose-along-X).
-  const span = Math.max(rawSize.x, rawSize.z, 0.001)
+  // Wingspan axis — default wider of X/Z (nose-along-X packs); jets often need `x`.
+  const axis = opts.wingspanAxis ?? 'max'
+  const span =
+    axis === 'x'
+      ? Math.max(rawSize.x, 0.001)
+      : axis === 'z'
+        ? Math.max(rawSize.z, 0.001)
+        : Math.max(rawSize.x, rawSize.z, 0.001)
   const scale = opts.targetWingspan / span
   model.scale.multiplyScalar(scale)
 
@@ -369,13 +381,15 @@ export async function loadF84F(): Promise<AircraftHandle> {
 
 /**
  * F-104G Starfighter — WT German pack; SpecGloss→metalrough; stub-wing jet.
- * Wingspan already on X (~6.68 m).
+ * Pack is already nose +Z; span on X (~6.78), length on Z (~17.8) — must use
+ * `wingspanAxis: 'x'` or `max` scales the fuselage to 6.68 m and tips float.
  */
 export async function loadF104G(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: F104G_URL,
     name: 'f104g',
     targetWingspan: 6.68,
+    wingspanAxis: 'x',
     noProp: true,
     noGear: true,
   })
@@ -437,12 +451,14 @@ export async function loadTornado(): Promise<AircraftHandle> {
   })
 }
 
-/** F-16A Block 15 — jet; static airframe (no prop / gear motion). */
+/** F-16C Fighting Falcon — jet; static airframe (no prop / gear motion). */
 export async function loadF16(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: F16_URL,
     name: 'f16',
     targetWingspan: 9.96,
+    wingspanAxis: 'x',
+    noseYaw: Math.PI,
     noProp: true,
     noGear: true,
   })

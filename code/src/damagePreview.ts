@@ -58,23 +58,54 @@ type Painted = {
 }
 
 function classifyPart(obj: THREE.Object3D): PartKind {
+  /**
+   * Prefer rig ancestry over export mesh names. Panther packs label mantlet /
+   * coax meshes `*_turret_*` and a false basket `hull5_*` — name-first
+   * matching painted the real turret as hull and the gun house as random.
+   */
+  let underPitch = false
+  let underYaw = false
+  let underHull = false
+  let trackHint: PartKind | null = null
   let p: THREE.Object3D | null = obj
   while (p) {
     const n = (p.name || '').toLowerCase()
-    if (/barrelpitchpivot|barrel|gun|weapon|muzzle/.test(n) && !/mg|coax|machine/.test(n)) {
+    if (n === 'barrelpitchpivot' || n === 'barrel') underPitch = true
+    if (n === 'turretyawpivot' || n === 'turret') underYaw = true
+    if (n === 'hull' || n === 'hull001') underHull = true
+    if (/track|tread|kette|chain|wheel|sprocket|idler/.test(n)) {
+      if (n.includes('left') || n.includes('_l') || /\.001\b/.test(n) || /wheels?l/.test(n)) {
+        trackHint = 'trackL'
+      } else if (
+        n.includes('right') ||
+        n.includes('_r') ||
+        /\.002\b/.test(n) ||
+        /wheels?r/.test(n)
+      ) {
+        trackHint = 'trackR'
+      } else {
+        trackHint =
+          obj.position.x < 0 ? 'trackL' : obj.position.x > 0 ? 'trackR' : 'other'
+      }
+    }
+    p = p.parent
+  }
+  if (trackHint) return trackHint
+  if (underPitch) return 'gun'
+  if (underYaw) return 'turret'
+  if (underHull) return 'armor'
+
+  // Fallback: loose name match for packs without our Hull/Turret/Barrel labels.
+  p = obj
+  while (p) {
+    const n = (p.name || '').toLowerCase()
+    if (
+      /barrelpitchpivot|barrel|gun|weapon|muzzle/.test(n) &&
+      !/mg|coax|machine/.test(n)
+    ) {
       return 'gun'
     }
     if (/turretyawpivot|turret|cupola|mantlet/.test(n)) return 'turret'
-    if (/track|tread|kette|chain|wheel|sprocket|idler/.test(n)) {
-      if (n.includes('left') || n.includes('_l') || /\.001\b/.test(n) || /wheels?l/.test(n)) {
-        return 'trackL'
-      }
-      if (n.includes('right') || n.includes('_r') || /\.002\b/.test(n) || /wheels?r/.test(n)) {
-        return 'trackR'
-      }
-      // Geometry side later
-      return obj.position.x < 0 ? 'trackL' : obj.position.x > 0 ? 'trackR' : 'other'
-    }
     if (/hull|chassis|body|hull001/.test(n)) return 'armor'
     p = p.parent
   }

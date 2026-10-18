@@ -75,6 +75,13 @@ export type SamMissileOpts = {
   meshScale?: number
   /** Override max path length (metres). */
   maxRange?: number
+  /**
+   * Optional flight mesh (e.g. AIM-9 / AIM-120 GLB). Return null to use capsule.
+   * Called after getLaunchOrigin so callers can pick the rail kind first.
+   */
+  createMissileMesh?: () => THREE.Object3D | null
+  /** After a successful spawn (ammo already decremented). */
+  onLaunch?: () => void
 }
 
 type TrailPuff = {
@@ -85,7 +92,7 @@ type TrailPuff = {
 }
 
 type LiveMissile = {
-  mesh: THREE.Mesh
+  mesh: THREE.Object3D
   vel: THREE.Vector3
   target: THREE.Object3D
   intended: THREE.Object3D
@@ -99,6 +106,8 @@ type LiveMissile = {
   spoofed: boolean
   /** Follow getLaunchDir each frame — no lock seeker. */
   manual: boolean
+  /** GLB / shared mats — skip geometry dispose. */
+  sharedMesh: boolean
 }
 
 const _origin = new THREE.Vector3()
@@ -367,10 +376,30 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     if (!airLaunch) _dir.y = Math.max(_dir.y, 0.08)
     _dir.normalize()
 
-    const mesh = new THREE.Mesh(geo, mat.clone())
-    mesh.castShadow = true
+    const custom = opts.createMissileMesh?.() ?? null
+    let mesh: THREE.Object3D
+    let sharedMesh = false
+    if (custom) {
+      mesh = custom
+      sharedMesh = true
+      mesh.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          o.castShadow = true
+          o.frustumCulled = false
+        }
+      })
+    } else {
+      const capsule = new THREE.Mesh(geo, mat.clone())
+      capsule.castShadow = true
+      mesh = capsule
+    }
     mesh.position.copy(_origin)
-    mesh.quaternion.setFromUnitVectors(_up, _dir)
+    // Capsule is +Y long; AIM GLBs are nose +Z.
+    if (custom) {
+      mesh.quaternion.setFromUnitVectors(_fwd.set(0, 0, 1), _dir)
+    } else {
+      mesh.quaternion.setFromUnitVectors(_up, _dir)
+    }
     scene.add(mesh)
 
     if (!manualAim) sampleTarget(target, _tgt)
@@ -390,9 +419,11 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
       dead: false,
       spoofed: false,
       manual: manualAim,
+      sharedMesh,
     })
     ammo--
     reload = reloadSec
+    opts.onLaunch?.()
     console.info(
       manualAim
         ? `[Steel] ${logTag} manual launch · ammo ${ammo} · range ${maxRange}m`
@@ -407,8 +438,11 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     // One exhaust puff on death — avoid a 6-puff burst every burnout.
     emitTrail(m, true)
     scene.remove(m.mesh)
-    m.mesh.geometry.dispose()
-    ;(m.mesh.material as THREE.Material).dispose()
+    if (m.sharedMesh) return
+    if (m.mesh instanceof THREE.Mesh) {
+      // Shared capsule geo — only dispose the cloned material.
+      ;(m.mesh.material as THREE.Material).dispose()
+    }
   }
 
   function tryHit(m: LiveMissile): boolean {
@@ -619,7 +653,12 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
         }
 
         if (m.vel.lengthSq() > 1e-6) {
-          m.mesh.quaternion.setFromUnitVectors(_up, _fwd.copy(m.vel).normalize())
+          _fwd.copy(m.vel).normalize()
+          if (m.sharedMesh) {
+            m.mesh.quaternion.setFromUnitVectors(_to.set(0, 0, 1), _fwd)
+          } else {
+            m.mesh.quaternion.setFromUnitVectors(_up, _fwd)
+          }
         }
 
         const walls = opts.propColliders

@@ -10,14 +10,29 @@ import {
   setTankCosmetics,
   type TankCosmetics,
 } from './cosmetics'
+import {
+  accessoriesToWire,
+  newBushAccessory,
+  type TankAccessory,
+} from './tankAccessories'
 import { createCustomizePreview } from './customizePreview'
+import {
+  armamentLabel,
+  hasHardpointPicker,
+  stationDef,
+  type HardpointArmament,
+  type HardpointStationId,
+  type PlaneStationMap,
+} from './aircraftHardpoints'
 import {
   LOADOUT_OPTIONS,
   getAircraftLoadout,
+  loadoutIdFromStations,
   loadoutOptionById,
   resolveAircraftStores,
   resolveStores,
   setAircraftLoadout,
+  stationsFromLoadoutId,
   type LoadoutId,
 } from './aircraftLoadouts'
 import {
@@ -94,6 +109,8 @@ export type MenuSelection = {
       tankId: TankId
       team: TeamId
       spawnIndex: number
+      /** Peer tank accessories (bushes) from lobby. */
+      accessories?: ReturnType<typeof accessoriesToWire>
     }>
   }
 }
@@ -386,6 +403,7 @@ function showMpLobby(
         tankId: (p.tankId as TankId) || 'tiger',
         team: p.team as TeamId,
         spawnIndex: p.spawnIndex,
+        accessories: p.accessories ?? [],
       }))
     setMpSession({
       client,
@@ -397,8 +415,10 @@ function showMpLobby(
     unsub()
     unsubStart()
     document.getElementById('main-menu')?.remove()
+    const myAcc = me.accessories?.length ?? 0
+    const peerAcc = peers.reduce((n, p) => n + (p.accessories?.length ?? 0), 0)
     console.info(
-      `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} team=${me.team} peers=${peers.length}`,
+      `[Steel] MP deploy ${me.host ? 'host' : 'guest'} ${tankId} team=${me.team} peers=${peers.length} · acc me=${myAcc} peers=${peerAcc}`,
     )
     resolve({
       mapId: 'forest',
@@ -525,12 +545,18 @@ function showMpLobby(
     root.querySelector('[data-code]')?.addEventListener('input', (ev) => {
       joinCode = (ev.target as HTMLInputElement).value
     })
+    function sendMyTank(): void {
+      const accessories = accessoriesToWire(getTankCosmetics(myTank).accessories)
+      client.send({ t: 'tank', tankId: myTank, accessories })
+      console.info(`[Steel] MP tank announce ${myTank} · acc=${accessories.length}`)
+    }
+
     root.querySelector('[data-tank]')?.addEventListener('change', (ev) => {
       myTank = (ev.target as HTMLSelectElement).value as TankId
-      client.send({ t: 'tank', tankId: myTank })
+      sendMyTank()
     })
     root.querySelector('[data-act="start"]')?.addEventListener('click', () => {
-      client.send({ t: 'tank', tankId: myTank })
+      sendMyTank()
       client.send({ t: 'start' })
     })
   }
@@ -539,7 +565,9 @@ function showMpLobby(
   const unsub = client.subscribe((state) => {
     if (state.status === 'open' && !tankAnnounced) {
       tankAnnounced = true
-      client.send({ t: 'tank', tankId: myTank })
+      const accessories = accessoriesToWire(getTankCosmetics(myTank).accessories)
+      client.send({ t: 'tank', tankId: myTank, accessories })
+      console.info(`[Steel] MP tank announce ${myTank} · acc=${accessories.length}`)
     }
     if (state.status === 'idle' || state.status === 'closed') tankAnnounced = false
     paint(state)
@@ -695,6 +723,8 @@ function showCustomize(
   const groundTanks = TANK_OPTIONS.filter((t) => !t.aircraft)
   let tankId: TankId = groundTanks[0]?.id ?? 'pz3'
   let draft: TankCosmetics = getTankCosmetics(tankId)
+  let selectedAccId: string | null = null
+  let placeBushMode = false
   /** Preview rotation in degrees (−180…180). */
   let rotDeg = { x: 0, y: 36, z: 0 }
   let preview: ReturnType<typeof createCustomizePreview> | null = null
@@ -704,24 +734,94 @@ function showCustomize(
     return (d * Math.PI) / 180
   }
 
+  function radToDeg(r: number): number {
+    return Math.round((r * 180) / Math.PI)
+  }
+
+  function cloneDraft(cos: TankCosmetics): TankCosmetics {
+    return {
+      wrapId: cos.wrapId,
+      accessories: cos.accessories.map((a) => ({
+        ...a,
+        pos: [...a.pos] as [number, number, number],
+      })),
+    }
+  }
+
+  function selectedAccessory(): TankAccessory | null {
+    if (!selectedAccId) return null
+    return draft.accessories.find((a) => a.id === selectedAccId) ?? null
+  }
+
   function syncRotation(): void {
     preview?.setRotation(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z))
   }
 
   function queueShow(): void {
     const id = tankId
-    const cos = { wrapId: draft.wrapId }
+    const cos = cloneDraft(draft)
     previewReady = previewReady.then(async () => {
       await preview?.show(id, cos)
       syncRotation()
+      wireAccessoryPreview()
     })
   }
 
-  function queueApplyDraft(): void {
-    const cos = { wrapId: draft.wrapId }
-    previewReady = previewReady.then(
-      () => preview?.applyDraft(cos, { reloadChassis: true }) ?? Promise.resolve(),
-    )
+  function queueApplyDraft(reloadChassis = false): void {
+    const cos = cloneDraft(draft)
+    previewReady = previewReady.then(async () => {
+      if (reloadChassis) {
+        await preview?.applyDraft(cos, { reloadChassis: true })
+      } else {
+        await preview?.applyDraft(cos)
+        await preview?.setAccessories(cos.accessories)
+      }
+      wireAccessoryPreview()
+    })
+  }
+
+  function syncAccessoriesNow(): void {
+    const list = draft.accessories
+    void preview?.setAccessories(list).then(() => {
+      preview?.setAccessoryHighlight(selectedAccId)
+    })
+  }
+
+  function wireAccessoryPreview(): void {
+    if (!preview) return
+    preview.setAccessoryPlaceMode(placeBushMode)
+    preview.setAccessoryHighlight(selectedAccId)
+    preview.onAccessoryPick((id) => {
+      selectedAccId = id
+      placeBushMode = false
+      preview?.setAccessoryPlaceMode(false)
+      refreshChrome()
+    })
+    preview.onAccessoryPlace((local) => {
+      if (draft.accessories.length >= 12) {
+        const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
+        if (status) status.textContent = 'Max 12 accessories on this tank.'
+        placeBushMode = false
+        preview?.setAccessoryPlaceMode(false)
+        refreshChrome()
+        return
+      }
+      const bush = newBushAccessory(local)
+      draft = {
+        ...draft,
+        accessories: [...draft.accessories, bush],
+      }
+      selectedAccId = bush.id
+      placeBushMode = false
+      preview?.setAccessoryPlaceMode(false)
+      // Hang immediately — don't wait on the chassis load queue.
+      syncAccessoriesNow()
+      refreshChrome()
+      const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
+      if (status) {
+        status.textContent = `Bush planted (${draft.accessories.length}). Nudge with sliders, then Apply.`
+      }
+    })
   }
 
   function tankChipsHtml(): string {
@@ -768,21 +868,80 @@ function showCustomize(
 
   function metaHtml(): string {
     const t = tankOptionById(tankId)
+    const n = draft.accessories.length
     return `<p class="wrap-preview-name">${t.name}</p>
-      <p class="wrap-preview-blurb">${wrapOptionById(draft.wrapId).name} · drag to orbit · XYZ to rotate</p>`
+      <p class="wrap-preview-blurb">${wrapOptionById(draft.wrapId).name} · ${n} accessory${n === 1 ? '' : 'ies'} · drag orbit · click hull to place bush</p>`
+  }
+
+  function accessoryPanelHtml(): string {
+    const sel = selectedAccessory()
+    const placeClass = placeBushMode ? ' is-selected' : ''
+    const list =
+      draft.accessories.length === 0
+        ? `<p class="customize-acc-empty">No bushes yet — Add bush, then click the hull.</p>`
+        : `<div class="customize-acc-list">${draft.accessories
+            .map((a, i) => {
+              const active = a.id === selectedAccId ? ' is-selected' : ''
+              return `<button type="button" class="customize-acc-chip${active}" data-acc="${a.id}">Bush ${i + 1}</button>`
+            })
+            .join('')}</div>`
+
+    const sliders = sel
+      ? `
+      <div class="customize-axis-sliders customize-acc-sliders" data-acc-sliders>
+        <label class="customize-slider customize-slider-wide">
+          <span>X</span>
+          <input type="range" min="-4" max="4" step="0.02" value="${sel.pos[0].toFixed(2)}" data-acc-axis="x" />
+          <span class="customize-axis-val" data-acc-val="x">${sel.pos[0].toFixed(2)}</span>
+        </label>
+        <label class="customize-slider customize-slider-wide">
+          <span>Y</span>
+          <input type="range" min="-0.5" max="3.5" step="0.02" value="${sel.pos[1].toFixed(2)}" data-acc-axis="y" />
+          <span class="customize-axis-val" data-acc-val="y">${sel.pos[1].toFixed(2)}</span>
+        </label>
+        <label class="customize-slider customize-slider-wide">
+          <span>Z</span>
+          <input type="range" min="-5" max="5" step="0.02" value="${sel.pos[2].toFixed(2)}" data-acc-axis="z" />
+          <span class="customize-axis-val" data-acc-val="z">${sel.pos[2].toFixed(2)}</span>
+        </label>
+        <label class="customize-slider customize-slider-wide">
+          <span>Yaw</span>
+          <input type="range" min="-180" max="180" step="1" value="${radToDeg(sel.yaw)}" data-acc-axis="yaw" />
+          <span class="customize-axis-val" data-acc-val="yaw">${radToDeg(sel.yaw)}°</span>
+        </label>
+        <label class="customize-slider customize-slider-wide">
+          <span>Size</span>
+          <input type="range" min="0.3" max="2.5" step="0.05" value="${sel.scale.toFixed(2)}" data-acc-axis="scale" />
+          <span class="customize-axis-val" data-acc-val="scale">${sel.scale.toFixed(2)}</span>
+        </label>
+      </div>
+      <button type="button" class="deploy-btn customize-acc-remove" data-acc-remove>Remove bush</button>`
+      : `<p class="customize-acc-hint">Select a bush chip (or click it on the model) to use sliders.</p>`
+
+    return `
+      <div class="customize-acc-toolbar">
+        <button type="button" class="deploy-btn customize-acc-add${placeClass}" data-acc-add>Add bush</button>
+        ${list}
+      </div>
+      ${sliders}`
   }
 
   function refreshChrome(): void {
     const tankRow = root.querySelector('[data-tank-row]')
     const wrapGrid = root.querySelector('[data-wrap-grid]')
     const axisRow = root.querySelector('[data-axis-sliders]')
+    const accPanel = root.querySelector('[data-acc-panel]')
     const meta = root.querySelector('[data-preview-meta]')
     if (tankRow) tankRow.innerHTML = tankChipsHtml()
     if (wrapGrid) wrapGrid.innerHTML = wrapCardsHtml()
     if (axisRow) axisRow.innerHTML = axisSlidersHtml()
+    if (accPanel) accPanel.innerHTML = accessoryPanelHtml()
     if (meta) meta.innerHTML = metaHtml()
     bindSelectors()
     bindAxisSliders()
+    bindAccessoryUi()
+    preview?.setAccessoryPlaceMode(placeBushMode)
+    preview?.setAccessoryHighlight(selectedAccId)
   }
 
   function bindAxisSliders(): void {
@@ -798,6 +957,90 @@ function showCustomize(
     })
   }
 
+  function patchSelectedAccessory(
+    patch: Partial<Pick<TankAccessory, 'yaw' | 'scale'>> & {
+      pos?: [number, number, number]
+    },
+  ): void {
+    if (!selectedAccId) return
+    draft = {
+      ...draft,
+      accessories: draft.accessories.map((a) => {
+        if (a.id !== selectedAccId) return a
+        return {
+          ...a,
+          ...patch,
+          pos: patch.pos ? [...patch.pos] as [number, number, number] : a.pos,
+        }
+      }),
+    }
+    void preview?.setAccessories(draft.accessories)
+  }
+
+  function bindAccessoryUi(): void {
+    root.querySelector('[data-acc-add]')?.addEventListener('click', () => {
+      placeBushMode = !placeBushMode
+      preview?.setAccessoryPlaceMode(placeBushMode)
+      refreshChrome()
+      const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
+      if (status) {
+        status.textContent = placeBushMode
+          ? 'Click the tank hull to plant a bush.'
+          : ''
+      }
+    })
+    root.querySelectorAll('[data-acc]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        selectedAccId = (btn as HTMLButtonElement).dataset.acc ?? null
+        placeBushMode = false
+        preview?.setAccessoryPlaceMode(false)
+        preview?.setAccessoryHighlight(selectedAccId)
+        refreshChrome()
+      })
+    })
+    root.querySelector('[data-acc-remove]')?.addEventListener('click', () => {
+      if (!selectedAccId) return
+      draft = {
+        ...draft,
+        accessories: draft.accessories.filter((a) => a.id !== selectedAccId),
+      }
+      selectedAccId = null
+      queueApplyDraft(false)
+      refreshChrome()
+    })
+    root.querySelectorAll('[data-acc-axis]').forEach((el) => {
+      el.addEventListener('input', () => {
+        const axis = (el as HTMLInputElement).dataset.accAxis as
+          | 'x'
+          | 'y'
+          | 'z'
+          | 'yaw'
+          | 'scale'
+        const v = Number((el as HTMLInputElement).value)
+        const sel = selectedAccessory()
+        if (!sel) return
+        if (axis === 'yaw') {
+          patchSelectedAccessory({ yaw: degToRad(v) })
+          const label = root.querySelector('[data-acc-val="yaw"]')
+          if (label) label.textContent = `${v}°`
+          return
+        }
+        if (axis === 'scale') {
+          patchSelectedAccessory({ scale: v })
+          const label = root.querySelector('[data-acc-val="scale"]')
+          if (label) label.textContent = v.toFixed(2)
+          return
+        }
+        const pos: [number, number, number] = [...sel.pos]
+        const idx = axis === 'x' ? 0 : axis === 'y' ? 1 : 2
+        pos[idx] = v
+        patchSelectedAccessory({ pos })
+        const label = root.querySelector(`[data-acc-val="${axis}"]`)
+        if (label) label.textContent = v.toFixed(2)
+      })
+    })
+  }
+
   function bindSelectors(): void {
     root.querySelectorAll('[data-tank]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -805,6 +1048,8 @@ function showCustomize(
         if (id === tankId) return
         tankId = id
         draft = getTankCosmetics(tankId)
+        selectedAccId = null
+        placeBushMode = false
         rotDeg = { x: 0, y: 36, z: 0 }
         refreshChrome()
         queueShow()
@@ -814,9 +1059,9 @@ function showCustomize(
       btn.addEventListener('click', () => {
         const wrapId = (btn as HTMLButtonElement).dataset.wrap as WrapId
         if (wrapId === draft.wrapId) return
-        draft = { wrapId }
+        draft = { ...draft, wrapId }
         refreshChrome()
-        queueApplyDraft()
+        queueApplyDraft(true)
       })
     })
   }
@@ -825,7 +1070,7 @@ function showCustomize(
     <div class="menu-panel menu-panel-wide customize-panel">
       <p class="menu-brand">Armored Divisions</p>
       <h1 class="menu-title">Customize</h1>
-      <p class="menu-sub">Pick a tank · orbit · rotate with XYZ · wrap · Apply (this tank only).</p>
+      <p class="menu-sub">Pick a tank · orbit · wrap · plant bushes · Apply (this tank only).</p>
 
       <p class="menu-section">Tank</p>
       <div class="customize-tank-row" data-tank-row>${tankChipsHtml()}</div>
@@ -836,6 +1081,9 @@ function showCustomize(
         </div>
         <div class="customize-stage-meta" data-preview-meta>${metaHtml()}</div>
       </div>
+
+      <p class="menu-section">Accessories</p>
+      <div class="customize-acc-panel" data-acc-panel>${accessoryPanelHtml()}</div>
 
       <p class="menu-section">Rotation</p>
       <div class="customize-axis-sliders" data-axis-sliders>${axisSlidersHtml()}</div>
@@ -853,6 +1101,7 @@ function showCustomize(
 
   bindSelectors()
   bindAxisSliders()
+  bindAccessoryUi()
   root.querySelector('[data-apply]')!.addEventListener('click', () => {
     void (async () => {
       setTankCosmetics(tankId, draft)
@@ -861,9 +1110,10 @@ function showCustomize(
       const status = root.querySelector('[data-status]') as HTMLParagraphElement
       const tankName = tankOptionById(tankId).name
       const wrapName = wrapOptionById(draft.wrapId).name
+      const n = draft.accessories.length
       status.textContent = user
-        ? `Saved ${tankName}: ${wrapName} (account + Deploy).`
-        : `Saved ${tankName}: ${wrapName} (local).`
+        ? `Saved ${tankName}: ${wrapName} · ${n} acc (account wrap + local accessories).`
+        : `Saved ${tankName}: ${wrapName} · ${n} accessory${n === 1 ? '' : 'ies'} (local).`
       console.info('[Steel] Customize applied', tankId, draft)
     })()
   })
@@ -875,12 +1125,13 @@ function showCustomize(
 
   const viewport = root.querySelector('[data-viewport]') as HTMLElement
   preview = createCustomizePreview(viewport)
+  wireAccessoryPreview()
   queueShow()
 }
 
 /**
  * Aircraft hangar — pick a plane, orbit it, assign a weapons loadout.
- * Mirrors Customize (tanks / wraps) so later mission briefs can read saved stores.
+ * US hardpoint airframes: click yellow squares to choose armament.
  */
 function showPlaneHangar(
   root: HTMLDivElement,
@@ -892,6 +1143,13 @@ function showPlaneHangar(
   const planes = TANK_OPTIONS.filter((t) => t.aircraft)
   let planeId: TankId = planes[0]?.id ?? 'corsair'
   let draft = getAircraftLoadout(planeId)
+  let stations: PlaneStationMap = hasHardpointPicker(planeId)
+    ? ({
+        ...stationsFromLoadoutId(draft.loadoutId, planeId),
+        ...draft.stations,
+      } as PlaneStationMap)
+    : (stationsFromLoadoutId('guns', 'corsair') as PlaneStationMap)
+  let selectedHp: HardpointStationId | null = null
   let rotDeg = { x: 0, y: 36, z: 0 }
   let preview: ReturnType<typeof createCustomizePreview> | null = null
   let previewReady: Promise<void> = Promise.resolve()
@@ -904,11 +1162,24 @@ function showPlaneHangar(
     preview?.setRotation(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z))
   }
 
+  function syncHardpoints(): void {
+    if (!hasHardpointPicker(planeId)) return
+    draft = {
+      loadoutId: loadoutIdFromStations(stations, planeId),
+      stations: { ...stations },
+    }
+    preview?.setHardpointStations(stations)
+  }
+
   function queueShow(): void {
     const id = planeId
     previewReady = previewReady.then(async () => {
-      await preview?.show(id, { wrapId: 'stock' })
+      await preview?.show(id, { wrapId: 'stock', accessories: [] })
       syncRotation()
+      if (hasHardpointPicker(id)) {
+        preview?.setHardpointStations(stations)
+        preview?.setHardpointHighlight(selectedHp)
+      }
     })
   }
 
@@ -951,8 +1222,8 @@ function showPlaneHangar(
       </label>`
   }
 
-  function storesLine(loadoutId: LoadoutId): string {
-    const stores = resolveStores(planeId, loadoutId)
+  function storesLine(): string {
+    const stores = resolveStores(planeId, draft.loadoutId, stations)
     const bits: string[] = ['guns']
     if (stores.bombCount > 0) bits.push(`bombs ×${stores.bombCount}`)
     if (stores.rockets) bits.push('rockets')
@@ -961,8 +1232,31 @@ function showPlaneHangar(
 
   function metaHtml(): string {
     const t = tankOptionById(planeId)
+    const tip = hasHardpointPicker(planeId)
+      ? ' · click yellow squares to arm pylons'
+      : ' · drag to orbit'
     return `<p class="wrap-preview-name">${t.name}</p>
-      <p class="wrap-preview-blurb">${loadoutOptionById(draft.loadoutId).name} · ${storesLine(draft.loadoutId)} · drag to orbit</p>`
+      <p class="wrap-preview-blurb">${loadoutOptionById(draft.loadoutId).name} · ${storesLine()}${tip}</p>`
+  }
+
+  function pickerHtml(): string {
+    if (!hasHardpointPicker(planeId)) {
+      return `<p class="hp-picker-idle">Presets only on this airframe.</p>`
+    }
+    if (!selectedHp) {
+      return `<p class="hp-picker-idle">Click a <span class="hp-swatch"></span> yellow hardpoint on the airframe.</p>`
+    }
+    const def = stationDef(selectedHp, planeId)
+    const cur = (stations as Record<string, HardpointArmament>)[selectedHp] ?? 'empty'
+    const opts = def.allows
+      .map((a) => {
+        const on = a === cur ? ' is-selected' : ''
+        return `<button type="button" class="hp-arm-btn${on}" data-arm="${a}">${armamentLabel(a)}</button>`
+      })
+      .join('')
+    return `
+      <p class="hp-picker-title">Hardpoint <strong>${selectedHp}</strong> · ${armamentLabel(cur)}</p>
+      <div class="hp-arm-row">${opts}</div>`
   }
 
   function refreshChrome(): void {
@@ -970,12 +1264,15 @@ function showPlaneHangar(
     const loadoutGrid = root.querySelector('[data-loadout-grid]')
     const axisRow = root.querySelector('[data-axis-sliders]')
     const meta = root.querySelector('[data-preview-meta]')
+    const picker = root.querySelector('[data-hp-picker]')
     if (planeRow) planeRow.innerHTML = planeChipsHtml()
     if (loadoutGrid) loadoutGrid.innerHTML = loadoutCardsHtml()
     if (axisRow) axisRow.innerHTML = axisSlidersHtml()
     if (meta) meta.innerHTML = metaHtml()
+    if (picker) picker.innerHTML = pickerHtml()
     bindSelectors()
     bindAxisSliders()
+    bindPicker()
   }
 
   function bindAxisSliders(): void {
@@ -991,6 +1288,18 @@ function showPlaneHangar(
     })
   }
 
+  function bindPicker(): void {
+    root.querySelectorAll('[data-arm]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (!selectedHp) return
+        const arm = (btn as HTMLButtonElement).dataset.arm as HardpointArmament
+        stations = { ...stations, [selectedHp]: arm }
+        syncHardpoints()
+        refreshChrome()
+      })
+    })
+  }
+
   function bindSelectors(): void {
     root.querySelectorAll('[data-plane]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -998,6 +1307,13 @@ function showPlaneHangar(
         if (id === planeId) return
         planeId = id
         draft = getAircraftLoadout(planeId)
+        stations = hasHardpointPicker(planeId)
+          ? ({
+              ...stationsFromLoadoutId(draft.loadoutId, planeId),
+              ...draft.stations,
+            } as PlaneStationMap)
+          : (stationsFromLoadoutId('guns', 'corsair') as PlaneStationMap)
+        selectedHp = null
         rotDeg = { x: 0, y: 36, z: 0 }
         refreshChrome()
         queueShow()
@@ -1006,8 +1322,14 @@ function showPlaneHangar(
     root.querySelectorAll('[data-loadout]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const loadoutId = (btn as HTMLButtonElement).dataset.loadout as LoadoutId
-        if (loadoutId === draft.loadoutId) return
-        draft = { loadoutId }
+        if (hasHardpointPicker(planeId)) {
+          stations = stationsFromLoadoutId(loadoutId, planeId)
+          draft = { loadoutId, stations: { ...stations } }
+        } else {
+          draft = { loadoutId }
+        }
+        selectedHp = null
+        syncHardpoints()
         refreshChrome()
       })
     })
@@ -1017,7 +1339,7 @@ function showPlaneHangar(
     <div class="menu-panel menu-panel-wide customize-panel">
       <p class="menu-brand">Armored Divisions</p>
       <h1 class="menu-title">Hangar</h1>
-      <p class="menu-sub">Pick a plane · orbit · assign a loadout · Apply (this airframe only).</p>
+      <p class="menu-sub">Pick a plane · click yellow hardpoints · choose armament · Apply.</p>
 
       <p class="menu-section">Aircraft</p>
       <div class="customize-tank-row" data-plane-row>${planeChipsHtml()}</div>
@@ -1029,10 +1351,13 @@ function showPlaneHangar(
         <div class="customize-stage-meta" data-preview-meta>${metaHtml()}</div>
       </div>
 
+      <p class="menu-section">Hardpoint</p>
+      <div class="hp-picker" data-hp-picker>${pickerHtml()}</div>
+
       <p class="menu-section">Rotation</p>
       <div class="customize-axis-sliders" data-axis-sliders>${axisSlidersHtml()}</div>
 
-      <p class="menu-section">Loadout</p>
+      <p class="menu-section">Presets</p>
       <div class="wrap-grid" data-loadout-grid>${loadoutCardsHtml()}</div>
 
       <div class="wrap-actions">
@@ -1045,15 +1370,21 @@ function showPlaneHangar(
 
   bindSelectors()
   bindAxisSliders()
+  bindPicker()
   root.querySelector('[data-apply]')!.addEventListener('click', () => {
+    draft = hasHardpointPicker(planeId)
+      ? {
+          loadoutId: loadoutIdFromStations(stations, planeId),
+          stations: { ...stations },
+        }
+      : { loadoutId: draft.loadoutId, stations: draft.stations }
     setAircraftLoadout(planeId, draft)
     const status = root.querySelector('[data-status]') as HTMLParagraphElement
     const planeName = tankOptionById(planeId).name
     const loadName = loadoutOptionById(draft.loadoutId).name
-    const stores = resolveAircraftStores(planeId)
-    status.textContent = `Saved ${planeName}: ${loadName} (${storesLine(draft.loadoutId)}).`
+    status.textContent = `Saved ${planeName}: ${loadName} (${storesLine()}).`
     refreshChrome()
-    console.info('[Steel] Hangar applied', planeId, stores)
+    console.info('[Steel] Hangar applied', planeId, draft)
   })
   root.querySelector('.menu-back')!.addEventListener('click', () => {
     preview?.dispose()
@@ -1063,6 +1394,11 @@ function showPlaneHangar(
 
   const viewport = root.querySelector('[data-viewport]') as HTMLElement
   preview = createCustomizePreview(viewport)
+  preview.onHardpointPick((id) => {
+    selectedHp = id
+    preview?.setHardpointHighlight(id)
+    refreshChrome()
+  })
   queueShow()
 }
 

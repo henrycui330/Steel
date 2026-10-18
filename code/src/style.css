@@ -3311,6 +3311,10 @@ canvas {
   touch-action: none;
 }
 
+.customize-viewport[data-place-acc='1'] .customize-canvas {
+  cursor: crosshair;
+}
+
 .customize-loading {
   position: absolute;
   inset: 0;
@@ -3342,6 +3346,57 @@ canvas {
   margin: 0 0 1.15rem;
 }
 
+.customize-acc-panel {
+  margin: 0 0 1.15rem;
+}
+
+.customize-acc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.65rem;
+}
+
+.customize-acc-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.customize-acc-chip {
+  padding: 0.35rem 0.65rem;
+  border: 1px solid var(--menu-panel-edge);
+  border-radius: var(--menu-radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.customize-acc-chip.is-selected,
+.customize-acc-add.is-selected {
+  border-color: rgba(180, 200, 120, 0.75);
+  background: rgba(120, 140, 70, 0.22);
+}
+
+.customize-acc-add,
+.customize-acc-remove {
+  font-size: 0.85rem;
+  padding: 0.45rem 0.85rem;
+}
+
+.customize-acc-empty,
+.customize-acc-hint {
+  margin: 0.35rem 0 0;
+  opacity: 0.7;
+  font-size: 0.85rem;
+}
+
+.customize-acc-sliders {
+  margin-top: 0.55rem;
+}
+
 .customize-slider {
   display: grid;
   grid-template-columns: 1.5rem 1fr 3rem;
@@ -3349,6 +3404,10 @@ canvas {
   gap: 0.55rem;
   font-size: 0.8rem;
   opacity: 0.9;
+}
+
+.customize-slider-wide {
+  grid-template-columns: 2.4rem 1fr 3.2rem;
 }
 
 .customize-slider input[type='range'] {
@@ -3474,6 +3533,66 @@ canvas {
   font-weight: 500;
   opacity: 0.8;
   line-height: 1.3;
+}
+
+.hp-picker {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid rgba(242, 212, 74, 0.35);
+  border-radius: 0.35rem;
+  background: linear-gradient(180deg, rgba(40, 38, 28, 0.9), rgba(22, 24, 20, 0.95));
+}
+
+.hp-picker-idle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(230, 230, 220, 0.75);
+}
+
+.hp-swatch {
+  display: inline-block;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin: 0 0.15rem;
+  vertical-align: -0.05rem;
+  background: #f2d44a;
+  border: 1px solid #c9a820;
+  box-shadow: 0 0 6px rgba(242, 212, 74, 0.45);
+}
+
+.hp-picker-title {
+  margin: 0 0 0.55rem;
+  font-size: 0.92rem;
+  color: #f0ead8;
+}
+
+.hp-arm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.hp-arm-btn {
+  appearance: none;
+  border: 1px solid rgba(200, 190, 150, 0.35);
+  border-radius: 0.25rem;
+  padding: 0.4rem 0.75rem;
+  background: #2a2c26;
+  color: #e8e4d4;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.hp-arm-btn:hover {
+  border-color: #f2d44a;
+}
+
+.hp-arm-btn.is-selected {
+  border-color: #f2d44a;
+  background: #3a3820;
+  color: #fff6c8;
+  box-shadow: inset 0 0 0 1px rgba(242, 212, 74, 0.35);
 }
 
 .menu-screen-plane-hangar .customize-panel {

@@ -4,9 +4,17 @@ import type { GunTarget } from './aircraftGuns'
 import type { TrackedProjectile } from './impactCinematic'
 import { spawnExplosion } from './explosions'
 import { hitsPropCollider, type PropCollider } from './collision'
+import {
+  bombKindLabel,
+  bombTemplateReady,
+  cloneBombFlight,
+  ensureAllBombTemplates,
+  type BombStoreKind,
+} from './munitionMk82'
+import type { BombStation } from './aircraftHardpoints'
 
 /**
- * Two 1000 lb bombs plus the bombsight that makes them usable.
+ * Free-fall bombs (AN-M64A1 500 lb / Mk83 1000 lb) plus the bombsight.
  *
  * The sight and the bomb share one integrator (`integrate`), so the predicted
  * impact ring cannot drift from where a bomb actually lands — if the physics
@@ -44,12 +52,20 @@ export type BombPrediction = {
 }
 
 type Bomb = {
-  mesh: THREE.Mesh
+  mesh: THREE.Object3D
+  /** True when mesh is an AN-M64A1 GLB clone (shared template geo — don't dispose). */
+  sharedMesh: boolean
+  kind: BombStoreKind
   /** Release state — position is solved from this, never accumulated. */
   origin: THREE.Vector3
   vel0: THREE.Vector3
   t: number
   dead: boolean
+  /** GBU laser aim point — Euler steer when set. */
+  guideTo: THREE.Vector3 | null
+  /** Guided bombs integrate velocity instead of closed-form ballistic. */
+  pos: THREE.Vector3
+  vel: THREE.Vector3
 }
 
 /** Live handle on a released bomb, for the cinematic camera to follow. */
@@ -73,6 +89,11 @@ export type AircraftBombs = {
   /** Fired at detonation, with the blast centre. */
   setOnDetonate: (fn: ((at: THREE.Vector3) => void) | null) => void
   setSightVisible: (visible: boolean) => void
+  /**
+   * Litening lase: when locked, next GBU-27 steers to `point`.
+   * Pass locked=false to clear / block GBU pickle.
+   */
+  setLaserDesignation: (point: THREE.Vector3 | null, locked: boolean) => void
   dispose: () => void
 }
 
@@ -85,12 +106,25 @@ export type BombOptions = {
   /** Override bay size (fighters default 2; bombers pass more). */
   bombCount?: number
   propColliders?: readonly PropCollider[]
+  /** Local hardpoint stations (e.g. Corsair inner-wing). Alternates on drop. */
+  stations?: ReadonlyArray<readonly [number, number, number]>
+  /** Stations with bomb kind (preferred over bare locals). */
+  bombStations?: readonly BombStation[]
+  /** Called when a bomb leaves a station (hide hung store). */
+  onStationRelease?: () => void
 }
 
 export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   const { scene, root, heightAt, bounds, velocity } = opts
   const walls = opts.propColliders ?? []
   const capacity = Math.max(1, Math.floor(opts.bombCount ?? BOMB_COUNT))
+  const bombStations: BombStation[] | null = opts.bombStations
+    ? [...opts.bombStations]
+    : opts.stations
+      ? opts.stations.map((local) => ({ local, kind: 'bomb' as BombStoreKind }))
+      : null
+  const stationUsed = bombStations ? bombStations.map(() => false) : []
+  const _release = new THREE.Vector3()
 
   const bombGeo = new THREE.CapsuleGeometry(0.19, 1.0, 4, 8)
   const bombMat = new THREE.MeshStandardMaterial({
@@ -98,6 +132,7 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     roughness: 0.8,
     metalness: 0.3,
   })
+  void ensureAllBombTemplates()
 
   // Sight: flat ring on the ground plus a stalk so it reads against terrain.
   const sight = new THREE.Group()
@@ -128,9 +163,14 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   let remaining = capacity
   let gap = 0
   let sightOn = true
+  let laserPoint: THREE.Vector3 | null = null
+  let laserLocked = false
   let onKill: ((victim: THREE.Object3D) => void) | null = null
   let onRelease: ((bomb: BombHandle) => void) | null = null
   let onDetonate: ((at: THREE.Vector3) => void) | null = null
+
+  /** GBU horizontal steer (m/s² toward lase). */
+  const GBU_STEER = 55
 
   if (capacity > BOMB_COUNT) {
     console.info(`[Steel] Bomb bay armed · ${capacity} bombs`)
@@ -265,28 +305,105 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     }
   }
 
-  function release(): void {
-    if (remaining <= 0 || gap > 0) return
-    remaining--
-    gap = RELEASE_GAP
+  /** Index of next station to release (does not mark used). */
+  function peekStationIndex(): number {
+    if (!bombStations || bombStations.length === 0) return -1
+    // While lased, pickle GBU first so Litening → B feels right.
+    if (laserLocked) {
+      for (let i = 0; i < bombStations.length; i++) {
+        if (!stationUsed[i] && bombStations[i]!.kind === 'gbu27') return i
+      }
+    }
+    for (let i = 0; i < bombStations.length; i++) {
+      if (!stationUsed[i]) return i
+    }
+    return -1
+  }
+
+  function peekStation(): BombStation | null {
+    const i = peekStationIndex()
+    return i >= 0 && bombStations ? bombStations[i]! : null
+  }
+
+  function nextStation(): BombStation | null {
+    const i = peekStationIndex()
+    if (i < 0 || !bombStations) return null
+    stationUsed[i] = true
+    return bombStations[i]!
+  }
+
+  function releaseWorldOrigin(
+    st: BombStation | null,
+    out: THREE.Vector3,
+  ): THREE.Vector3 {
+    if (st) {
+      out.set(st.local[0], st.local[1], st.local[2])
+      root.localToWorld(out)
+      return out
+    }
+    return out.copy(root.position)
+  }
+
+  function makeFallingMesh(
+    kind: BombStoreKind,
+  ): { mesh: THREE.Object3D; shared: boolean } {
+    if (bombTemplateReady(kind)) {
+      const glb = cloneBombFlight(kind)
+      if (glb) return { mesh: glb, shared: true }
+    }
     const mesh = new THREE.Mesh(bombGeo, bombMat)
-    mesh.position.copy(root.position)
     mesh.castShadow = true
     mesh.frustumCulled = false
+    return { mesh, shared: false }
+  }
+
+  function release(): void {
+    if (remaining <= 0 || gap > 0) return
+    const peek = peekStation()
+    const kind: BombStoreKind = peek?.kind ?? 'bomb'
+    // Paveway needs a Litening lock — don't dump a blind GBU.
+    if (kind === 'gbu27' && !laserLocked) {
+      console.info('[Steel] GBU-27 — NO LASE · hold P to hard-lock · B')
+      return
+    }
+    remaining--
+    gap = RELEASE_GAP
+    const st = nextStation()
+    releaseWorldOrigin(st, _release)
+    opts.onStationRelease?.()
+    const { mesh, shared } = makeFallingMesh(kind)
+    mesh.position.copy(_release)
+    mesh.castShadow = true
     scene.add(mesh)
+    const guide =
+      kind === 'gbu27' && laserLocked && laserPoint ? laserPoint.clone() : null
     const bomb: Bomb = {
       mesh,
-      origin: root.position.clone(),
+      sharedMesh: shared,
+      kind,
+      origin: _release.clone(),
       vel0: velocity.clone(),
       t: 0,
       dead: false,
+      guideTo: guide,
+      pos: _release.clone(),
+      vel: velocity.clone(),
     }
     bombs.push(bomb)
+    console.info(
+      `[Steel] Bomb release · ${shared ? bombKindLabel(kind) : 'capsule'}${
+        guide ? ' · laser' : ''
+      } · ${remaining} left`,
+    )
 
     onRelease?.({
       // Live reference: the mesh position is rewritten each frame.
       position: bomb.mesh.position,
-      impact: pred.valid ? pred.point.clone() : root.position.clone(),
+      impact: guide
+        ? guide.clone()
+        : pred.valid
+          ? pred.point.clone()
+          : _release.clone(),
       flightTime: pred.valid ? pred.time : 0,
       live: () => !bomb.dead,
     })
@@ -296,6 +413,10 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     const b = bombs[i]!
     b.dead = true
     scene.remove(b.mesh)
+    // Capsule fallback owns geo/mat; AN-M64A1 clones share the template.
+    if (!b.sharedMesh && b.mesh instanceof THREE.Mesh) {
+      /* geo/mat shared across fallback capsules — leave for dispose() */
+    }
     bombs.splice(i, 1)
   }
 
@@ -325,20 +446,46 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
         continue
       }
 
-      posAt(b.origin, b.vel0, b.t, b.mesh.position)
+      if (b.guideTo) {
+        // Laser-guided: gravity + strong horizontal steer toward lase point.
+        b.vel.y -= BOMB_GRAVITY * dt
+        _dir.copy(b.guideTo).sub(b.pos)
+        _dir.y = 0
+        const flat = _dir.length()
+        if (flat > 1.5) {
+          _dir.multiplyScalar(1 / flat)
+          b.vel.x += _dir.x * GBU_STEER * dt
+          b.vel.z += _dir.z * GBU_STEER * dt
+        }
+        // Soft cap so it doesn't fly like a missile.
+        const hSpd = Math.hypot(b.vel.x, b.vel.z)
+        const maxH = Math.max(Math.hypot(b.vel0.x, b.vel0.z) * 1.15, 90)
+        if (hSpd > maxH) {
+          const s = maxH / hSpd
+          b.vel.x *= s
+          b.vel.z *= s
+        }
+        b.pos.addScaledVector(b.vel, dt)
+        b.mesh.position.copy(b.pos)
+        _v.copy(b.vel)
+      } else {
+        posAt(b.origin, b.vel0, b.t, b.mesh.position)
+        velAt(b.vel0, b.t, _v)
+      }
+
       if (outOfBounds(b.mesh.position)) {
         retire(i)
         continue
       }
 
       // Weathervane into the airstream so it falls nose-first.
-      velAt(b.vel0, b.t, _v)
       b.mesh.lookAt(
         b.mesh.position.x + _v.x,
         b.mesh.position.y + _v.y,
         b.mesh.position.z + _v.z,
       )
-      b.mesh.rotateX(Math.PI / 2)
+      // Capsule long axis is +Y; AN-M64A1 template nose is already −Z (lookAt).
+      if (!b.sharedMesh) b.mesh.rotateX(Math.PI / 2)
 
       const p = b.mesh.position
       let hit = p.y <= heightAt(p.x, p.z)
@@ -368,6 +515,7 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     refill() {
       remaining = capacity
       gap = 0
+      for (let i = 0; i < stationUsed.length; i++) stationUsed[i] = false
     },
     setOnKill: (fn) => {
       onKill = fn
@@ -380,6 +528,10 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     },
     setSightVisible: (visible) => {
       sightOn = visible
+    },
+    setLaserDesignation(point, locked) {
+      laserLocked = locked
+      laserPoint = point && locked ? point.clone() : null
     },
     dispose() {
       for (let i = bombs.length - 1; i >= 0; i--) retire(i)

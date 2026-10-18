@@ -3,6 +3,7 @@ import { cloneGltfScene } from './loadGltf'
 import { tankOptionById, type TankId } from './tankCatalog'
 import { paintTankDunkelgrau } from './paint'
 import { getTankCosmetics } from './cosmetics'
+import { applyTankAccessories } from './tankAccessories'
 import { applyTankWrap } from './wraps'
 import { createShermanTank, type TankHandle } from './tank'
 
@@ -239,8 +240,48 @@ function prepareChaffee(root: THREE.Object3D): boolean {
 }
 
 /**
+ * PzKpfw VI Ausf. E Tiger I — Sketchfab Object470 chassis / Object471 turret /
+ * Object478 body (alpha bits). Gun baked into turret (+Z); peel tube → Barrel.
+ * Already +Z forward.
+ */
+function prepareTigerI(root: THREE.Object3D): boolean {
+  const chassis =
+    root.getObjectByName('Object470') ??
+    root.getObjectByName('Object470_chassis_0')?.parent
+  const turretNode =
+    root.getObjectByName('Object471') ??
+    root.getObjectByName('Object471_turret_0')?.parent
+  if (!chassis || !turretNode) return false
+  // Don't steal Panther / other Object_* packs.
+  if (!root.getObjectByName('Object471_turret_0')) return false
+
+  const hull = chassis
+  const turretMesh = root.getObjectByName('Object471_turret_0')
+  if (!(turretMesh instanceof THREE.Mesh)) return false
+
+  hull.name = 'Hull'
+  turretNode.name = 'Turret'
+  const body = root.getObjectByName('Object478')
+  if (body && body !== hull) hull.attach(body)
+
+  if (!root.getObjectByName('Barrel')) {
+    if (!peelForwardGunStick(turretMesh, 0.52)) {
+      console.warn('[Steel] Tiger I: barrel peel failed — elevation tips turret')
+    }
+  }
+  console.info('[Steel] Tiger I: Object470 Hull + Object471 Turret + peeled Barrel (+Z)')
+  return true
+}
+
+/**
  * Pz-V Panther A (mid prod) — hull.001 / turret.001 / weapon.001 (+X gun).
  * Same node names as Cromwell — fingerprint on panther. −90° Y → game +Z.
+ *
+ * Pack quirks:
+ * - `hull5` is a tall rear hull chunk whose mesh name contains "hull" but reads
+ *   as a second turret in the STAB dial if left visible — hide it.
+ * - `mount001` is the mantlet / gun house — must elevate with the barrel, not
+ *   stay as a loose yaw-only bit.
  */
 function preparePanther(root: THREE.Object3D): boolean {
   let isPanther = false
@@ -261,15 +302,44 @@ function preparePanther(root: THREE.Object3D): boolean {
 
   if (hull) hull.name = 'Hull'
   turret.name = 'Turret'
-  // Coax / muzzle brake bits ride with the elevating gun.
+  // Prefer the real turret shell for the yaw ring (not mount / hull5).
+  const shell =
+    turret.getObjectByName('turret001_panther-a-mid-turret_1_0') ??
+    turret.children.find(
+      (c) => c instanceof THREE.Mesh && /turret001/i.test(c.name),
+    )
+  if (shell) {
+    turret.userData.yawRingMeshName = shell.name
+    turret.userData.yawRingMassCenter = true
+  }
+
+  // Ghost "second turret" on the engine deck — hide so STAB / chase don't show
+  // a fused green turret while the gun yaws alone.
+  for (const n of ['hull5', 'hull.5']) {
+    const ghost = root.getObjectByName(n)
+    if (ghost) {
+      ghost.visible = false
+      console.info(`[Steel] Panther A: hid ${ghost.name} (false turret on hull)`)
+    }
+  }
+
+  // Pull the tube off the mantlet first (it starts under mount001), then hang
+  // the mantlet + coax on the elevating Barrel — never parent mount→barrel while
+  // barrel is still inside mount (cycle).
+  barrel.name = 'Barrel'
+  turret.attach(barrel)
+  const mount =
+    root.getObjectByName('mount001') ?? root.getObjectByName('mount.001')
+  if (mount && mount !== barrel && mount !== turret) barrel.attach(mount)
   for (const n of ['weapon2001', 'weapon2.001']) {
     const coax = root.getObjectByName(n)
     if (coax && coax !== barrel) barrel.attach(coax)
   }
-  barrel.name = 'Barrel'
-  if (barrel.parent !== turret) turret.attach(barrel)
 
-  console.info('[Steel] Panther A: hull.001 + turret.001 + weapon.001 (−90° Y)')
+  console.info(
+    '[Steel] Panther A: Hull + Turret shell + Barrel/mantlet (−90° Y)' +
+      (shell ? ` · ring=${shell.name}` : ''),
+  )
   return true
 }
 
@@ -1754,6 +1824,11 @@ function meshGeometryWorldBox(obj: THREE.Object3D): THREE.Box3 {
  */
 function turretRingSource(turretMesh: THREE.Object3D): THREE.Object3D {
   if (turretMesh instanceof THREE.Mesh) return turretMesh
+  const prefer = turretMesh.userData.yawRingMeshName as string | undefined
+  if (prefer) {
+    const hit = turretMesh.getObjectByName(prefer)
+    if (hit instanceof THREE.Mesh) return hit
+  }
   let best: THREE.Mesh | null = null
   let bestScore = 0
   for (const child of turretMesh.children) {
@@ -1764,6 +1839,8 @@ function turretRingSource(turretMesh: THREE.Object3D): THREE.Object3D {
     if (!mesh?.geometry) continue
     const n = `${child.name} ${mesh.name}`.toLowerCase()
     if (n.includes('barrel') || n.includes('gun') || n.includes('interior')) continue
+    // Export leftovers named hull* must never win the ring (Panther hull5).
+    if (/\bhull\d*\b/.test(n) && !n.includes('turret')) continue
     if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere()
     const r = mesh.geometry.boundingSphere?.radius ?? 0
     const bonus = n.includes('turret') || n.includes('plate') ? 1.5 : 1
@@ -2335,6 +2412,7 @@ async function loadGltf(url: string, targetWidth: number, rigid = false): Promis
       prepareChallenger2(model) ||
       prepareConqueror(model) ||
       prepareChurchill(model) ||
+      prepareTigerI(model) ||
       preparePanther(model) ||
       prepareCromwell(model) ||
       prepareChaffee(model) ||
@@ -2407,7 +2485,12 @@ export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
   const handle = await loadTankChassis(id)
   const cos = getTankCosmetics(id)
   await applyTankWrap(handle.root, cos.wrapId)
+  if (cos.accessories.length > 0) {
+    await applyTankAccessories(handle.root, cos.accessories)
+  }
   handle.root.name = 'playerTank'
-  console.info(`[Steel] Player cosmetics ${id}: wrap=${cos.wrapId}`)
+  console.info(
+    `[Steel] Player cosmetics ${id}: wrap=${cos.wrapId} · acc=${cos.accessories.length}`,
+  )
   return handle
 }
