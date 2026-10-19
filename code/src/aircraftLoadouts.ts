@@ -6,6 +6,7 @@ import {
   isBombArmament,
   isMissileArmament,
   isRocketStore,
+  isTerArmament,
   stationsForPlane,
   stationDef,
   type CorsairStationMap,
@@ -18,6 +19,16 @@ import {
   type HardpointStationId,
   type P51StationMap,
   type PlaneStationMap,
+  type Yak9StationMap,
+  type Mig15StationMap,
+  type Mig21StationMap,
+  type Su25StationMap,
+  type Su27StationMap,
+  YAK9_STATIONS,
+  MIG15_STATIONS,
+  MIG21_STATIONS,
+  SU25_STATIONS,
+  SU27_STATIONS,
 } from './aircraftHardpoints'
 import { TANK_OPTIONS, tankOptionById, type TankId } from './tankCatalog'
 
@@ -75,8 +86,15 @@ function isArmament(a: unknown): a is HardpointArmament {
     a === 'bomb' ||
     a === 'bomb1000' ||
     a === 'gbu27' ||
+    a === 'kab500' ||
+    a === 'kab500l' ||
+    a === 'fab100' ||
+    a === 'ter' ||
+    a === 'terGbu' ||
     a === 'aim9' ||
     a === 'aim120' ||
+    a === 'r73' ||
+    a === 'r77' ||
     a === 'hellfire' ||
     a === 'litening'
   )
@@ -130,6 +148,161 @@ export function stationsFromLoadoutId(
       wingL: 'bomb',
       wingR: 'bomb',
     } as P51StationMap | F84FStationMap
+  }
+
+  if (plane === 'yak9') {
+    if (loadoutId === 'rockets') return empty
+    return {
+      wingL: 'kab500',
+      wingR: 'kab500',
+    } as Yak9StationMap
+  }
+
+  if (plane === 'mig15') {
+    if (loadoutId === 'rockets') {
+      return {
+        ...empty,
+        tipL: 'rocket',
+        tipR: 'rocket',
+        midL: 'rocket',
+        midR: 'rocket',
+      } as Mig15StationMap
+    }
+    if (loadoutId === 'bombs') {
+      return {
+        ...empty,
+        wingL: 'kab500',
+        wingR: 'kab500',
+      } as Mig15StationMap
+    }
+    // strike — 4× S-5 + 2× KAB
+    return {
+      tipL: 'rocket',
+      tipR: 'rocket',
+      midL: 'rocket',
+      midR: 'rocket',
+      wingL: 'kab500',
+      wingR: 'kab500',
+    } as Mig15StationMap
+  }
+
+  if (plane === 'mig21') {
+    if (loadoutId === 'rockets') {
+      return {
+        ...empty,
+        tipL: 'r73',
+        tipR: 'r73',
+        midL: 'rocket',
+        midR: 'rocket',
+      } as Mig21StationMap
+    }
+    if (loadoutId === 'bombs') {
+      return {
+        ...empty,
+        wingL: 'kab500',
+        wingR: 'kab500',
+      } as Mig21StationMap
+    }
+    // strike — tip R-73 · mid S-5 · wing KAB
+    return {
+      tipL: 'r73',
+      tipR: 'r73',
+      midL: 'rocket',
+      midR: 'rocket',
+      wingL: 'kab500',
+      wingR: 'kab500',
+    } as Mig21StationMap
+  }
+
+  if (plane === 'su25') {
+    if (loadoutId === 'rockets') {
+      return {
+        tipL: 'rocket',
+        tipR: 'rocket',
+        outerL: 'rocket',
+        outerR: 'rocket',
+        midL: 'rocket',
+        midR: 'rocket',
+        midInL: 'rocket',
+        midInR: 'rocket',
+        innerL: 'rocket',
+        innerR: 'rocket',
+        wingL: 'rocket',
+        wingR: 'rocket',
+      } as Su25StationMap
+    }
+    if (loadoutId === 'bombs') {
+      return {
+        ...empty,
+        outerL: 'kab500',
+        outerR: 'kab500',
+        midL: 'kab500',
+        midR: 'kab500',
+        midInL: 'kab500',
+        midInR: 'kab500',
+        innerL: 'kab500',
+        innerR: 'kab500',
+        wingL: 'kab500',
+        wingR: 'kab500',
+      } as Su25StationMap
+    }
+    // strike — tip/outer S-5 · mid/midIn/inner/wing KAB
+    return {
+      tipL: 'rocket',
+      tipR: 'rocket',
+      outerL: 'rocket',
+      outerR: 'rocket',
+      midL: 'kab500',
+      midR: 'kab500',
+      midInL: 'kab500',
+      midInR: 'kab500',
+      innerL: 'kab500',
+      innerR: 'kab500',
+      wingL: 'kab500',
+      wingR: 'kab500',
+    } as Su25StationMap
+  }
+
+  if (plane === 'su27') {
+    if (loadoutId === 'rockets') {
+      return {
+        ...empty,
+        tipL: 'r73',
+        tipR: 'r73',
+        outerL: 'r77',
+        outerR: 'r77',
+        midL: 'r77',
+        midR: 'r77',
+        innerL: 'r73',
+        innerR: 'r73',
+      } as Su27StationMap
+    }
+    if (loadoutId === 'bombs') {
+      return {
+        ...empty,
+        innerL: 'kab500',
+        innerR: 'kab500',
+        wingL: 'kab500',
+        wingR: 'kab500',
+        bellyL: 'kab500',
+        bellyR: 'kab500',
+      } as Su27StationMap
+    }
+    // strike — tip R-73 · outer/mid R-77 · inner S-5 · wing/belly KAB
+    return {
+      tipL: 'r73',
+      tipR: 'r73',
+      outerL: 'r77',
+      outerR: 'r77',
+      midL: 'r77',
+      midR: 'r77',
+      innerL: 'rocket',
+      innerR: 'rocket',
+      wingL: 'kab500',
+      wingR: 'kab500',
+      bellyL: 'kab500',
+      bellyR: 'kab500',
+    } as Su27StationMap
   }
 
   if (plane === 'f104g') {
@@ -236,7 +409,7 @@ export function loadoutIdFromStations(
   for (const s of stationsForPlane(plane)) {
     const arm = (map as Record<string, HardpointArmament>)[s.id]
     if (arm && (isRocketStore(arm) || isMissileArmament(arm))) rocketsOrAam = true
-    if (arm && isBombArmament(arm)) bombs = true
+    if (arm && (isBombArmament(arm) || isTerArmament(arm))) bombs = true
   }
   if (rocketsOrAam && bombs) return 'strike'
   if (rocketsOrAam) return 'rockets'
@@ -264,6 +437,7 @@ function countBombs(map: PlaneStationMap, plane: HardpointPlaneId): number {
   for (const s of stationsForPlane(plane)) {
     const arm = (map as Record<string, HardpointArmament>)[s.id]
     if (arm && isBombArmament(arm)) n++
+    else if (arm && isTerArmament(arm)) n += 3
   }
   return n
 }
@@ -290,6 +464,10 @@ export function defaultLoadoutId(id: TankId): LoadoutId {
   if (id === 'corsair') return 'strike'
   if (id === 'apache') return 'rockets'
   if (id === 'f104g') return 'strike'
+  if (id === 'mig15') return 'strike'
+  if (id === 'mig21') return 'strike'
+  if (id === 'su25') return 'strike'
+  if (id === 'su27') return 'strike'
   return 'bombs'
 }
 
@@ -442,9 +620,24 @@ export function loadoutSelfTest(): boolean {
   const f35Bombs = resolveStores('f35b', 'bombs')
   const f35Strike = resolveStores('f35b', 'strike')
   const f104Strike = resolveStores('f104g', 'strike')
+  const yakBombs = resolveStores('yak9', 'bombs')
+  const migStrike = resolveStores('mig15', 'strike')
+  const mig21Strike = resolveStores('mig21', 'strike')
+  const su25Strike = resolveStores('su25', 'strike')
+  const su27Strike = resolveStores('su27', 'strike')
   const apacheRockets = resolveStores('apache', 'rockets')
   const f16Tip = F16_STATIONS.find((s) => s.id === 'tipL')
+  const f16Outer = F16_STATIONS.find((s) => s.id === 'outerL')
+  const f16Wing = F16_STATIONS.find((s) => s.id === 'wingL')
   const f84Wing = F84F_STATIONS.find((s) => s.id === 'wingL')
+  const yakWing = YAK9_STATIONS.find((s) => s.id === 'wingL')
+  const migTip = MIG15_STATIONS.find((s) => s.id === 'tipL')
+  const migWing = MIG15_STATIONS.find((s) => s.id === 'wingL')
+  const mig21Tip = MIG21_STATIONS.find((s) => s.id === 'tipL')
+  const su25Tip = SU25_STATIONS.find((s) => s.id === 'tipL')
+  const su25Wing = SU25_STATIONS.find((s) => s.id === 'wingL')
+  const su27Tip = SU27_STATIONS.find((s) => s.id === 'tipL')
+  const su27Outer = SU27_STATIONS.find((s) => s.id === 'outerL')
   const f16WingMix =
     !!f16Tip &&
     f16Tip.allows.includes('bomb') &&
@@ -452,7 +645,13 @@ export function loadoutSelfTest(): boolean {
     f16Tip.allows.includes('aim9') &&
     f16Tip.allows.includes('aim120') &&
     f16Tip.allows.includes('hellfire') &&
-    f16Tip.allows.includes('litening')
+    f16Tip.allows.includes('litening') &&
+    !f16Tip.allows.includes('ter')
+  const f16TerMidInner =
+    !!f16Outer &&
+    !!f16Wing &&
+    f16Outer.allows.includes('ter') &&
+    f16Wing.allows.includes('ter')
   const f84NoModern =
     !!f84Wing &&
     !f84Wing.allows.includes('gbu27') &&
@@ -469,6 +668,7 @@ export function loadoutSelfTest(): boolean {
     f84Bombs.bombCount === 2 &&
     f84Bombs.rockets === false &&
     f84NoModern &&
+    f16TerMidInner &&
     f16Strike.rockets === false &&
     f16Strike.aamCount === 5 &&
     f16Strike.loadoutId === 'strike' &&
@@ -503,7 +703,83 @@ export function loadoutSelfTest(): boolean {
     f104Strike.aamCount === 2 &&
     f104Strike.bombCount === 1 &&
     (f104Strike.stations as F104GStationMap).tipL === 'aim9' &&
-    (f104Strike.stations as F104GStationMap).belly === 'bomb'
+    (f104Strike.stations as F104GStationMap).belly === 'bomb' &&
+    !!yakWing &&
+    yakWing.allows.includes('kab500') &&
+    yakWing.allows.includes('kab500l') &&
+    yakWing.allows.includes('fab100') &&
+    yakBombs.bombCount === 2 &&
+    yakBombs.rockets === false &&
+    (yakBombs.stations as Yak9StationMap).wingL === 'kab500' &&
+    (yakBombs.stations as Yak9StationMap).wingR === 'kab500' &&
+    defaultLoadoutId('yak9') === 'bombs' &&
+    !!migTip &&
+    !!migWing &&
+    migTip.allows.includes('rocket') &&
+    migWing.allows.includes('kab500') &&
+    migWing.allows.includes('kab500l') &&
+    migWing.allows.includes('fab100') &&
+    migStrike.loadoutId === 'strike' &&
+    migStrike.rockets === true &&
+    migStrike.bombCount === 2 &&
+    (migStrike.stations as Mig15StationMap).tipL === 'rocket' &&
+    (migStrike.stations as Mig15StationMap).wingL === 'kab500' &&
+    defaultLoadoutId('mig15') === 'strike' &&
+    !!mig21Tip &&
+    mig21Tip.allows.includes('r73') &&
+    mig21Tip.allows.includes('rocket') &&
+    mig21Tip.allows.includes('kab500') &&
+    mig21Tip.allows.includes('kab500l') &&
+    mig21Tip.allows.includes('fab100') &&
+    mig21Strike.loadoutId === 'strike' &&
+    mig21Strike.aamCount === 2 &&
+    mig21Strike.rockets === true &&
+    mig21Strike.bombCount === 2 &&
+    (mig21Strike.stations as Mig21StationMap).tipL === 'r73' &&
+    (mig21Strike.stations as Mig21StationMap).midL === 'rocket' &&
+    (mig21Strike.stations as Mig21StationMap).wingL === 'kab500' &&
+    defaultLoadoutId('mig21') === 'strike' &&
+    !!su25Tip &&
+    !!su25Wing &&
+    SU25_STATIONS.length === 12 &&
+    su25Tip.allows.includes('rocket') &&
+    su25Tip.allows.includes('r73') &&
+    !su25Tip.allows.includes('kab500') &&
+    !su25Tip.allows.includes('kab500l') &&
+    !su25Tip.allows.includes('fab100') &&
+    su25Wing.allows.includes('kab500') &&
+    su25Wing.allows.includes('kab500l') &&
+    su25Wing.allows.includes('fab100') &&
+    su25Wing.allows.includes('rocket') &&
+    su25Wing.allows.includes('r73') &&
+    su25Strike.loadoutId === 'strike' &&
+    su25Strike.rockets === true &&
+    su25Strike.bombCount === 8 &&
+    (su25Strike.stations as Su25StationMap).tipL === 'rocket' &&
+    (su25Strike.stations as Su25StationMap).midInL === 'kab500' &&
+    (su25Strike.stations as Su25StationMap).wingL === 'kab500' &&
+    defaultLoadoutId('su25') === 'strike' &&
+    !!su27Tip &&
+    !!su27Outer &&
+    SU27_STATIONS.length === 12 &&
+    su27Tip.allows.includes('r73') &&
+    su27Tip.allows.includes('r77') &&
+    !su27Tip.allows.includes('kab500') &&
+    !su27Tip.allows.includes('kab500l') &&
+    !su27Tip.allows.includes('fab100') &&
+    su27Outer.allows.includes('r77') &&
+    su27Outer.allows.includes('kab500') &&
+    su27Outer.allows.includes('kab500l') &&
+    su27Outer.allows.includes('fab100') &&
+    su27Outer.allows.includes('rocket') &&
+    su27Strike.loadoutId === 'strike' &&
+    su27Strike.aamCount === 6 &&
+    su27Strike.rockets === true &&
+    su27Strike.bombCount === 4 &&
+    (su27Strike.stations as Su27StationMap).tipL === 'r73' &&
+    (su27Strike.stations as Su27StationMap).outerL === 'r77' &&
+    (su27Strike.stations as Su27StationMap).bellyL === 'kab500' &&
+    defaultLoadoutId('su27') === 'strike'
   console.info(`[Steel] loadoutSelfTest ${ok ? 'PASS' : 'FAIL'}`, {
     corsairStrike,
     p51Bombs,
@@ -514,6 +790,11 @@ export function loadoutSelfTest(): boolean {
     f35Bombs,
     f35Strike,
     f104Strike,
+    yakBombs,
+    migStrike,
+    mig21Strike,
+    su25Strike,
+    su27Strike,
     apacheRockets,
   })
   return ok

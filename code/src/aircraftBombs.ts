@@ -9,6 +9,7 @@ import {
   bombTemplateReady,
   cloneBombFlight,
   ensureAllBombTemplates,
+  isLaserGuidedBomb,
   type BombStoreKind,
 } from './munitionMk82'
 import type { BombStation } from './aircraftHardpoints'
@@ -90,8 +91,8 @@ export type AircraftBombs = {
   setOnDetonate: (fn: ((at: THREE.Vector3) => void) | null) => void
   setSightVisible: (visible: boolean) => void
   /**
-   * Litening lase: when locked, next GBU-27 steers to `point`.
-   * Pass locked=false to clear / block GBU pickle.
+   * Litening lase: when locked, next GBU-27 / KAB-500L steers to `point`.
+   * Pass locked=false to clear guidance (manual ballistic pickle still OK).
    */
   setLaserDesignation: (point: THREE.Vector3 | null, locked: boolean) => void
   dispose: () => void
@@ -308,10 +309,10 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
   /** Index of next station to release (does not mark used). */
   function peekStationIndex(): number {
     if (!bombStations || bombStations.length === 0) return -1
-    // While lased, pickle GBU first so Litening → B feels right.
+    // While lased, pickle LGB first so Litening → B feels right.
     if (laserLocked) {
       for (let i = 0; i < bombStations.length; i++) {
-        if (!stationUsed[i] && bombStations[i]!.kind === 'gbu27') return i
+        if (!stationUsed[i] && isLaserGuidedBomb(bombStations[i]!.kind)) return i
       }
     }
     for (let i = 0; i < bombStations.length; i++) {
@@ -361,11 +362,6 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     if (remaining <= 0 || gap > 0) return
     const peek = peekStation()
     const kind: BombStoreKind = peek?.kind ?? 'bomb'
-    // Paveway needs a Litening lock — don't dump a blind GBU.
-    if (kind === 'gbu27' && !laserLocked) {
-      console.info('[Steel] GBU-27 — NO LASE · hold P to hard-lock · B')
-      return
-    }
     remaining--
     gap = RELEASE_GAP
     const st = nextStation()
@@ -375,8 +371,11 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     mesh.position.copy(_release)
     mesh.castShadow = true
     scene.add(mesh)
+    // Guided if lased; otherwise ballistic (manual dump OK).
     const guide =
-      kind === 'gbu27' && laserLocked && laserPoint ? laserPoint.clone() : null
+      isLaserGuidedBomb(kind) && laserLocked && laserPoint
+        ? laserPoint.clone()
+        : null
     const bomb: Bomb = {
       mesh,
       sharedMesh: shared,
@@ -392,7 +391,7 @@ export function createAircraftBombs(opts: BombOptions): AircraftBombs {
     bombs.push(bomb)
     console.info(
       `[Steel] Bomb release · ${shared ? bombKindLabel(kind) : 'capsule'}${
-        guide ? ' · laser' : ''
+        guide ? ' · laser' : isLaserGuidedBomb(kind) ? ' · ballistic' : ''
       } · ${remaining} left`,
     )
 

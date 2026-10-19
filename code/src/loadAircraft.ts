@@ -15,8 +15,8 @@ const F35B_URL = assetUrl('models/f35b.glb?v=1')
 const TORNADO_URL = assetUrl('models/tornado.glb?v=1')
 const F16_URL = assetUrl('models/f16c_falcon.glb?v=2')
 const MIG15_URL = assetUrl('models/mig15.glb?v=2')
-const MIG21_URL = assetUrl('models/mig21.glb?v=3')
-const SU25_URL = assetUrl('models/su25.glb?v=3')
+const MIG21_URL = assetUrl('models/mig21.glb?v=4')
+const SU25_URL = assetUrl('models/su25.glb?v=4')
 const SU27_URL = assetUrl('models/su27.glb?v=3')
 const APACHE_URL = assetUrl('models/apache.glb?v=1')
 
@@ -26,6 +26,8 @@ const APACHE_URL = assetUrl('models/apache.glb?v=1')
  */
 const PROP_IDLE_RPS = 3.5
 const PROP_MAX_RPS = 11
+/** Tail rotor spins faster than the main disc. */
+const TAIL_RPS_MULT = 4.2
 
 export type AircraftHandle = {
   /** Free for flight yaw/pitch/roll — never pre-rotated. */
@@ -175,6 +177,52 @@ function findMainRotors(model: THREE.Object3D): THREE.Object3D[] {
 }
 
 /**
+ * Tail rotor — small vertical disc at the aft boom (AH Mk.1: left-side, thin X).
+ * Spin axis ≈ lateral (±X); must not pick the vertical fin (thicker / larger).
+ */
+function findTailRotors(
+  model: THREE.Object3D,
+  exclude: ReadonlySet<THREE.Object3D>,
+): THREE.Object3D[] {
+  model.updateMatrixWorld(true)
+  const air = new THREE.Box3().setFromObject(model)
+  const airSize = air.getSize(new THREE.Vector3())
+  const aftCut = air.min.z + airSize.z * 0.28
+  let best: THREE.Mesh | null = null
+  let bestScore = -Infinity
+  const c = new THREE.Vector3()
+  const s = new THREE.Vector3()
+  const b = new THREE.Box3()
+  model.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh) || !obj.geometry) return
+    if (exclude.has(obj)) return
+    b.setFromObject(obj)
+    b.getSize(s)
+    b.getCenter(c)
+    if (c.z > aftCut) return
+    // Vertical disc: thin in X (British Apache) or thin in Z (some packs).
+    const thinX = s.x <= s.y && s.x <= s.z
+    const thinZ = s.z <= s.x && s.z <= s.y
+    if (!thinX && !thinZ) return
+    const thin = thinX ? s.x : s.z
+    const wideA = thinX ? s.y : s.x
+    const wideB = thinX ? s.z : s.y
+    const disc = Math.max(wideA, wideB)
+    if (disc < 0.8 || disc > airSize.y * 0.75) return
+    if (thin / Math.max(disc, 0.001) > 0.22) return
+    const area = wideA * wideB
+    if (area < 1.5 || area > 12) return
+    // Prefer aft + modest size (fin is bigger / thicker).
+    const score = -c.z * 8 + area * 2 - thin * 40
+    if (score > bestScore) {
+      bestScore = score
+      best = obj
+    }
+  })
+  return best ? [best] : []
+}
+
+/**
  * Spin axis of a propeller disc, expressed in that node's **own local space**.
  *
  * Derived from geometry rather than hardcoded: a prop disc is wide in two axes
@@ -208,6 +256,55 @@ function localSpinAxis(prop: THREE.Object3D): THREE.Vector3 {
   if (size.y <= size.x && size.y <= size.z) return new THREE.Vector3(0, 1, 0)
   if (size.z <= size.x && size.z <= size.y) return new THREE.Vector3(0, 0, 1)
   return new THREE.Vector3(1, 0, 0)
+}
+
+/** World-space unit axis of the thinnest AABB side (tail = ±X/±Z, main = ±Y). */
+function worldThinAxis(prop: THREE.Object3D): THREE.Vector3 {
+  prop.updateWorldMatrix(true, true)
+  const size = new THREE.Box3().setFromObject(prop).getSize(new THREE.Vector3())
+  if (size.x <= size.y && size.x <= size.z) return new THREE.Vector3(1, 0, 0)
+  if (size.y <= size.x && size.y <= size.z) return new THREE.Vector3(0, 1, 0)
+  return new THREE.Vector3(0, 0, 1)
+}
+
+/**
+ * Reparent `mesh` under a pivot at its world centre, with pivot +X aligned to
+ * `worldAxis`. Spin the pivot on local X — avoids localSpinAxis picking main-Y
+ * on Sketchfab-flattened tail discs.
+ */
+function bindWorldAxisPivot(
+  mesh: THREE.Object3D,
+  worldAxis: THREE.Vector3,
+): THREE.Group {
+  mesh.updateWorldMatrix(true, true)
+  const parent = mesh.parent
+  if (!parent) {
+    throw new Error(`[Steel] bindWorldAxisPivot: ${mesh.name} has no parent`)
+  }
+  const centerWorld = new THREE.Box3()
+    .setFromObject(mesh)
+    .getCenter(new THREE.Vector3())
+  const pivot = new THREE.Group()
+  pivot.name = `${mesh.name || 'rotor'}_spinPivot`
+  parent.add(pivot)
+
+  const centerLocal = centerWorld.clone()
+  parent.worldToLocal(centerLocal)
+  pivot.position.copy(centerLocal)
+
+  const parentWorldQ = new THREE.Quaternion()
+  parent.getWorldQuaternion(parentWorldQ)
+  const axis = worldAxis.clone().normalize()
+  // Pivot world rotation: local +X → worldAxis
+  const worldQ = new THREE.Quaternion().setFromUnitVectors(
+    new THREE.Vector3(1, 0, 0),
+    axis,
+  )
+  pivot.quaternion.copy(parentWorldQ).invert().multiply(worldQ)
+
+  // Keep blades where they are; only the pivot spins afterward.
+  pivot.attach(mesh)
+  return pivot
 }
 
 /**
@@ -280,32 +377,76 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     'Propellor',
     'Yak-9_Propellor',
   ]
-  const propNodes = opts.noProp
+  const mainNodes = opts.noProp
     ? []
     : opts.helicopter
       ? findMainRotors(model)
       : findPropellers(model, propNames)
-  if (propNodes.length === 0 && !opts.noProp) {
+  const tailNodes =
+    opts.helicopter && !opts.noProp
+      ? findTailRotors(model, new Set(mainNodes))
+      : []
+  if (mainNodes.length === 0 && !opts.noProp) {
     console.warn(
       `[Steel] ${opts.name} ${opts.helicopter ? 'main rotor' : 'propeller'} not found — will not spin`,
     )
   }
+  if (opts.helicopter && tailNodes.length === 0) {
+    console.warn(`[Steel] ${opts.name} tail rotor not found — main only`)
+  }
 
-  const propSpinners = propNodes.map((obj) => {
-    const axis = localSpinAxis(obj)
-    const restQuat = obj.quaternion.clone()
-    return { obj, axis, restQuat, angle: 0 }
-  })
+  type Spinner = {
+    obj: THREE.Object3D
+    axis: THREE.Vector3
+    restQuat: THREE.Quaternion
+    angle: number
+    rpsMult: number
+    kind: 'main' | 'tail' | 'prop'
+  }
+  const propSpinners: Spinner[] = [
+    ...mainNodes.map((obj) => ({
+      obj,
+      axis: localSpinAxis(obj),
+      restQuat: obj.quaternion.clone(),
+      angle: 0,
+      rpsMult: 1,
+      kind: 'main' as const,
+    })),
+    ...tailNodes.map((mesh) => {
+      const worldAxis = worldThinAxis(mesh)
+      // Must NOT be vertical — that is the main rotor axis.
+      if (Math.abs(worldAxis.y) > 0.7) {
+        console.warn(
+          `[Steel] ${opts.name} tail ${mesh.name} thin-axis looked vertical — forcing ±X`,
+        )
+        worldAxis.set(1, 0, 0)
+      }
+      const pivot = bindWorldAxisPivot(mesh, worldAxis)
+      console.info(
+        `[Steel] ${opts.name} tail pivot · ${mesh.name} · worldAxis=(${worldAxis.x.toFixed(2)},${worldAxis.y.toFixed(2)},${worldAxis.z.toFixed(2)})`,
+      )
+      return {
+        obj: pivot,
+        axis: new THREE.Vector3(1, 0, 0), // pivot +X = world thin axis
+        restQuat: pivot.quaternion.clone(),
+        angle: 0,
+        rpsMult: TAIL_RPS_MULT,
+        kind: 'tail' as const,
+      }
+    }),
+  ]
   const propeller = propSpinners[0]?.obj ?? null
   const propAxis = propSpinners[0]?.axis.clone() ?? new THREE.Vector3(0, 1, 0)
   if (propSpinners.length > 0) {
     console.info(
-      `[Steel] ${opts.name} prop×${propSpinners.length} · ${propSpinners
-        .map((p) => {
-          const a = p.axis
-          return `${p.obj.name} axis=(${a.x.toFixed(2)},${a.y.toFixed(2)},${a.z.toFixed(2)})`
-        })
-        .join(' · ')} · span ${size.x.toFixed(2)}m`,
+      `[Steel] ${opts.name} prop×${propSpinners.length}` +
+        (tailNodes.length > 0 ? ' (main+tail)' : '') +
+        ` · ${propSpinners
+          .map((p) => {
+            const a = p.axis
+            return `${p.kind}:${p.obj.name} axis=(${a.x.toFixed(2)},${a.y.toFixed(2)},${a.z.toFixed(2)})×${p.rpsMult.toFixed(1)}`
+          })
+          .join(' · ')} · span ${size.x.toFixed(2)}m`,
     )
   }
 
@@ -322,10 +463,10 @@ async function loadAircraftRig(opts: AircraftRigOpts): Promise<AircraftHandle> {
     landingGear,
     spinProp(dt, throttle01) {
       if (propSpinners.length === 0) return
-      const rps = PROP_IDLE_RPS + THREE.MathUtils.clamp(throttle01, 0, 1) * PROP_MAX_RPS
-      const dang = dt * rps * Math.PI * 2
+      const rps =
+        PROP_IDLE_RPS + THREE.MathUtils.clamp(throttle01, 0, 1) * PROP_MAX_RPS
       for (const p of propSpinners) {
-        p.angle += dang
+        p.angle += dt * rps * p.rpsMult * Math.PI * 2
         // Rebuild from rest each frame so parent/Sketchfab frames can't drift the axis.
         p.obj.quaternion.copy(p.restQuat)
         p.obj.rotateOnAxis(p.axis, p.angle)
@@ -475,23 +616,31 @@ export async function loadMig15(): Promise<AircraftHandle> {
   })
 }
 
-/** MiG-21MF Fishbed — Soviet jet; SpecGloss→metalrough; no prop/gear. */
+/**
+ * MiG-21PFM Fishbed — 1964 pack; delta longer than span → scale on X.
+ * Nose already +Z; no prop/gear motion.
+ */
 export async function loadMig21(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: MIG21_URL,
     name: 'mig21',
     targetWingspan: 7.15,
+    wingspanAxis: 'x',
     noProp: true,
     noGear: true,
   })
 }
 
-/** Su-25 Grach — Soviet attack jet; no prop/gear motion. */
+/**
+ * Su-25UBP Grach — twin-seat frogfoot pack; longer than span → scale on X.
+ * Nose +Z; no prop/gear motion.
+ */
 export async function loadSu25(): Promise<AircraftHandle> {
   const handle = await loadAircraftRig({
     url: SU25_URL,
     name: 'su25',
     targetWingspan: 14.36,
+    wingspanAxis: 'x',
     noProp: true,
     noGear: true,
   })
@@ -499,16 +648,20 @@ export async function loadSu25(): Promise<AircraftHandle> {
   handle.root.traverse((o) => {
     if ((o as THREE.Mesh).isMesh && o.name) parts.push(o.name)
   })
-  console.info(`[Steel] Su-25 parts (${parts.length}): ${parts.join(', ')}`)
+  console.info(`[Steel] Su-25UBP parts (${parts.length}): ${parts.join(', ')}`)
   return handle
 }
 
-/** Su-27SKM Flanker — pack faces aft; bake 180° so nose is +Z. */
+/**
+ * Su-27SKM Flanker — pack faces aft; bake 180° so nose is +Z.
+ * Longer than span → scale on X.
+ */
 export async function loadSu27(): Promise<AircraftHandle> {
   return loadAircraftRig({
     url: SU27_URL,
     name: 'su27',
     targetWingspan: 14.7,
+    wingspanAxis: 'x',
     noseYaw: Math.PI,
     noProp: true,
     noGear: true,
@@ -516,8 +669,8 @@ export async function loadSu27(): Promise<AircraftHandle> {
 }
 
 /**
- * AH Mk.1 Apache — British attack helo; main rotor spins; plane-like flight
- * with collective hover. Rotor diameter ~14.6 m.
+ * AH Mk.1 Apache — British attack helo; main + tail rotors spin; plane-like
+ * flight with collective hover. Rotor diameter ~14.6 m.
  */
 export async function loadApache(): Promise<AircraftHandle> {
   return loadAircraftRig({

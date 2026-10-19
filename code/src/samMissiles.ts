@@ -4,8 +4,8 @@ import type { HitAnalyzeReport } from './hitAnalyzer'
 import { segmentHitsPropCollider, type PropCollider } from './collision'
 
 /**
- * Seeker missiles (Pantsir SAM + F-16 AAM).
- * Lead pursuit; accelerates in flight; dense smoke trail; range-capped.
+ * Seeker missiles (Pantsir SAM + jet AAM).
+ * Rail forward first, then curve into lead pursuit; range-capped.
  * Optional chaff/flare spoof via getDecoys().
  */
 
@@ -20,8 +20,17 @@ const TURN_RATE = 8.2
 const HIT_RADIUS = 8
 /** Soft time cap; range usually kills first. */
 const LIFETIME = 22
-/** Max path length — still long enough for air/SAM fights. */
-const MAX_RANGE = 1650
+/** Ground SAM max path length (m). */
+const MAX_RANGE = 1100
+/** Air-launched AAM / Hellfire — slightly shorter leash. */
+const MAX_RANGE_AIR = 850
+/**
+ * Fly mostly along launch nose for this many metres, then blend into seeker.
+ * Reads as “fires forward, then curves.”
+ */
+const RAIL_DIST = 90
+/** Extra metres over which seeker authority ramps 0 → 1 after the rail. */
+const CURVE_IN_DIST = 160
 const RELOAD = 2.4
 const MAX_AMMO = 12
 const DAMAGE = 480
@@ -98,6 +107,8 @@ type LiveMissile = {
   intended: THREE.Object3D
   prevTgt: THREE.Vector3
   tgtVel: THREE.Vector3
+  /** World unit — nose at spawn; seeker blends from this after RAIL_DIST. */
+  launchFwd: THREE.Vector3
   age: number
   distFlown: number
   trailBudget: number
@@ -115,6 +126,7 @@ const _dir = new THREE.Vector3()
 const _to = new THREE.Vector3()
 const _fwd = new THREE.Vector3()
 const _aim = new THREE.Vector3()
+const _desired = new THREE.Vector3()
 const _tgt = new THREE.Vector3()
 const _up = new THREE.Vector3(0, 1, 0)
 const _segFrom = new THREE.Vector3()
@@ -171,13 +183,13 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
   const cruise = opts.speed ?? MISSILE_SPEED
   const speedLaunch = cruise * SPEED_LAUNCH_FRAC
   const speedMax = cruise * SPEED_MAX_FRAC
-  const maxRange = opts.maxRange ?? MAX_RANGE
+  const airLaunch = !!opts.airLaunch
+  const maxRange = opts.maxRange ?? (airLaunch ? MAX_RANGE_AIR : MAX_RANGE)
   const maxAmmo = opts.maxAmmo ?? MAX_AMMO
   const reloadSec = opts.reloadSec ?? RELOAD
   const damage = opts.damage ?? DAMAGE
   const pen = opts.pen ?? PEN
   const logTag = opts.logTag ?? 'SAM'
-  const airLaunch = !!opts.airLaunch
   const manualAim = !!opts.manualAim
   const meshScale = opts.meshScale ?? 1
   /** Invisible aim proxy for manual MCLOS missiles. */
@@ -366,12 +378,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
         return false
       }
       target = locked
-      sampleTarget(target, _tgt)
-      _to.copy(_tgt).sub(_origin)
-      if (_to.lengthSq() > 1) {
-        _to.normalize()
-        _dir.lerp(_to, 0.85).normalize()
-      }
+      // Keep nose rail — seeker curves in after RAIL_DIST (no snap-to-target).
     }
     if (!airLaunch) _dir.y = Math.max(_dir.y, 0.08)
     _dir.normalize()
@@ -412,6 +419,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
       intended: target,
       prevTgt: _tgt.clone(),
       tgtVel: new THREE.Vector3(),
+      launchFwd: _dir.clone(),
       age: 0,
       distFlown: 0,
       trailBudget: 0,
@@ -427,7 +435,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
     console.info(
       manualAim
         ? `[Steel] ${logTag} manual launch · ammo ${ammo} · range ${maxRange}m`
-        : `[Steel] ${logTag} launch → ${target.name || 'lock'} · ammo ${ammo} · range ${maxRange}m`,
+        : `[Steel] ${logTag} launch → ${target.name || 'lock'} · rail ${RAIL_DIST}m · range ${maxRange}m`,
     )
     return true
   }
@@ -624,6 +632,7 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
           }
 
           // Lead pursuit — locked / spoofed target.
+          // Rail forward first, then smoothstep into full seeker curve.
           if (m.target.visible || m.target.parent) {
             sampleTarget(m.target, _tgt)
             m.tgtVel.copy(_tgt).sub(m.prevTgt).multiplyScalar(1 / dtSafe)
@@ -632,13 +641,27 @@ export function createSamMissiles(opts: SamMissileOpts): SamMissiles {
             m.prevTgt.copy(_tgt)
 
             const dist = m.mesh.position.distanceTo(_tgt)
-            const tFlight = THREE.MathUtils.clamp(dist / Math.max(m.speedNow, 40), 0.05, 3.8)
+            const tFlight = THREE.MathUtils.clamp(
+              dist / Math.max(m.speedNow, 40),
+              0.05,
+              3.8,
+            )
             _aim.copy(_tgt).addScaledVector(m.tgtVel, tFlight * 1.08)
             _to.copy(_aim).sub(m.mesh.position)
             if (_to.lengthSq() > 0.25) {
               _to.normalize()
-              steerToward(m, _to, dt)
+              const blend = THREE.MathUtils.smoothstep(
+                (m.distFlown - RAIL_DIST) / CURVE_IN_DIST,
+                0,
+                1,
+              )
+              _desired.copy(m.launchFwd).lerp(_to, blend).normalize()
+              steerToward(m, _desired, dt)
+            } else {
+              steerToward(m, m.launchFwd, dt)
             }
+          } else {
+            steerToward(m, m.launchFwd, dt)
           }
         }
 

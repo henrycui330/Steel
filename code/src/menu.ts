@@ -21,6 +21,7 @@ import {
   hasHardpointPicker,
   stationDef,
   type HardpointArmament,
+  type HardpointPlaneId,
   type HardpointStationId,
   type PlaneStationMap,
 } from './aircraftHardpoints'
@@ -1246,16 +1247,18 @@ function showPlaneHangar(
     if (!selectedHp) {
       return `<p class="hp-picker-idle">Click a <span class="hp-swatch"></span> yellow hardpoint on the airframe.</p>`
     }
-    const def = stationDef(selectedHp, planeId)
+    // Narrowed by hasHardpointPicker above.
+    const plane = planeId as HardpointPlaneId
+    const def = stationDef(selectedHp, plane)
     const cur = (stations as Record<string, HardpointArmament>)[selectedHp] ?? 'empty'
     const opts = def.allows
       .map((a) => {
         const on = a === cur ? ' is-selected' : ''
-        return `<button type="button" class="hp-arm-btn${on}" data-arm="${a}">${armamentLabel(a)}</button>`
+        return `<button type="button" class="hp-arm-btn${on}" data-arm="${a}">${armamentLabel(a, plane)}</button>`
       })
       .join('')
     return `
-      <p class="hp-picker-title">Hardpoint <strong>${selectedHp}</strong> · ${armamentLabel(cur)}</p>
+      <p class="hp-picker-title">Hardpoint <strong>${selectedHp}</strong> · ${armamentLabel(cur, plane)}</p>
       <div class="hp-arm-row">${opts}</div>`
   }
 

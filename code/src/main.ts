@@ -1080,7 +1080,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
         ? aamStations.every((s) => s.kind === 'hellfire')
           ? 'Hellfire'
           : 'MSL'
-        : airMslLabel
+        : aamStations.length > 0 && aamStations.every((s) => s.kind === 'r73')
+          ? 'R-73'
+          : aamStations.length > 0 && aamStations.every((s) => s.kind === 'r77')
+            ? 'R-77'
+            : aamStations.some((s) => s.kind === 'r73' || s.kind === 'r77')
+              ? 'MSL'
+              : airMslLabel
       airAam = createSamMissiles({
         scene,
         getLaunchOrigin: (out) => {
@@ -1148,12 +1154,13 @@ async function startMission(sel: MenuSelection): Promise<void> {
           hasHellfireRail || stubHellfire ? 0xc8d4a8 : 0xffe8a0,
         logTag: mslLabel,
         airLaunch: true,
+        maxRange: option.helicopter || hasHellfireRail ? 720 : 850,
         meshScale: option.helicopter || hasHellfireRail ? 1.15 : 1.35,
       })
       console.info(
         `[Steel] ${option.name} armed — ${mslLabel} ×${aamAmmo}${hpAamAmmo > 0 ? ' (hardpoint)' : ''}${
           hasHellfireRail || stubHellfire ? ' · Hellfire' : ''
-        } · hold P lock · M fire`,
+        } · hold P lock · M fire · ~${option.helicopter || hasHellfireRail ? 720 : 850}m`,
       )
     } else if (airLock != null && hasHardpointPicker(option.id)) {
       console.info(
@@ -1189,10 +1196,17 @@ async function startMission(sel: MenuSelection): Promise<void> {
     if (stores.bombCount > 0) {
       console.info(
         `[Steel] ${option.name} armed — bombs ×${stores.bombCount}${
-          hasGbu ? ' · GBU needs P hard-lock' : ''
+          hasGbu ? ' · GBU · B dump / P hard-lock to guide' : ''
         } · press B`,
       )
     }
+    const rocketStoreLabel =
+      option.id === 'mig15' ||
+      option.id === 'mig21' ||
+      option.id === 'su25' ||
+      option.id === 'su27'
+        ? 'S-5'
+        : 'HVAR'
     const rockets = stores.rockets
       ? createAircraftRockets({
           scene,
@@ -1201,6 +1215,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
           bounds: playable,
           velocity: flight.velocity,
           propColliders: mapColliders,
+          storeLabel: rocketStoreLabel,
           // Apache stub wings — tighter than Corsair tip rails.
           ...(option.helicopter
             ? {
@@ -1228,7 +1243,11 @@ async function startMission(sel: MenuSelection): Promise<void> {
       airBoard.noteKill(air.root)
       console.info(`[Steel] Hangar rockets destroyed ${victim.name || 'target'}`)
     })
-    if (rockets) console.info(`[Steel] ${option.name} armed — rockets · press R`)
+    if (rockets) {
+      console.info(
+        `[Steel] ${option.name} armed — ${rocketStoreLabel} rockets · press R`,
+      )
+    }
 
     // Bombsight scope renders the target area as a second, narrow-FOV pass.
     // Off by default so the extra draw call is opt-in.

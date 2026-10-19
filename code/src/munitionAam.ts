@@ -3,18 +3,36 @@ import { assetUrl } from './assetUrl'
 import { loadGltfCached } from './loadGltf'
 
 /**
- * US AAMs — AIM-9 Sidewinder + AIM-120 AMRAAM.
+ * Air-to-air missiles — AIM-9 / AIM-120 / R-73 / R-77.
  * Template nose faces +Z (airframe forward / flight axis).
  */
 
-export type AamKind = 'aim9' | 'aim120'
+export type AamKind = 'aim9' | 'aim120' | 'r73' | 'r77'
 
 export const AIM9_MODEL_URL = assetUrl('models/aim9_sidewinder.glb?v=1')
 export const AIM120_MODEL_URL = assetUrl('models/aim120_amraam.glb?v=1')
+export const R73_MODEL_URL = assetUrl('models/r73_vympel.glb?v=1')
+export const R77_MODEL_URL = assetUrl('models/r77.glb?v=1')
 
 const LENGTH: Record<AamKind, number> = {
   aim9: 2.85,
   aim120: 3.65,
+  r73: 2.9,
+  r77: 3.6,
+}
+
+const URL: Record<AamKind, string> = {
+  aim9: AIM9_MODEL_URL,
+  aim120: AIM120_MODEL_URL,
+  r73: R73_MODEL_URL,
+  r77: R77_MODEL_URL,
+}
+
+const LABEL: Record<AamKind, string> = {
+  aim9: 'AIM-9 Sidewinder',
+  aim120: 'AIM-120 AMRAAM',
+  r73: 'R-73 Vympel',
+  r77: 'R-77 Adder',
 }
 
 type Slot = {
@@ -26,6 +44,8 @@ type Slot = {
 const slots: Record<AamKind, Slot> = {
   aim9: { template: null, failed: false, pending: null },
   aim120: { template: null, failed: false, pending: null },
+  r73: { template: null, failed: false, pending: null },
+  r77: { template: null, failed: false, pending: null },
 }
 
 function prepareAam(scene: THREE.Object3D, name: string, length: number): THREE.Group {
@@ -37,7 +57,7 @@ function prepareAam(scene: THREE.Object3D, name: string, length: number): THREE.
 
   const box = new THREE.Box3().setFromObject(wrap)
   const size = box.getSize(new THREE.Vector3())
-  // Long on +Z already (both packs) — tip toward +Z. Flip if tip was −Z.
+  // Long on +Z already — tip toward +Z. Flip if tip was −Z.
   if (size.x >= size.y && size.x >= size.z) {
     model.rotation.y = -Math.PI / 2
   } else if (size.y >= size.x && size.y >= size.z) {
@@ -63,8 +83,8 @@ function ensureSlot(kind: AamKind): Promise<THREE.Group | null> {
   const slot = slots[kind]
   if (slot.template) return Promise.resolve(slot.template)
   if (slot.failed) return Promise.resolve(null)
-  const url = kind === 'aim9' ? AIM9_MODEL_URL : AIM120_MODEL_URL
-  const label = kind === 'aim9' ? 'AIM-9 Sidewinder' : 'AIM-120 AMRAAM'
+  const url = URL[kind]
+  const label = LABEL[kind]
   if (!slot.pending) {
     slot.pending = loadGltfCached(url)
       .then((gltf) => {
@@ -92,10 +112,21 @@ export function ensureAim120Template(): Promise<THREE.Group | null> {
   return ensureSlot('aim120')
 }
 
+export function ensureR73Template(): Promise<THREE.Group | null> {
+  return ensureSlot('r73')
+}
+
+export function ensureR77Template(): Promise<THREE.Group | null> {
+  return ensureSlot('r77')
+}
+
 export function ensureAllAamTemplates(): Promise<void> {
-  return Promise.all([ensureAim9Template(), ensureAim120Template()]).then(
-    () => undefined,
-  )
+  return Promise.all([
+    ensureAim9Template(),
+    ensureAim120Template(),
+    ensureR73Template(),
+    ensureR77Template(),
+  ]).then(() => undefined)
 }
 
 function cloneFrom(kind: AamKind, name: string): THREE.Object3D | null {
@@ -120,7 +151,15 @@ export function cloneAamFlight(kind: AamKind): THREE.Object3D | null {
 
 /** Hung rail — nose +Z. */
 export function cloneAamHung(kind: AamKind): THREE.Object3D | null {
-  return cloneFrom(kind, kind === 'aim9' ? 'hardpointAim9' : 'hardpointAim120')
+  const name =
+    kind === 'aim9'
+      ? 'hardpointAim9'
+      : kind === 'aim120'
+        ? 'hardpointAim120'
+        : kind === 'r73'
+          ? 'hardpointR73'
+          : 'hardpointR77'
+  return cloneFrom(kind, name)
 }
 
 export function aamTemplateReady(kind: AamKind): boolean {
@@ -128,19 +167,33 @@ export function aamTemplateReady(kind: AamKind): boolean {
 }
 
 export function aamLabel(kind: AamKind): string {
-  return kind === 'aim9' ? 'AIM-9 Sidewinder' : 'AIM-120 AMRAAM'
+  return LABEL[kind]
 }
 
 /** Tiny procedural stub until GLB loads. */
 export function makeAamFallback(kind: AamKind): THREE.Group {
   const g = new THREE.Group()
-  g.name = kind === 'aim9' ? 'hardpointAim9' : 'hardpointAim120'
-  const len = kind === 'aim9' ? 2.4 : 3.0
-  const r = kind === 'aim9' ? 0.06 : 0.075
+  g.name =
+    kind === 'aim9'
+      ? 'hardpointAim9'
+      : kind === 'aim120'
+        ? 'hardpointAim120'
+        : kind === 'r73'
+          ? 'hardpointR73'
+          : 'hardpointR77'
+  const len = kind === 'aim120' || kind === 'r77' ? 3.0 : 2.4
+  const r = kind === 'aim120' || kind === 'r77' ? 0.075 : 0.06
   const body = new THREE.Mesh(
     new THREE.CylinderGeometry(r, r * 1.05, len, 6),
     new THREE.MeshStandardMaterial({
-      color: kind === 'aim9' ? 0xffffff : 0xc8c4b8,
+      color:
+        kind === 'r73'
+          ? 0x6a6e62
+          : kind === 'r77'
+            ? 0x5a5e58
+            : kind === 'aim9'
+              ? 0xffffff
+              : 0xc8c4b8,
       roughness: 0.45,
       metalness: 0.4,
     }),

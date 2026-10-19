@@ -83,6 +83,8 @@ export type RocketOptions = {
   count?: number
   /** Called when a rocket leaves a station (hide hung store). */
   onStationLaunch?: () => void
+  /** Console / flight label (default HVAR; MiG uses S-5 — same mesh). */
+  storeLabel?: string
 }
 
 export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
@@ -256,6 +258,8 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     }
   }
 
+  const storeLabel = opts.storeLabel ?? 'HVAR'
+
   function makeFlightMesh(_kind: RocketStoreKind): {
     mesh: THREE.Object3D
     shared: boolean
@@ -263,9 +267,9 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
   } {
     if (hvarTemplateReady()) {
       const glb = cloneHvarFlight()
-      if (glb) return { mesh: glb, shared: true, label: 'HVAR' }
+      if (glb) return { mesh: glb, shared: true, label: storeLabel }
     }
-    return { mesh: makeProceduralRocket(), shared: false, label: 'HVAR' }
+    return { mesh: makeProceduralRocket(), shared: false, label: storeLabel }
   }
 
   function fireOne(): void {
@@ -405,7 +409,7 @@ export function createAircraftRockets(opts: RocketOptions): AircraftRockets {
     refill() {
       remaining = magazine
       gap = 0
-      console.info('[Steel] HVAR rearmed ×8')
+      console.info(`[Steel] ${storeLabel} rearmed ×${magazine}`)
     },
     setOnKill(fn) {
       onKill = fn
