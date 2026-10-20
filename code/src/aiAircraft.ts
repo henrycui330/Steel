@@ -395,6 +395,25 @@ export async function spawnAiCorsair(
       root.visible = true
       console.info(`[Steel] AI ${chassis.name} respawn (${team})`)
     },
+    restoreMatchState(pos, newYaw, wasAlive) {
+      flaming = false
+      wrecked = false
+      passTimer = 0
+      if (wasAlive) {
+        const y = sampleGround(pos.x, pos.z) + spawnAlt
+        flight.reset(new THREE.Vector3(pos.x, y, pos.z), newYaw, 0.55)
+        combat.setAliveQuiet(true)
+        guns.refill()
+        root.visible = true
+      } else {
+        root.position.set(pos.x, pos.y, pos.z)
+        root.rotation.y = newYaw
+        combat.setAliveQuiet(false)
+      }
+      console.info(
+        `[Steel] AI ${chassis.name} remount restore · ${wasAlive ? 'alive' : 'dead'} (${team})`,
+      )
+    },
   }
 
   console.info(

@@ -126,11 +126,89 @@ function isTrackMaterialName(name: string | undefined): boolean {
   )
 }
 
+function isAccessoryMesh(obj: THREE.Object3D): boolean {
+  let p: THREE.Object3D | null = obj
+  while (p) {
+    if (p.name === 'tankAccessories' || p.userData?.accessoryId) return true
+    p = p.parent
+  }
+  return false
+}
+
+/** Stable key for selective wrap picks (shared names toggle together). */
+export function meshWrapKey(mesh: THREE.Mesh): string {
+  const n = mesh.name?.trim()
+  if (n) return n
+  return `anon:${mesh.uuid}`
+}
+
+/** True when this mesh can receive a camo wrap (not tracks / accessories). */
+export function isWrapPaintableMesh(obj: THREE.Object3D): obj is THREE.Mesh {
+  if (!(obj instanceof THREE.Mesh) || !obj.material) return false
+  if (isAccessoryMesh(obj)) return false
+  if (isSkippedPart(obj.name)) return false
+  return true
+}
+
+/** All paintable mesh keys under a tank root (unique, stable order). */
+export function listPaintableWrapKeys(root: THREE.Object3D): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  root.traverse((obj) => {
+    if (!isWrapPaintableMesh(obj)) return
+    const key = meshWrapKey(obj)
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(key)
+  })
+  return out
+}
+
+const STOCK_MATS_KEY = 'wrapStockMats'
+
+function cloneMats(src: THREE.Material[]): THREE.Material[] {
+  return src.map((m) => m.clone())
+}
+
+function ensureStockMats(mesh: THREE.Mesh): THREE.Material[] {
+  const cached = mesh.userData[STOCK_MATS_KEY] as THREE.Material[] | undefined
+  if (cached?.length) return cached
+  const src = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+  const stock = cloneMats(src.filter(Boolean) as THREE.Material[])
+  mesh.userData[STOCK_MATS_KEY] = stock
+  return stock
+}
+
+function restoreStockMats(mesh: THREE.Mesh): void {
+  const stock = ensureStockMats(mesh)
+  const next = cloneMats(stock)
+  mesh.material = next.length === 1 ? next[0]! : next
+}
+
+export type ApplyTankWrapOpts = {
+  /**
+   * When set, only these mesh keys receive the camo map.
+   * `null` / omitted = paint every paintable mesh (legacy full wrap).
+   */
+  onlyKeys?: readonly string[] | null
+}
+
 /**
  * Apply the player's chosen wrap to a tank root (player only).
+ * Restores factory materials first, then paints selected (or all) parts.
  * `stock` leaves factory / dunkelgrau paint alone.
  */
-export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSelectedWrapId()): Promise<void> {
+export async function applyTankWrap(
+  root: THREE.Object3D,
+  wrapId: WrapId = getSelectedWrapId(),
+  opts?: ApplyTankWrapOpts,
+): Promise<void> {
+  // Always restore stock first so selective toggles / wrap swaps don't stack.
+  root.traverse((obj) => {
+    if (!isWrapPaintableMesh(obj)) return
+    restoreStockMats(obj)
+  })
+
   const opt = wrapOptionById(wrapId)
   if (!opt.url) {
     console.info('[Steel] Wrap: stock paint')
@@ -145,16 +223,20 @@ export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSe
     return
   }
 
+  const allow =
+    opts?.onlyKeys != null ? new Set(opts.onlyKeys) : null
+
   let painted = 0
   root.traverse((obj) => {
-    if (!(obj instanceof THREE.Mesh) || !obj.material) return
-    if (isSkippedPart(obj.name)) return
+    if (!isWrapPaintableMesh(obj)) return
+    const key = meshWrapKey(obj)
+    if (allow && !allow.has(key)) return
 
-    const src = Array.isArray(obj.material) ? obj.material : [obj.material]
-    const next = src.map((m) => {
+    const stock = ensureStockMats(obj)
+    const next = stock.map((m) => {
       if (!m) return m
       // Keep rubber tracks black — never wrap tread materials on hull multi-mats
-      if (isTrackMaterialName(m.name)) return m
+      if (isTrackMaterialName(m.name)) return m.clone()
       const mat = m.clone() as THREE.MeshStandardMaterial
       if ('map' in mat) {
         mat.map = map
@@ -176,5 +258,9 @@ export async function applyTankWrap(root: THREE.Object3D, wrapId: WrapId = getSe
     obj.material = next.length === 1 ? next[0]! : next
     painted++
   })
-  console.info(`[Steel] Wrap "${opt.name}" on ${painted} meshes`)
+  console.info(
+    `[Steel] Wrap "${opt.name}" on ${painted} meshes${
+      allow ? ` · selective ${allow.size} keys` : ''
+    }`,
+  )
 }

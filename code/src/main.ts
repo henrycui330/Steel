@@ -1439,6 +1439,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
       flightHud.setRespawn(null)
       propEngine.setIntensity(0.35)
       lockPointer(renderer.domElement)
+      // Same as ground: don't dump every ready AI back onto the map with you.
+      for (const rec of airAiSlots) {
+        if (!rec.unit.alive) rec.deadFor = 0
+      }
       console.info('[Steel] Corsair KOTH respawn')
     }
 
@@ -2051,6 +2055,24 @@ async function startMission(sel: MenuSelection): Promise<void> {
           else enemies.push(unit)
           allAi.push(unit)
           aiSlots.push({ unit, teamSide, slot, deadFor: 0 })
+        }
+        // Vehicle-change remount: put AIs back where the match left them.
+        if (isRemount && sel.aiHold?.length) {
+          const _restore = new THREE.Vector3()
+          let restored = 0
+          for (const snap of sel.aiHold) {
+            const rec = aiSlots.find(
+              (r) => r.teamSide === snap.teamSide && r.slot === snap.slot,
+            )
+            if (!rec) continue
+            _restore.set(snap.x, snap.y, snap.z)
+            rec.unit.restoreMatchState(_restore, snap.yaw, snap.alive)
+            rec.deadFor = snap.alive ? 0 : Math.max(0, snap.deadFor)
+            restored++
+          }
+          console.info(
+            `[Steel] Remount AI restore · ${restored}/${sel.aiHold.length} units`,
+          )
         }
       } catch (err) {
         console.warn('[Steel] Failed to spawn AI', err)
@@ -2757,6 +2779,38 @@ async function startMission(sel: MenuSelection): Promise<void> {
     let liveTankId = tankId
     let liveSpawnIndex = spawnIndex
 
+    function snapshotAiHold(): NonNullable<MenuSelection['aiHold']> {
+      return aiSlots.map((rec) => {
+        const p = rec.unit.root.position
+        const tankForAi =
+          (rec.unit.root.userData.tankId as TankId | undefined) ?? 'pz3'
+        return {
+          teamSide: rec.teamSide,
+          slot: rec.slot,
+          tankId: tankForAi,
+          alive: rec.unit.alive,
+          x: p.x,
+          y: p.y,
+          z: p.z,
+          yaw: rec.unit.root.rotation.y,
+          deadFor: rec.deadFor,
+        }
+      })
+    }
+
+    /** After you redeploy, dead AIs wait a full timer — don't burst-respawn the map. */
+    function resetDeadAiTimers(): void {
+      let n = 0
+      for (const rec of aiSlots) {
+        if (rec.unit.alive) continue
+        if (rec.deadFor !== 0) n++
+        rec.deadFor = 0
+      }
+      if (n > 0) {
+        console.info(`[Steel] Player redeploy · reset ${n} dead AI respawn timers`)
+      }
+    }
+
     function respawnPlayer(): void {
       const pos = spawnAt(team, liveSpawnIndex)
       const yaw = Math.atan2(-pos.x, -pos.z)
@@ -2780,6 +2834,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
       respawnUiOpen = false
       hud.setRespawn(null)
       dieselEngine.setIntensity(0.2)
+      resetDeadAiTimers()
       console.info(`[Steel] Player respawn · ${liveTankId} · spawn ${liveSpawnIndex + 1}`)
     }
 
@@ -2812,9 +2867,10 @@ async function startMission(sel: MenuSelection): Promise<void> {
         })
         liveSpawnIndex = pick.spawnIndex
         if (pick.tankId !== liveTankId) {
-          // Chassis swap needs a remount — keep clocks so the match doesn't rewind.
+          // Chassis swap needs a remount — keep clocks + AI poses so the match
+          // doesn't soft-reset when you change vehicles.
           console.info(
-            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting (clocks kept)`,
+            `[Steel] Vehicle change ${liveTankId} → ${pick.tankId} — remounting (clocks + AI kept)`,
           )
           sessionStorage.setItem(
             'steel.rematch',
@@ -2840,6 +2896,7 @@ async function startMission(sel: MenuSelection): Promise<void> {
                 recaptureT: frontline.recaptureT,
                 matchT: frontline.matchT,
               },
+              aiHold: snapshotAiHold(),
             } satisfies MenuSelection),
           )
           window.location.reload()

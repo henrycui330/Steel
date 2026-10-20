@@ -2484,13 +2484,17 @@ export async function loadTankChassis(id: TankId): Promise<PlayerTankHandle> {
 export async function loadPlayerTank(id: TankId): Promise<PlayerTankHandle> {
   const handle = await loadTankChassis(id)
   const cos = getTankCosmetics(id)
-  await applyTankWrap(handle.root, cos.wrapId)
+  await applyTankWrap(handle.root, cos.wrapId, {
+    onlyKeys: cos.wrapParts ?? null,
+  })
   if (cos.accessories.length > 0) {
     await applyTankAccessories(handle.root, cos.accessories)
   }
   handle.root.name = 'playerTank'
   console.info(
-    `[Steel] Player cosmetics ${id}: wrap=${cos.wrapId} · acc=${cos.accessories.length}`,
+    `[Steel] Player cosmetics ${id}: wrap=${cos.wrapId} · acc=${cos.accessories.length}${
+      cos.wrapParts ? ` · selective ${cos.wrapParts.length}` : ''
+    }`,
   )
   return handle
 }

@@ -3315,6 +3315,10 @@ canvas {
   cursor: crosshair;
 }
 
+.customize-viewport[data-wrap-selective='1'] .customize-canvas {
+  cursor: cell;
+}
+
 .customize-loading {
   position: absolute;
   inset: 0;
@@ -3527,6 +3531,35 @@ canvas {
   font-size: 0.82rem;
   font-weight: 600;
   padding: 0 0.15rem 0.15rem;
+}
+
+.wrap-selective-panel {
+  margin: -0.5rem 0 1.1rem;
+}
+
+.wrap-selective-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.wrap-selective-btn,
+.wrap-selective-clear {
+  font-size: 0.85rem;
+  padding: 0.45rem 0.85rem;
+}
+
+.wrap-selective-btn.is-selected {
+  border-color: var(--menu-accent);
+  background: var(--menu-accent-soft);
+}
+
+.wrap-selective-hint {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  opacity: 0.72;
+  line-height: 1.35;
 }
 
 .loadout-card .wrap-card-name {

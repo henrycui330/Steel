@@ -98,6 +98,18 @@ export type MenuSelection = {
   remount?: boolean
   kothHold?: { vostokHold: number; meridianHold: number }
   frontlineHold?: { taken: number; captureT: number; recaptureT: number; matchT: number }
+  /** AI poses/alive from before remount — restore so they don't soft-reset. */
+  aiHold?: Array<{
+    teamSide: TeamId
+    slot: number
+    tankId: TankId
+    alive: boolean
+    x: number
+    y: number
+    z: number
+    yaw: number
+    deadFor: number
+  }>
   /** Interactive training range (empty AI, coach overlay). */
   tutorial?: 'land-basics' | 'air-basics' | 'systems-basics'
   /** Present when launching from Multiplayer lobby. */
@@ -726,6 +738,8 @@ function showCustomize(
   let draft: TankCosmetics = getTankCosmetics(tankId)
   let selectedAccId: string | null = null
   let placeBushMode = false
+  /** Click hull meshes to toggle which parts get the wrap. */
+  let selectiveWrapMode = draft.wrapParts !== undefined
   /** Preview rotation in degrees (−180…180). */
   let rotDeg = { x: 0, y: 36, z: 0 }
   let preview: ReturnType<typeof createCustomizePreview> | null = null
@@ -740,13 +754,15 @@ function showCustomize(
   }
 
   function cloneDraft(cos: TankCosmetics): TankCosmetics {
-    return {
+    const out: TankCosmetics = {
       wrapId: cos.wrapId,
       accessories: cos.accessories.map((a) => ({
         ...a,
         pos: [...a.pos] as [number, number, number],
       })),
     }
+    if (cos.wrapParts !== undefined) out.wrapParts = [...cos.wrapParts]
+    return out
   }
 
   function selectedAccessory(): TankAccessory | null {
@@ -792,10 +808,13 @@ function showCustomize(
     if (!preview) return
     preview.setAccessoryPlaceMode(placeBushMode)
     preview.setAccessoryHighlight(selectedAccId)
+    preview.setWrapSelectiveMode(selectiveWrapMode)
     preview.onAccessoryPick((id) => {
       selectedAccId = id
       placeBushMode = false
+      selectiveWrapMode = false
       preview?.setAccessoryPlaceMode(false)
+      preview?.setWrapSelectiveMode(false)
       refreshChrome()
     })
     preview.onAccessoryPlace((local) => {
@@ -821,6 +840,20 @@ function showCustomize(
       const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
       if (status) {
         status.textContent = `Bush planted (${draft.accessories.length}). Nudge with sliders, then Apply.`
+      }
+    })
+    preview.onWrapPartPick((key) => {
+      const cur = new Set(draft.wrapParts ?? [])
+      if (cur.has(key)) cur.delete(key)
+      else cur.add(key)
+      draft = { ...draft, wrapParts: [...cur] }
+      selectiveWrapMode = true
+      queueApplyDraft(false)
+      refreshChrome()
+      const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
+      if (status) {
+        const on = cur.has(key)
+        status.textContent = `${on ? 'Wrapped' : 'Cleared'} · ${key} · ${cur.size} parts · Apply to save`
       }
     })
   }
@@ -870,8 +903,38 @@ function showCustomize(
   function metaHtml(): string {
     const t = tankOptionById(tankId)
     const n = draft.accessories.length
+    const sel =
+      draft.wrapParts !== undefined
+        ? ` · selective ${draft.wrapParts.length} parts`
+        : ''
+    const tip = selectiveWrapMode
+      ? ' · click armor to toggle wrap parts'
+      : ' · drag orbit · click hull to place bush'
     return `<p class="wrap-preview-name">${t.name}</p>
-      <p class="wrap-preview-blurb">${wrapOptionById(draft.wrapId).name} · ${n} accessory${n === 1 ? '' : 'ies'} · drag orbit · click hull to place bush</p>`
+      <p class="wrap-preview-blurb">${wrapOptionById(draft.wrapId).name}${sel} · ${n} accessory${n === 1 ? '' : 'ies'}${tip}</p>`
+  }
+
+  function selectiveWrapHtml(): string {
+    const on = selectiveWrapMode ? ' is-selected' : ''
+    const n = draft.wrapParts?.length
+    const count =
+      draft.wrapParts !== undefined ? ` · ${n} part${n === 1 ? '' : 's'}` : ''
+    return `
+      <div class="wrap-selective-row">
+        <button type="button" class="deploy-btn wrap-selective-btn${on}" data-wrap-selective>
+          Selective coloring${count}
+        </button>
+        ${
+          draft.wrapParts !== undefined
+            ? `<button type="button" class="deploy-btn wrap-selective-clear" data-wrap-selective-clear>Full wrap</button>`
+            : ''
+        }
+      </div>
+      <p class="wrap-selective-hint">${
+        selectiveWrapMode
+          ? 'Click parts to paint them (starts empty). Click again to clear. Tracks stay stock.'
+          : 'Optional: paint only the meshes you click — does not wrap the whole tank.'
+      }</p>`
   }
 
   function accessoryPanelHtml(): string {
@@ -930,19 +993,82 @@ function showCustomize(
   function refreshChrome(): void {
     const tankRow = root.querySelector('[data-tank-row]')
     const wrapGrid = root.querySelector('[data-wrap-grid]')
+    const selectiveRow = root.querySelector('[data-wrap-selective-panel]')
     const axisRow = root.querySelector('[data-axis-sliders]')
     const accPanel = root.querySelector('[data-acc-panel]')
     const meta = root.querySelector('[data-preview-meta]')
     if (tankRow) tankRow.innerHTML = tankChipsHtml()
     if (wrapGrid) wrapGrid.innerHTML = wrapCardsHtml()
+    if (selectiveRow) selectiveRow.innerHTML = selectiveWrapHtml()
     if (axisRow) axisRow.innerHTML = axisSlidersHtml()
     if (accPanel) accPanel.innerHTML = accessoryPanelHtml()
     if (meta) meta.innerHTML = metaHtml()
     bindSelectors()
     bindAxisSliders()
     bindAccessoryUi()
+    bindSelectiveWrapUi()
     preview?.setAccessoryPlaceMode(placeBushMode)
     preview?.setAccessoryHighlight(selectedAccId)
+    preview?.setWrapSelectiveMode(selectiveWrapMode)
+  }
+
+  function bindSelectiveWrapUi(): void {
+    root.querySelector('[data-wrap-selective]')?.addEventListener('click', () => {
+      void previewReady.then(() => {
+        if (!selectiveWrapMode) {
+          // Enter empty (or keep a prior selective list). Never seed "all meshes"
+          // — that looked like an automatic full wrap.
+          const keys =
+            draft.wrapParts !== undefined ? [...draft.wrapParts] : []
+          draft = { ...draft, wrapParts: keys }
+          selectiveWrapMode = true
+          placeBushMode = false
+          preview?.setAccessoryPlaceMode(false)
+          preview?.setWrapSelectiveMode(true)
+          queueApplyDraft(false)
+          refreshChrome()
+          const status = root.querySelector(
+            '[data-status]',
+          ) as HTMLParagraphElement | null
+          if (status) {
+            status.textContent =
+              keys.length === 0
+                ? 'Selective coloring on · click parts to paint · Apply to save'
+                : `Selective coloring on · ${keys.length} parts · click to toggle · Apply to save`
+          }
+          console.info(
+            `[Steel] Selective wrap on · ${keys.length} keys · ${tankId}`,
+          )
+          return
+        }
+        selectiveWrapMode = false
+        preview?.setWrapSelectiveMode(false)
+        refreshChrome()
+        const status = root.querySelector(
+          '[data-status]',
+        ) as HTMLParagraphElement | null
+        if (status) {
+          status.textContent =
+            'Selective pick off — part list kept until Full wrap or Apply.'
+        }
+      })
+    })
+    root
+      .querySelector('[data-wrap-selective-clear]')
+      ?.addEventListener('click', () => {
+        const next = cloneDraft(draft)
+        delete next.wrapParts
+        draft = next
+        selectiveWrapMode = false
+        preview?.setWrapSelectiveMode(false)
+        queueApplyDraft(false)
+        refreshChrome()
+        const status = root.querySelector(
+          '[data-status]',
+        ) as HTMLParagraphElement | null
+        if (status) status.textContent = 'Full wrap restored · Apply to save'
+        console.info(`[Steel] Selective wrap cleared · ${tankId}`)
+      })
   }
 
   function bindAxisSliders(): void {
@@ -981,6 +1107,10 @@ function showCustomize(
   function bindAccessoryUi(): void {
     root.querySelector('[data-acc-add]')?.addEventListener('click', () => {
       placeBushMode = !placeBushMode
+      if (placeBushMode) {
+        selectiveWrapMode = false
+        preview?.setWrapSelectiveMode(false)
+      }
       preview?.setAccessoryPlaceMode(placeBushMode)
       refreshChrome()
       const status = root.querySelector('[data-status]') as HTMLParagraphElement | null
@@ -994,7 +1124,9 @@ function showCustomize(
       btn.addEventListener('click', () => {
         selectedAccId = (btn as HTMLButtonElement).dataset.acc ?? null
         placeBushMode = false
+        selectiveWrapMode = false
         preview?.setAccessoryPlaceMode(false)
+        preview?.setWrapSelectiveMode(false)
         preview?.setAccessoryHighlight(selectedAccId)
         refreshChrome()
       })
@@ -1051,6 +1183,7 @@ function showCustomize(
         draft = getTankCosmetics(tankId)
         selectedAccId = null
         placeBushMode = false
+        selectiveWrapMode = draft.wrapParts !== undefined
         rotDeg = { x: 0, y: 36, z: 0 }
         refreshChrome()
         queueShow()
@@ -1062,7 +1195,7 @@ function showCustomize(
         if (wrapId === draft.wrapId) return
         draft = { ...draft, wrapId }
         refreshChrome()
-        queueApplyDraft(true)
+        queueApplyDraft(false)
       })
     })
   }
@@ -1091,6 +1224,7 @@ function showCustomize(
 
       <p class="menu-section">Wrap</p>
       <div class="wrap-grid" data-wrap-grid>${wrapCardsHtml()}</div>
+      <div class="wrap-selective-panel" data-wrap-selective-panel>${selectiveWrapHtml()}</div>
 
       <div class="wrap-actions">
         <button type="button" class="deploy-btn wrap-apply" data-apply>Apply</button>
@@ -1103,18 +1237,28 @@ function showCustomize(
   bindSelectors()
   bindAxisSliders()
   bindAccessoryUi()
+  bindSelectiveWrapUi()
   root.querySelector('[data-apply]')!.addEventListener('click', () => {
     void (async () => {
-      setTankCosmetics(tankId, draft)
+      // Full replace for wrapParts so clearing selective persists.
+      setTankCosmetics(tankId, {
+        wrapId: draft.wrapId,
+        accessories: draft.accessories,
+        wrapParts: draft.wrapParts,
+      })
       setSelectedWrapId(draft.wrapId)
       const user = await updateProfile({ wrapId: draft.wrapId })
       const status = root.querySelector('[data-status]') as HTMLParagraphElement
       const tankName = tankOptionById(tankId).name
       const wrapName = wrapOptionById(draft.wrapId).name
       const n = draft.accessories.length
+      const sel =
+        draft.wrapParts !== undefined
+          ? ` · selective ${draft.wrapParts.length}`
+          : ''
       status.textContent = user
-        ? `Saved ${tankName}: ${wrapName} · ${n} acc (account wrap + local accessories).`
-        : `Saved ${tankName}: ${wrapName} · ${n} accessory${n === 1 ? '' : 'ies'} (local).`
+        ? `Saved ${tankName}: ${wrapName}${sel} · ${n} acc (account wrap + local accessories).`
+        : `Saved ${tankName}: ${wrapName}${sel} · ${n} accessory${n === 1 ? '' : 'ies'} (local).`
       console.info('[Steel] Customize applied', tankId, draft)
     })()
   })

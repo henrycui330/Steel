@@ -94,6 +94,12 @@ export type AiEnemy = DummyTarget & {
   aircraft?: boolean
   update: (dt: number, ctx: AiUpdateContext) => void
   reviveAt: (pos: THREE.Vector3, yaw: number) => void
+  /** Remount: put unit back where the match left it (no scoreboard FX). */
+  restoreMatchState: (
+    pos: THREE.Vector3,
+    yaw: number,
+    wasAlive: boolean,
+  ) => void
 }
 
 export type AiSpawnOptions = {
@@ -705,6 +711,21 @@ export async function spawnAiPz3Enemy(
       root.rotation.y = yaw
       root.visible = true
       combat.revive()
+    },
+    restoreMatchState(pos, yaw, wasAlive) {
+      speed = 0
+      reloadLeft = 1.2
+      avoidSide = 0
+      root.position.copy(pos)
+      root.rotation.y = yaw
+      if (wasAlive) {
+        combat.setAliveQuiet(true)
+      } else {
+        combat.setAliveQuiet(false)
+      }
+      console.info(
+        `[Steel] ${label} remount restore · ${wasAlive ? 'alive' : 'dead'} @ (${pos.x.toFixed(0)}, ${pos.z.toFixed(0)})`,
+      )
     },
   }
 

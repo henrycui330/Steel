@@ -149,6 +149,10 @@ export type Combatant = {
   /** Restore HP / alive after a KOTH respawn (mesh must still exist). */
   revive: () => void
   /**
+   * Mid-match remount restore — no death FX / scoreboard (unlike applyAuthorityState).
+   */
+  setAliveQuiet: (nextAlive: boolean) => void
+  /**
    * MP guest: apply host-authoritative hull HP / alive.
    * Triggers onDestroyed once when flipping alive → dead.
    */
@@ -385,6 +389,16 @@ export function createCombatant(
       console.info(
         `[Steel] ${label} respawned hull ${modules.hull.hp}/${modules.hull.maxHp}`,
       )
+    },
+    setAliveQuiet(nextAlive) {
+      if (nextAlive) {
+        this.revive()
+        return
+      }
+      alive = false
+      modules.hull.hp = 0
+      pendingApheWreck = null
+      root.visible = false
     },
     applyAuthorityState(hp, nextAlive) {
       const clamped = Math.max(0, Math.min(maxHp, Math.round(hp)))

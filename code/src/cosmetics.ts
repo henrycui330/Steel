@@ -12,6 +12,11 @@ import {
 export type TankCosmetics = {
   wrapId: WrapId
   accessories: TankAccessory[]
+  /**
+   * Selective wrap: mesh keys that receive camo.
+   * `undefined` = full hull (legacy). Empty array = wrap none.
+   */
+  wrapParts?: string[]
 }
 
 export type CosmeticsMap = Partial<Record<TankId, TankCosmetics>>
@@ -19,6 +24,16 @@ export type CosmeticsMap = Partial<Record<TankId, TankCosmetics>>
 export const DEFAULT_COSMETICS: TankCosmetics = {
   wrapId: 'stock',
   accessories: [],
+}
+
+function normalizeWrapParts(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (!Array.isArray(raw)) return undefined
+  const keys = raw
+    .filter((k): k is string => typeof k === 'string' && k.trim().length > 0)
+    .map((k) => k.trim())
+  // Cap runaway lists from bad saves.
+  return keys.slice(0, 400)
 }
 
 const STORAGE_KEY = 'steel.cosmetics'
@@ -37,10 +52,13 @@ function normalizeEntry(raw: unknown): TankCosmetics | null {
   const o = raw as Record<string, unknown>
   const wrapId = isWrapId(o.wrapId) ? o.wrapId : null
   if (!wrapId) return null
-  return {
+  const wrapParts = normalizeWrapParts(o.wrapParts)
+  const entry: TankCosmetics = {
     wrapId,
     accessories: normalizeAccessories(o.accessories),
   }
+  if (wrapParts !== undefined) entry.wrapParts = wrapParts
+  return entry
 }
 
 function readMap(): CosmeticsMap {
@@ -96,10 +114,15 @@ export function getTankCosmetics(tankId: TankId): TankCosmetics {
   migrateFromGlobalWrapIfNeeded()
   const entry = readMap()[tankId]
   if (!entry) return { ...DEFAULT_COSMETICS, accessories: [] }
-  return {
+  const out: TankCosmetics = {
     wrapId: entry.wrapId,
-    accessories: entry.accessories.map((a) => ({ ...a, pos: [...a.pos] as [number, number, number] })),
+    accessories: entry.accessories.map((a) => ({
+      ...a,
+      pos: [...a.pos] as [number, number, number],
+    })),
   }
+  if (entry.wrapParts !== undefined) out.wrapParts = [...entry.wrapParts]
+  return out
 }
 
 /** Merge-patch one tank; other chassis untouched. */
@@ -117,10 +140,19 @@ export function setTankCosmetics(
         ? normalizeAccessories(patch.accessories)
         : prev.accessories,
   }
+  if ('wrapParts' in patch) {
+    const parts = normalizeWrapParts(patch.wrapParts)
+    if (parts !== undefined) next.wrapParts = parts
+    // else: clear selective mode (full hull wrap)
+  } else if (prev.wrapParts !== undefined) {
+    next.wrapParts = [...prev.wrapParts]
+  }
   map[tankId] = next
   writeMap(map)
   console.info(
-    `[Steel] Cosmetics ${tankId}: wrap=${next.wrapId} · accessories=${next.accessories.length}`,
+    `[Steel] Cosmetics ${tankId}: wrap=${next.wrapId} · accessories=${next.accessories.length}${
+      next.wrapParts ? ` · selective ${next.wrapParts.length}` : ''
+    }`,
   )
   return getTankCosmetics(tankId)
 }
@@ -132,10 +164,12 @@ export function setAllTankWraps(wrapId: WrapId): void {
   const map = readMap()
   for (const t of TANK_OPTIONS) {
     const prev = map[t.id]
-    map[t.id] = {
+    const entry: TankCosmetics = {
       wrapId,
       accessories: prev?.accessories ?? [],
     }
+    if (prev?.wrapParts !== undefined) entry.wrapParts = [...prev.wrapParts]
+    map[t.id] = entry
   }
   writeMap(map)
   console.info(`[Steel] Cosmetics wrap → all tanks: ${wrapId}`)

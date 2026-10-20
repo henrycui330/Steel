@@ -18,7 +18,12 @@ import {
   type TankAccessoryRig,
 } from './tankAccessories'
 import { tankOptionById, type TankId } from './tankCatalog'
-import { applyTankWrap } from './wraps'
+import {
+  applyTankWrap,
+  isWrapPaintableMesh,
+  listPaintableWrapKeys,
+  meshWrapKey,
+} from './wraps'
 
 export type CustomizePreview = {
   show: (id: TankId, cos: TankCosmetics) => Promise<void>
@@ -39,6 +44,11 @@ export type CustomizePreview = {
   onAccessoryPlace: (
     fn: ((local: [number, number, number]) => void) | null,
   ) => void
+  /** Unique paintable mesh keys on the current chassis. */
+  getPaintableWrapKeys: () => string[]
+  /** Click hull meshes to toggle wrap parts (tanks only). */
+  setWrapSelectiveMode: (on: boolean) => void
+  onWrapPartPick: (fn: ((key: string) => void) | null) => void
   dispose: () => void
 }
 
@@ -117,7 +127,9 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
   let accessoryPickHandler: ((id: string) => void) | null = null
   let accessoryPlaceHandler: ((local: [number, number, number]) => void) | null =
     null
+  let wrapPartPickHandler: ((key: string) => void) | null = null
   let accessoryPlaceMode = false
+  let wrapSelectiveMode = false
   const raycaster = new THREE.Raycaster()
   const pointer = new THREE.Vector2()
   let ptrDown: { x: number; y: number } | null = null
@@ -128,6 +140,21 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
       ...a,
       pos: [...a.pos] as [number, number, number],
     }))
+  }
+
+  function cloneCos(cos: TankCosmetics): TankCosmetics {
+    const out: TankCosmetics = {
+      wrapId: cos.wrapId,
+      accessories: cloneAccList(cos.accessories),
+    }
+    if (cos.wrapParts !== undefined) out.wrapParts = [...cos.wrapParts]
+    return out
+  }
+
+  async function paintWrap(root: THREE.Object3D, cos: TankCosmetics): Promise<void> {
+    await applyTankWrap(root, cos.wrapId, {
+      onlyKeys: cos.wrapParts ?? null,
+    })
   }
 
   function resize(): void {
@@ -219,6 +246,25 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
 
     // Tank accessories — select existing bush, or place on hull.
     if (tankRoot && !airHandle) {
+      // Selective wrap: click mesh keys (before bush place so modes don't fight).
+      if (wrapSelectiveMode) {
+        tankRoot.updateMatrixWorld(true)
+        const hits = raycaster.intersectObject(tankRoot, true)
+        const hit = hits.find(
+          (h) => !isAccessoryObject(h.object) && isWrapPaintableMesh(h.object),
+        )
+        if (hit && hit.object instanceof THREE.Mesh) {
+          const key = meshWrapKey(hit.object)
+          wrapPartPickHandler?.(key)
+          console.info(`[Steel] Wrap part pick · ${key}`)
+        } else {
+          console.warn(
+            `[Steel] Wrap part pick · miss (hits=${hits.length}) — click armor mesh`,
+          )
+        }
+        return
+      }
+
       if (accessoryRig) {
         const accHits = raycaster.intersectObjects(accessoryRig.pickRoots(), true)
         const accId = accHits[0]?.object?.userData?.accessoryId as
@@ -316,7 +362,7 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
       } else {
         const handle = await loadTankChassis(id)
         if (disposed || gen !== loadGen) return
-        await applyTankWrap(handle.root, cos.wrapId)
+        await paintWrap(handle.root, cos)
         handle.root.position.set(0, 0, 0)
         scene.add(handle.root)
         tankRoot = handle.root
@@ -325,14 +371,16 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
           pendingAccessories ??
           cloneAccList(cos.accessories)
         pendingAccessories = null
-        draft = { wrapId: cos.wrapId, accessories: acc }
+        draft = cloneCos({ ...cos, accessories: acc })
         accessoryRig = attachTankAccessories(handle.root)
         await accessoryRig.setAccessories(draft.accessories)
         if (disposed || gen !== loadGen) return
         applyRot()
         if (resetCam) frameCamera(handle.root)
         console.info(
-          `[Steel] Customize preview ${id} wrap=${cos.wrapId} · acc=${draft.accessories.length}`,
+          `[Steel] Customize preview ${id} wrap=${cos.wrapId} · acc=${draft.accessories.length}${
+            draft.wrapParts ? ` · selective ${draft.wrapParts.length}` : ''
+          }`,
         )
       }
     } catch (err) {
@@ -348,11 +396,11 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
       await mount(id, cos, true)
     },
     async applyDraft(cos, opts) {
-      const wrapChanged = cos.wrapId !== draft.wrapId
-      draft = {
-        wrapId: cos.wrapId,
-        accessories: cloneAccList(cos.accessories),
-      }
+      const wrapChanged =
+        cos.wrapId !== draft.wrapId ||
+        JSON.stringify(cos.wrapParts ?? null) !==
+          JSON.stringify(draft.wrapParts ?? null)
+      draft = cloneCos(cos)
       pendingAccessories = draft.accessories
       if (!tankId) return
       if (tankOptionById(tankId).aircraft) {
@@ -363,7 +411,7 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
         return
       }
       if (wrapChanged && tankRoot) {
-        await applyTankWrap(tankRoot, cos.wrapId)
+        await paintWrap(tankRoot, cos)
       }
       pendingAccessories = null
       if (accessoryRig) await accessoryRig.setAccessories(draft.accessories)
@@ -412,6 +460,23 @@ export function createCustomizePreview(host: HTMLElement): CustomizePreview {
     },
     onAccessoryPlace(fn) {
       accessoryPlaceHandler = fn
+    },
+    getPaintableWrapKeys() {
+      if (!tankRoot || airHandle) return []
+      return listPaintableWrapKeys(tankRoot)
+    },
+    setWrapSelectiveMode(on) {
+      wrapSelectiveMode = on
+      if (on) {
+        accessoryPlaceMode = false
+        delete host.dataset.placeAcc
+        host.dataset.wrapSelective = '1'
+      } else {
+        delete host.dataset.wrapSelective
+      }
+    },
+    onWrapPartPick(fn) {
+      wrapPartPickHandler = fn
     },
     dispose() {
       disposed = true

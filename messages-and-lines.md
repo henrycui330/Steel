@@ -4,13 +4,12 @@ Take control of point C.
 Defend point A.
 Defend point B.
 Defend point C.
-We lost control in point A!
-We lost control in point B!
-We lost control in point C!
-We took point A!
-We took point B!
-We took point C!
-Heavy fire in my sector... 
+(team) lost control in point A!
+(team) lost control in point B!
+(team) lost control in point C!
+(team) took point A!
+(team) took point B!
+(team) took point C!
 Stay in the deisgnated area to reload.
 Stay in the designated airspace to restock.
 Tank destroyed, 100 silver.
@@ -26,3 +25,6 @@ Unguided bomb kill- 100 silver.
 Guided bomb kill- 100 silver.
 Rocket kill- 100 silver.
 Kill assist, aircraft- 50 silver.
+Enemy armor nearing point A
+Enemy armor nearing point B
+Enemy armor nearing point C
